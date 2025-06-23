@@ -1,0 +1,442 @@
+import React, { useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, useFieldArray } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { PlusIcon, TrashIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import toast from 'react-hot-toast';
+import api from '../utils/api';
+import { RuleForm, RuleSchema, Rule } from '../types';
+import LoadingSpinner from '../components/LoadingSpinner';
+
+const ruleSchema = z.object({
+  name: z.string().min(3, 'Rule name must be at least 3 characters'),
+  description: z.string().optional(),
+  conditions: z.array(z.object({
+    field: z.string().min(1, 'Field is required'),
+    operator: z.string().min(1, 'Operator is required'),
+    value: z.any(),
+  })).min(1, 'At least one condition is required'),
+  actions: z.array(z.object({
+    type: z.string().min(1, 'Action type is required'),
+    parameters: z.record(z.any()),
+  })).min(1, 'At least one action is required'),
+  priority: z.number().min(0).max(100),
+  is_active: z.boolean(),
+});
+
+const RuleBuilder: React.FC = () => {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const queryClient = useQueryClient();
+  const isEditing = Boolean(id);
+
+
+  // Fetch rule schema
+  const { data: schema } = useQuery<RuleSchema>({
+    queryKey: ['rule-schema'],
+    queryFn: async () => {
+      const response = await api.get('/rules/schema');
+      return response.data;
+    },
+  });
+
+
+  // Fetch existing rule if editing
+  const { data: existingRule } = useQuery<Rule>({
+    queryKey: ['rule', id],
+    queryFn: async () => {
+      const response = await api.get(`/rules/${id}`);
+      return response.data;
+    },
+    enabled: isEditing,
+  });
+
+  const {
+    register,
+    control,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<RuleForm>({
+    resolver: zodResolver(ruleSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+      conditions: [{ field: '', operator: '', value: '' }],
+      actions: [{ type: '', parameters: {} }],
+      priority: 0,
+      is_active: true,
+    },
+  });
+
+  const {
+    fields: conditionFields,
+    append: appendCondition,
+    remove: removeCondition,
+  } = useFieldArray({
+    control,
+    name: 'conditions',
+  });
+
+  const {
+    fields: actionFields,
+    append: appendAction,
+    remove: removeAction,
+  } = useFieldArray({
+    control,
+    name: 'actions',
+  });
+
+  // Load existing rule data
+  useEffect(() => {
+    if (existingRule) {
+      setValue('name', existingRule.name);
+      setValue('description', existingRule.description || '');
+      setValue('conditions', existingRule.conditions);
+      setValue('actions', existingRule.actions);
+      setValue('priority', existingRule.priority);
+      setValue('is_active', existingRule.is_active);
+    }
+  }, [existingRule, setValue]);
+
+  const createRuleMutation = useMutation({
+    mutationFn: async (data: RuleForm) => {
+      const response = await api.post('/rules', data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success('Rule created successfully!');
+      navigate('/rules');
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to create rule');
+    },
+  });
+
+  const updateRuleMutation = useMutation({
+    mutationFn: async (data: RuleForm) => {
+      const response = await api.put(`/rules/${id}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+      queryClient.invalidateQueries({ queryKey: ['rule', id] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success('Rule updated successfully!');
+      navigate('/rules');
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to update rule');
+    },
+  });
+
+  const onSubmit = (data: RuleForm) => {
+    if (isEditing) {
+      updateRuleMutation.mutate(data);
+    } else {
+      createRuleMutation.mutate(data);
+    }
+  };
+
+  const getOperatorsForField = (fieldType: string) => {
+    if (!schema) return [];
+    return schema.operators.filter(op => op.types.includes(fieldType));
+  };
+
+  const getFieldType = (fieldName: string) => {
+    if (!schema) return 'string';
+    const field = schema.fields.find(f => f.field === fieldName);
+    return field?.type || 'string';
+  };
+
+  if (!schema) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center space-x-4">
+        <button
+          onClick={() => navigate('/rules')}
+          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+        >
+          <ArrowLeftIcon className="h-5 w-5" />
+        </button>
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">
+            {isEditing ? 'Edit Rule' : 'Create Rule'}
+          </h1>
+          <p className="mt-2 text-gray-600">
+            {isEditing ? 'Update your automation rule' : 'Set up automated order processing'}
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
+        {/* Basic Information */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card"
+        >
+          <h2 className="text-xl font-semibold text-gray-900 mb-6">
+            Basic Information
+          </h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="label">Rule Name *</label>
+              <input
+                {...register('name')}
+                type="text"
+                className="input"
+                placeholder="Enter rule name"
+              />
+              {errors.name && (
+                <p className="mt-1 text-sm text-red-600">{errors.name.message}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="label">Priority</label>
+              <input
+                {...register('priority', { valueAsNumber: true })}
+                type="number"
+                min="0"
+                max="100"
+                className="input"
+                placeholder="0"
+              />
+              {errors.priority && (
+                <p className="mt-1 text-sm text-red-600">{errors.priority.message}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <label className="label">Description</label>
+            <textarea
+              {...register('description')}
+              className="input"
+              rows={3}
+              placeholder="Describe what this rule does..."
+            />
+          </div>
+
+          <div className="mt-6">
+            <label className="flex items-center">
+              <input
+                {...register('is_active')}
+                type="checkbox"
+                className="rounded border-gray-300 text-shopify-600 focus:ring-shopify-500"
+              />
+              <span className="ml-2 text-sm text-gray-700">
+                Activate this rule immediately
+              </span>
+            </label>
+          </div>
+        </motion.div>
+
+        {/* Conditions */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">
+              Conditions
+            </h2>
+            <button
+              type="button"
+              onClick={() => appendCondition({ field: '', operator: '', value: '' })}
+              className="btn-secondary flex items-center"
+            >
+              <PlusIcon className="h-4 w-4 mr-2" />
+              Add Condition
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            {conditionFields.map((field, index) => (
+              <div key={field.id} className="p-4 border border-gray-200 rounded-lg">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">Field</label>
+                    <select
+                      {...register(`conditions.${index}.field`)}
+                      className="input"
+                    >
+                      <option value="">Select field</option>
+                      {schema.fields.map(field => (
+                        <option key={field.field} value={field.field}>
+                          {field.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label">Operator</label>
+                    <select
+                      {...register(`conditions.${index}.operator`)}
+                      className="input"
+                    >
+                      <option value="">Select operator</option>
+                      {getOperatorsForField(
+                        getFieldType(watch(`conditions.${index}.field`))
+                      ).map(op => (
+                        <option key={op.operator} value={op.operator}>
+                          {op.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label">Value</label>
+                    <input
+                      {...register(`conditions.${index}.value`)}
+                      type="text"
+                      className="input"
+                      placeholder="Enter value"
+                    />
+                  </div>
+
+                  <div className="flex items-end">
+                    {conditionFields.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeCondition(index)}
+                        className="p-2 text-red-600 hover:bg-red-50 rounded"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          {errors.conditions && (
+            <p className="mt-2 text-sm text-red-600">{errors.conditions.message}</p>
+          )}
+        </motion.div>
+
+        {/* Actions */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">
+              Actions
+            </h2>
+            <button
+              type="button"
+              onClick={() => appendAction({ type: '', parameters: {} })}
+              className="btn-secondary flex items-center"
+            >
+              <PlusIcon className="h-4 w-4 mr-2" />
+              Add Action
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            {actionFields.map((field, index) => (
+              <div key={field.id} className="p-4 border border-gray-200 rounded-lg">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">Action Type</label>
+                    <select
+                      {...register(`actions.${index}.type`)}
+                      className="input"
+                    >
+                      <option value="">Select action</option>
+                      {schema.action_types.map(action => (
+                        <option key={action.type} value={action.type}>
+                          {action.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label">Parameters</label>
+                    <input
+                      {...register(`actions.${index}.parameters.tags`)}
+                      type="text"
+                      className="input"
+                      placeholder="Enter tags (comma separated) or location ID"
+                    />
+                  </div>
+
+                  <div className="flex items-end">
+                    {actionFields.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeAction(index)}
+                        className="p-2 text-red-600 hover:bg-red-50 rounded"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          {errors.actions && (
+            <p className="mt-2 text-sm text-red-600">{errors.actions.message}</p>
+          )}
+        </motion.div>
+
+        {/* Submit */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="flex justify-end space-x-4"
+        >
+          <button
+            type="button"
+            onClick={() => navigate('/rules')}
+            className="btn-secondary"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={createRuleMutation.isPending || updateRuleMutation.isPending}
+            className="btn-primary"
+          >
+            {createRuleMutation.isPending || updateRuleMutation.isPending ? (
+              <LoadingSpinner size="sm" />
+            ) : isEditing ? (
+              'Update Rule'
+            ) : (
+              'Create Rule'
+            )}
+          </button>
+        </motion.div>
+      </form>
+    </div>
+  );
+};
+
+export default RuleBuilder;

@@ -1,0 +1,517 @@
+from celery import Celery
+from celery.schedules import crontab
+import os
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
+from sqlalchemy.orm import Session
+
+from database import SessionLocal, engine
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder
+from shopify_client import ShopifyClient
+from rule_engine import RuleEngine
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize Celery
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+celery = Celery("shopify_automation", broker=redis_url, backend=redis_url)
+
+# Celery configuration
+celery.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 minutes
+    task_soft_time_limit=25 * 60,  # 25 minutes
+    worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=1000,
+)
+
+# Schedule periodic tasks - Dynamic scheduling based on user settings
+celery.conf.beat_schedule = {
+    'process-all-orders': {
+        'task': 'tasks.process_all_orders_if_enabled',
+        'schedule': crontab(minute='*/5'),  # Check every 5 minutes if sync should run
+    },
+    'cleanup-old-logs': {
+        'task': 'tasks.cleanup_old_logs',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
+}
+
+def get_db():
+    db = SessionLocal()
+    try:
+        return db
+    finally:
+        db.close()
+
+def create_task_status(task_id: str, task_name: str, status: str = "pending"):
+    """Create task status record"""
+    db = get_db()
+    try:
+        task_status = TaskStatus(
+            task_id=task_id,
+            task_name=task_name,
+            status=status,
+            started_at=datetime.utcnow() if status == "running" else None
+        )
+        db.add(task_status)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to create task status: {str(e)}")
+    finally:
+        db.close()
+
+def update_task_status(task_id: str, status: str, result: Dict = None, error_message: str = None):
+    """Update task status record"""
+    db = get_db()
+    try:
+        task_status = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+        if task_status:
+            task_status.status = status
+            task_status.result = result
+            task_status.error_message = error_message
+            if status in ["success", "failed"]:
+                task_status.completed_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to update task status: {str(e)}")
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def test_celery_connection(self):
+    """Test task to verify Celery is working"""
+    task_id = self.request.id
+    create_task_status(task_id, "test_celery_connection", "running")
+    
+    try:
+        logger.info("Celery worker is running successfully!")
+        update_task_status(task_id, "success", {"message": "Celery is working"})
+        return {"status": "success", "message": "Celery worker is running"}
+    except Exception as e:
+        logger.error(f"Celery test failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+
+@celery.task(bind=True)
+def process_store_orders(self, user_id: int, store_id: int):
+    """Process orders for a specific store"""
+    task_id = self.request.id
+    create_task_status(task_id, "process_store_orders", "running")
+    
+    db = get_db()
+    try:
+        # Get store and user
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == user_id,
+            ShopifyStore.is_active == True
+        ).first()
+        
+        if not store:
+            raise ValueError(f"Store {store_id} not found or inactive")
+        
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Get active rules for user
+        rules = db.query(ProcessingRule).filter(
+            ProcessingRule.user_id == user_id,
+            ProcessingRule.is_active == True
+        ).order_by(ProcessingRule.priority.desc()).all()
+        
+        if not rules:
+            logger.info(f"No active rules found for user {user_id}")
+            update_task_status(task_id, "success", {"processed_orders": 0, "message": "No active rules"})
+            return
+        
+        # Run async order processing
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(
+                _process_store_orders_async(store, rules, db)
+            )
+            update_task_status(task_id, "success", result)
+            
+            # Update store last sync time
+            store.last_sync = datetime.utcnow()
+            db.commit()
+            
+            return result
+            
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f"Failed to process store orders: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()
+
+async def _process_store_orders_async(store: ShopifyStore, rules: List[ProcessingRule], db: Session):
+    """Async function to process store orders"""
+    client = ShopifyClient(store.shop_domain, store.access_token)
+    rule_engine = RuleEngine()
+    
+    # Get orders from last 24 hours if no previous sync, otherwise from last sync
+    created_at_min = None
+    if store.last_sync:
+        created_at_min = store.last_sync.strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        # First sync - get orders from last 24 hours
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        created_at_min = yesterday.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    processed_orders = 0
+    cursor = None
+    
+    try:
+        while True:
+            # Fetch orders
+            orders_data = await client.get_orders(
+                limit=50,
+                created_at_min=created_at_min,
+                cursor=cursor
+            )
+            
+            orders = orders_data["edges"]
+            if not orders:
+                break
+            
+            for order_edge in orders:
+                order = order_edge["node"]
+                order_id = order["id"]
+                order_number = order["name"]
+                
+                # Check if order has already been processed
+                existing = db.query(ProcessedOrder).filter(
+                    ProcessedOrder.store_id == store.id,
+                    ProcessedOrder.order_id == order_id
+                ).first()
+                
+                if existing:
+                    logger.info(f"Order {order_number} already processed, skipping")
+                    continue
+                
+                try:
+                    # Apply rules to order
+                    rules_applied = False
+                    for rule in rules:
+                        if rule_engine.evaluate_rule(rule, order):
+                            rules_applied = True
+                            success = await _apply_rule_actions(
+                                client, rule, order, store, db
+                            )
+                            
+                            if success:
+                                _log_order_action(
+                                    db, store.user_id, store.id, order_id, 
+                                    order_number, f"applied_rule_{rule.id}", 
+                                    "success", {"rule_name": rule.name}
+                                )
+                            else:
+                                _log_order_action(
+                                    db, store.user_id, store.id, order_id, 
+                                    order_number, f"applied_rule_{rule.id}", 
+                                    "failed", {"rule_name": rule.name}
+                                )
+                    
+                    # Mark order as processed
+                    processed_order = ProcessedOrder(
+                        store_id=store.id,
+                        order_id=order_id
+                    )
+                    db.add(processed_order)
+                    db.commit()
+                    
+                    # Log if no rules were applied
+                    if not rules_applied:
+                        _log_order_action(
+                            db, store.user_id, store.id, order_id,
+                            order_number, "no_rules_matched", "info",
+                            {"message": "No rules matched this order"}
+                        )
+                    
+                    processed_orders += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error processing order {order_number}: {str(e)}")
+                    _log_order_action(
+                        db, store.user_id, store.id, order_id, 
+                        order_number, "processing_error", "failed", 
+                        error_message=str(e)
+                    )
+            
+            # Check for next page
+            page_info = orders_data["pageInfo"]
+            if not page_info["hasNextPage"]:
+                break
+            
+            cursor = page_info["endCursor"]
+    
+    except Exception as e:
+        logger.error(f"Error fetching orders from {store.shop_domain}: {str(e)}")
+        raise
+    
+    return {
+        "processed_orders": processed_orders,
+        "store_domain": store.shop_domain
+    }
+
+async def _apply_rule_actions(
+    client: ShopifyClient, 
+    rule: ProcessingRule, 
+    order: Dict, 
+    store: ShopifyStore, 
+    db: Session
+) -> bool:
+    """Apply rule actions to an order"""
+    success = True
+    
+    for action in rule.actions:
+        try:
+            action_type = action["type"]
+            parameters = action["parameters"]
+            
+            if action_type == "add_tag":
+                tags = parameters.get("tags", [])
+                if isinstance(tags, str):
+                    tags = [tags]
+                
+                result = await client.add_tags_to_order(order["id"], tags)
+                if not result:
+                    success = False
+                    
+            elif action_type == "remove_tag":
+                tags = parameters.get("tags", [])
+                if isinstance(tags, str):
+                    tags = [tags]
+                
+                result = await client.remove_tags_from_order(order["id"], tags)
+                if not result:
+                    success = False
+                    
+            elif action_type == "set_fulfillment_location":
+                location_id = parameters.get("location_id")
+                if location_id:
+                    # Get fulfillment orders for this order
+                    fulfillment_orders = order.get("fulfillmentOrders", {}).get("edges", [])
+                    
+                    for fo_edge in fulfillment_orders:
+                        fo = fo_edge["node"]
+                        if fo["status"] in ["open", "scheduled"]:
+                            result = await client.move_fulfillment_order(
+                                fo["id"], location_id
+                            )
+                            if not result:
+                                success = False
+            
+        except Exception as e:
+            logger.error(f"Error applying action {action_type}: {str(e)}")
+            success = False
+    
+    return success
+
+def _log_order_action(
+    db: Session, 
+    user_id: int, 
+    store_id: int, 
+    order_id: str, 
+    order_number: str, 
+    action: str, 
+    status: str, 
+    details: Dict = None, 
+    error_message: str = None
+):
+    """Log order processing action"""
+    try:
+        log_entry = OrderLog(
+            user_id=user_id,
+            store_id=store_id,
+            order_id=order_id,
+            order_number=order_number,
+            action=action,
+            status=status,
+            details=details,
+            error_message=error_message
+        )
+        db.add(log_entry)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to log order action: {str(e)}")
+
+@celery.task(bind=True)
+def process_all_orders_if_enabled(self):
+    """Check if auto-sync is enabled and process orders if needed"""
+    db = get_db()
+    try:
+        # Get all users with auto-sync enabled
+        users_with_settings = db.query(User).join(Settings).filter(
+            Settings.auto_sync_enabled == True
+        ).all()
+        
+        for user in users_with_settings:
+            settings = user.settings
+            if not settings:
+                continue
+                
+            # Check if it's time to sync based on user's frequency setting
+            stores = db.query(ShopifyStore).filter(
+                ShopifyStore.user_id == user.id,
+                ShopifyStore.is_active == True
+            ).all()
+            
+            for store in stores:
+                # Check if last sync was longer ago than sync frequency
+                should_sync = False
+                if not store.last_sync:
+                    should_sync = True
+                else:
+                    time_since_sync = datetime.utcnow() - store.last_sync
+                    if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
+                        should_sync = True
+                
+                if should_sync:
+                    logger.info(f"Queueing sync for store {store.shop_domain}")
+                    process_store_orders.delay(user.id, store.id)
+        
+        return {"message": "Auto-sync check completed"}
+        
+    except Exception as e:
+        logger.error(f"Failed to check auto-sync: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def process_all_orders(self):
+    """Process orders for all active stores"""
+    task_id = self.request.id
+    create_task_status(task_id, "process_all_orders", "running")
+    
+    db = get_db()
+    try:
+        # Get all active stores
+        stores = db.query(ShopifyStore).filter(ShopifyStore.is_active == True).all()
+        
+        results = []
+        for store in stores:
+            try:
+                # Queue individual store processing task
+                task = process_store_orders.delay(store.user_id, store.id)
+                results.append({
+                    "store_id": store.id,
+                    "store_domain": store.shop_domain,
+                    "task_id": task.id
+                })
+            except Exception as e:
+                logger.error(f"Failed to queue task for store {store.shop_domain}: {str(e)}")
+                results.append({
+                    "store_id": store.id,
+                    "store_domain": store.shop_domain,
+                    "error": str(e)
+                })
+        
+        update_task_status(task_id, "success", {"queued_stores": len(results), "results": results})
+        return results
+        
+    except Exception as e:
+        logger.error(f"Failed to process all orders: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def cleanup_old_logs(self):
+    """Clean up old order logs and task status records"""
+    task_id = self.request.id
+    create_task_status(task_id, "cleanup_old_logs", "running")
+    
+    db = get_db()
+    try:
+        # Delete logs older than 30 days
+        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        
+        deleted_logs = db.query(OrderLog).filter(
+            OrderLog.created_at < cutoff_date
+        ).delete()
+        
+        # Delete task status records older than 7 days
+        task_cutoff = datetime.utcnow() - timedelta(days=7)
+        deleted_tasks = db.query(TaskStatus).filter(
+            TaskStatus.created_at < task_cutoff
+        ).delete()
+        
+        db.commit()
+        
+        result = {
+            "deleted_logs": deleted_logs,
+            "deleted_task_records": deleted_tasks,
+            "cutoff_date": cutoff_date.isoformat()
+        }
+        
+        update_task_status(task_id, "success", result)
+        logger.info(f"Cleanup completed: {result}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Cleanup failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def test_store_connection(self, store_id: int):
+    """Test connection to a Shopify store"""
+    task_id = self.request.id
+    create_task_status(task_id, "test_store_connection", "running")
+    
+    db = get_db()
+    try:
+        store = db.query(ShopifyStore).filter(ShopifyStore.id == store_id).first()
+        if not store:
+            raise ValueError(f"Store {store_id} not found")
+        
+        # Run async connection test
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            client = ShopifyClient(store.shop_domain, store.access_token)
+            shop_info = loop.run_until_complete(client.get_shop_info())
+            
+            result = {
+                "status": "success",
+                "shop_name": shop_info.get("name"),
+                "domain": shop_info.get("domain"),
+                "plan": shop_info.get("plan", {}).get("displayName")
+            }
+            
+            update_task_status(task_id, "success", result)
+            return result
+            
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f"Store connection test failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()

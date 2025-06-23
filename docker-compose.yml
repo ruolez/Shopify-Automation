@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: shopify_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///app/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-this-in-production
+      - ENVIRONMENT=development
+    volumes:
+      - ./backend:/app
+      - sqlite_data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_worker
+    environment:
+      - DATABASE_URL=sqlite:///app/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-this-in-production
+      - ENVIRONMENT=development
+    volumes:
+      - ./backend:/app
+      - sqlite_data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+    command: celery -A tasks.celery worker --loglevel=info --concurrency=4
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_scheduler
+    environment:
+      - DATABASE_URL=sqlite:///app/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-this-in-production
+      - ENVIRONMENT=development
+    volumes:
+      - ./backend:/app
+      - sqlite_data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+    command: celery -A tasks.celery beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: shopify_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: shopify_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  sqlite_data:
