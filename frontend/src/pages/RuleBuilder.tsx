@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, useFieldArray } from 'react-hook-form';
@@ -43,6 +43,14 @@ const RuleBuilder: React.FC = () => {
     },
   });
 
+  // Fetch location aliases for fulfillment actions
+  const { data: locationAliases } = useQuery({
+    queryKey: ['location-aliases'],
+    queryFn: async () => {
+      const response = await api.get('/location-aliases');
+      return response.data;
+    },
+  });
 
   // Fetch existing rule if editing
   const { data: existingRule } = useQuery<Rule>({
@@ -377,12 +385,37 @@ const RuleBuilder: React.FC = () => {
 
                   <div>
                     <label className="label">Parameters</label>
-                    <input
-                      {...register(`actions.${index}.parameters.tags`)}
-                      type="text"
-                      className="input"
-                      placeholder="Enter tags (comma separated) or location ID"
-                    />
+                    {watch()?.actions?.[index]?.type === 'set_fulfillment_location' ? (
+                      <div>
+                        <select
+                          {...register(`actions.${index}.parameters.location_alias`)}
+                          className="input"
+                        >
+                          <option value="">Select location alias</option>
+                          {locationAliases?.filter((alias: any) => alias.is_active).map((alias: any) => (
+                            <option key={alias.id} value={alias.alias_name}>
+                              {alias.alias_name}
+                              {alias.mappings.length > 0 && (
+                                <span> ({alias.mappings.length} store{alias.mappings.length !== 1 ? 's' : ''})</span>
+                              )}
+                            </option>
+                          ))}
+                        </select>
+                        {locationAliases?.length === 0 && (
+                          <p className="text-sm text-amber-600 mt-1">
+                            No location aliases configured. 
+                            <Link to="/locations" className="underline ml-1">Create one here</Link>.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <input
+                        {...register(`actions.${index}.parameters.tags`)}
+                        type="text"
+                        className="input"
+                        placeholder="Enter tags (comma separated)"
+                      />
+                    )}
                   </div>
 
                   <div className="flex items-end">

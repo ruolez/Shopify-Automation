@@ -144,3 +144,75 @@ class OrderLogQuery(BaseModel):
     end_date: Optional[datetime] = None
     page: int = 1
     per_page: int = 50
+
+# Location Alias schemas
+class LocationAliasCreate(BaseModel):
+    alias_name: str
+    description: Optional[str] = None
+    
+    @validator('alias_name')
+    def validate_alias_name(cls, v):
+        v = v.strip()
+        if len(v) < 2:
+            raise ValueError('Alias name must be at least 2 characters long')
+        if len(v) > 50:
+            raise ValueError('Alias name must be no more than 50 characters')
+        return v
+
+class LocationAliasUpdate(BaseModel):
+    alias_name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    
+    @validator('alias_name')
+    def validate_alias_name(cls, v):
+        if v is not None:
+            v = v.strip()
+            if len(v) < 2:
+                raise ValueError('Alias name must be at least 2 characters long')
+            if len(v) > 50:
+                raise ValueError('Alias name must be no more than 50 characters')
+        return v
+
+class LocationMappingResponse(BaseModel):
+    id: int
+    store_id: int
+    store_name: str
+    store_domain: str
+    shopify_location_id: str
+    shopify_location_name: str
+    is_active: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class LocationAliasResponse(BaseModel):
+    id: int
+    alias_name: str
+    description: Optional[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+    mappings: List[LocationMappingResponse]
+    
+    class Config:
+        from_attributes = True
+
+# Location Mapping schemas
+class LocationMappingCreate(BaseModel):
+    store_id: int
+    shopify_location_id: str
+    shopify_location_name: str
+    
+class LocationMappingUpdate(BaseModel):
+    shopify_location_id: Optional[str] = None
+    shopify_location_name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+# Store Location schema for listing available locations
+class StoreLocationResponse(BaseModel):
+    store_id: int
+    store_name: str
+    store_domain: str
+    locations: List[Dict[str, str]]  # [{"id": "gid://...", "name": "Location Name"}]

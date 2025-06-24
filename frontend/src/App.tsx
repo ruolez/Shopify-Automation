@@ -9,6 +9,8 @@ import Rules from './pages/Rules';
 import RuleBuilder from './pages/RuleBuilder';
 import OrderLogs from './pages/OrderLogs';
 import Settings from './pages/Settings';
+import LocationManagement from './pages/LocationManagement';
+import Reports from './pages/Reports';
 import LoadingSpinner from './components/LoadingSpinner';
 
 function App() {
@@ -42,6 +44,8 @@ function App() {
         <Route path="/rules/:id/edit" element={<RuleBuilder />} />
         <Route path="/order-logs" element={<OrderLogs />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/locations" element={<LocationManagement />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

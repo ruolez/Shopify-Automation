@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
-from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping
 from shopify_client import ShopifyClient
 from rule_engine import RuleEngine
 
@@ -38,7 +38,7 @@ celery.conf.update(
 celery.conf.beat_schedule = {
     'process-all-orders': {
         'task': 'tasks.process_all_orders_if_enabled',
-        'schedule': crontab(minute='*/5'),  # Check every 5 minutes if sync should run
+        'schedule': crontab(minute='*'),  # Check every minute if sync should run
     },
     'cleanup-old-logs': {
         'task': 'tasks.cleanup_old_logs',
@@ -52,6 +52,17 @@ def get_db():
         return db
     finally:
         db.close()
+
+def resolve_location_alias(alias_name: str, store_id: int, db: Session) -> str | None:
+    """Resolve a location alias to the actual Shopify location ID for a specific store"""
+    mapping = db.query(LocationMapping).join(LocationAlias).filter(
+        LocationAlias.alias_name == alias_name,
+        LocationMapping.store_id == store_id,
+        LocationMapping.is_active == True,
+        LocationAlias.is_active == True
+    ).first()
+    
+    return mapping.shopify_location_id if mapping else None
 
 def create_task_status(task_id: str, task_name: str, status: str = "pending"):
     """Create task status record"""
@@ -181,9 +192,11 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     try:
         while True:
             # Fetch orders
+            # Note: Shopify GraphQL doesn't support date filtering in query parameter properly
+            # So we fetch all orders and filter by date in our code
             orders_data = await client.get_orders(
                 limit=50,
-                created_at_min=created_at_min,
+                created_at_min=None,
                 cursor=cursor
             )
             
@@ -195,6 +208,15 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 order = order_edge["node"]
                 order_id = order["id"]
                 order_number = order["name"]
+                order_created_at = order["createdAt"]
+                
+                # Check if order is newer than last sync (date filtering)
+                if created_at_min:
+                    order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
+                    min_date = datetime.fromisoformat(created_at_min.replace('Z', '+00:00'))
+                    if order_date < min_date:
+                        logger.debug(f"Order {order_number} created before {created_at_min}, skipping")
+                        continue
                 
                 # Check if order has already been processed
                 existing = db.query(ProcessedOrder).filter(
@@ -305,19 +327,85 @@ async def _apply_rule_actions(
                     success = False
                     
             elif action_type == "set_fulfillment_location":
+                # Support both old format (location_id) and new format (location_alias)
                 location_id = parameters.get("location_id")
+                location_alias = parameters.get("location_alias")
+                
+                logger.info(f"Processing fulfillment action for order {order.get('name', order.get('id'))}")
+                
+                # If using alias, resolve it to location_id
+                if location_alias:
+                    logger.info(f"Resolving location alias: {location_alias}")
+                    location_id = resolve_location_alias(location_alias, store.id, db)
+                    if location_id:
+                        logger.info(f"Resolved alias '{location_alias}' to location ID: {location_id}")
+                    else:
+                        logger.error(f"No mapping found for alias '{location_alias}' in store {store.shop_name}")
+                        success = False
+                        continue
+                elif location_id:
+                    logger.info(f"Using direct location ID: {location_id}")
+                else:
+                    logger.error("No location_id or location_alias provided for set_fulfillment_location action")
+                    success = False
+                    continue
+                
                 if location_id:
                     # Get fulfillment orders for this order
                     fulfillment_orders = order.get("fulfillmentOrders", {}).get("edges", [])
+                    logger.info(f"Found {len(fulfillment_orders)} fulfillment orders")
                     
                     for fo_edge in fulfillment_orders:
                         fo = fo_edge["node"]
-                        if fo["status"] in ["open", "scheduled"]:
+                        logger.info(f"Fulfillment order {fo['id']} status: {fo['status']}")
+                        
+                        if fo["status"].upper() in ["OPEN", "SCHEDULED"]:
+                            logger.info(f"Moving fulfillment order {fo['id']} to location {location_id}")
                             result = await client.move_fulfillment_order(
                                 fo["id"], location_id
                             )
                             if not result:
+                                logger.error(f"Failed to move fulfillment order {fo['id']}")
                                 success = False
+                                
+                                # Log fulfillment error details for reporting
+                                _log_order_action(
+                                    db, store.user_id, store.id, order["id"], 
+                                    order.get("name", "Unknown"), "fulfillment_move_failed", 
+                                    "failed", 
+                                    {
+                                        "rule_name": rule.name,
+                                        "target_location_id": location_id,
+                                        "fulfillment_order_id": fo["id"],
+                                        "location_alias": location_alias or "direct_id"
+                                    },
+                                    error_message="Failed to move fulfillment order - likely out of stock at target location"
+                                )
+                                
+                                # Add "OOS" tag to order for out-of-stock fulfillment issues
+                                try:
+                                    await client.add_tags_to_order(order["id"], ["OOS"])
+                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])}")
+                                except Exception as tag_error:
+                                    logger.error(f"Failed to add OOS tag: {str(tag_error)}")
+                                    
+                            else:
+                                logger.info(f"Successfully moved fulfillment order {fo['id']}")
+                                
+                                # Log successful fulfillment move
+                                _log_order_action(
+                                    db, store.user_id, store.id, order["id"], 
+                                    order.get("name", "Unknown"), "fulfillment_moved", 
+                                    "success", 
+                                    {
+                                        "rule_name": rule.name,
+                                        "target_location_id": location_id,
+                                        "fulfillment_order_id": fo["id"],
+                                        "location_alias": location_alias or "direct_id"
+                                    }
+                                )
+                        else:
+                            logger.info(f"Skipping fulfillment order {fo['id']} with status {fo['status']}")
             
         except Exception as e:
             logger.error(f"Error applying action {action_type}: {str(e)}")

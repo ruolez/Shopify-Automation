@@ -94,7 +94,7 @@ class ShopifyClient:
         """Get orders with pagination"""
         query = """
         query getOrders($first: Int, $after: String, $query: String) {
-            orders(first: $first, after: $after, query: $query) {
+            orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
                 edges {
                     node {
                         id
@@ -271,8 +271,10 @@ class ShopifyClient:
                 movedFulfillmentOrder {
                     id
                     assignedLocation {
-                        id
-                        name
+                        location {
+                            id
+                            name
+                        }
                     }
                 }
                 userErrors {
@@ -325,9 +327,18 @@ class ShopifyClient:
         
         result = await self._make_graphql_request(query)
         locations = []
-        for edge in result["data"]["locations"]["edges"]:
+        all_locations = result["data"]["locations"]["edges"]
+        
+        logger.info(f"Found {len(all_locations)} total locations")
+        
+        for edge in all_locations:
             location = edge["node"]
-            if location["fulfillsOnlineOrders"] and location["isActive"]:
+            logger.info(f"Location: {location['name']} - fulfillsOnlineOrders: {location['fulfillsOnlineOrders']}, isActive: {location['isActive']}")
+            
+            # Include all active locations, not just those that fulfill online orders
+            # Some fulfillment locations might not have fulfillsOnlineOrders=True but can still be used for fulfillment
+            if location["isActive"]:
                 locations.append(location)
         
+        logger.info(f"Returning {len(locations)} active locations")
         return locations

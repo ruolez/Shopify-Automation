@@ -117,6 +117,9 @@ const Settings: React.FC = () => {
                 onChange={(e) => updateSettings.mutate({ sync_frequency_minutes: parseInt(e.target.value) })}
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
               >
+                <option value={1}>Every 1 minute</option>
+                <option value={2}>Every 2 minutes</option>
+                <option value={3}>Every 3 minutes</option>
                 <option value={5}>Every 5 minutes</option>
                 <option value={10}>Every 10 minutes</option>
                 <option value={15}>Every 15 minutes</option>

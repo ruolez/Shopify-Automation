@@ -19,6 +19,7 @@ class User(Base):
     rules = relationship("ProcessingRule", back_populates="user", cascade="all, delete-orphan")
     order_logs = relationship("OrderLog", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("Settings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    location_aliases = relationship("LocationAlias", back_populates="user", cascade="all, delete-orphan")
 
 class ShopifyStore(Base):
     __tablename__ = "shopify_stores"
@@ -36,6 +37,7 @@ class ShopifyStore(Base):
     # Relationships
     user = relationship("User", back_populates="stores")
     order_logs = relationship("OrderLog", back_populates="store", cascade="all, delete-orphan")
+    location_mappings = relationship("LocationMapping", back_populates="store", cascade="all, delete-orphan")
 
 class ProcessingRule(Base):
     __tablename__ = "processing_rules"
@@ -110,4 +112,45 @@ class ProcessedOrder(Base):
     # Unique constraint to prevent duplicate processing
     __table_args__ = (
         UniqueConstraint('store_id', 'order_id', name='unique_store_order'),
+    )
+
+class LocationAlias(Base):
+    __tablename__ = "location_aliases"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    alias_name = Column(String, nullable=False)  # "Main Warehouse", "East Coast Hub"
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User", back_populates="location_aliases")
+    mappings = relationship("LocationMapping", back_populates="alias", cascade="all, delete-orphan")
+    
+    # Unique constraint per user
+    __table_args__ = (
+        UniqueConstraint('user_id', 'alias_name', name='unique_user_alias'),
+    )
+
+class LocationMapping(Base):
+    __tablename__ = "location_mappings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    alias_id = Column(Integer, ForeignKey("location_aliases.id"), nullable=False)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id"), nullable=False)
+    shopify_location_id = Column(String, nullable=False)  # gid://shopify/Location/123
+    shopify_location_name = Column(String, nullable=False)  # "125 N. Willow st"
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    alias = relationship("LocationAlias", back_populates="mappings")
+    store = relationship("ShopifyStore", back_populates="location_mappings")
+    
+    # Unique constraint: one mapping per alias per store
+    __table_args__ = (
+        UniqueConstraint('alias_id', 'store_id', name='unique_alias_store'),
     )

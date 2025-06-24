@@ -31,6 +31,9 @@ class RuleEngine:
     def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any]) -> bool:
         """Evaluate if a rule applies to an order"""
         try:
+            order_name = order.get("name", "unknown")
+            logger.info(f"Evaluating rule '{rule.name}' for order {order_name}")
+            
             conditions = rule.conditions
             if not conditions:
                 return False
@@ -49,12 +52,17 @@ class RuleEngine:
             for condition in conditions:
                 result = self._evaluate_condition(condition, order)
                 results.append(result)
+                logger.info(f"  Condition {condition}: {result}")
             
             # Apply logical operator
+            final_result = False
             if logical_operator == "OR":
-                return any(results)
+                final_result = any(results)
             else:  # AND
-                return all(results)
+                final_result = all(results)
+                
+            logger.info(f"Rule '{rule.name}' for order {order_name}: {final_result}")
+            return final_result
                 
         except Exception as e:
             logger.error(f"Error evaluating rule {rule.id}: {str(e)}")
@@ -73,6 +81,11 @@ class RuleEngine:
             
             # Get the actual value from the order
             actual_value = self._get_order_field_value(field, order)
+            
+            # Convert expected value to uppercase for province/state/country fields to make comparison case-insensitive
+            if field in ["shipping_province", "shipping_country", "billing_province", "billing_country"]:
+                if isinstance(expected_value, str):
+                    expected_value = expected_value.upper()
             
             # Apply the operator
             if operator not in self.operators:
@@ -112,7 +125,9 @@ class RuleEngine:
             
             elif field == "shipping_province":
                 shipping_addr = order.get("shippingAddress", {})
-                return shipping_addr.get("province", "").strip().upper()
+                province = shipping_addr.get("province", "").strip()
+                logger.info(f"Order {order.get('name', 'unknown')}: Raw shipping province = '{province}', Uppercase = '{province.upper()}'")
+                return province.upper()
             
             elif field == "shipping_country":
                 shipping_addr = order.get("shippingAddress", {})

@@ -9,6 +9,8 @@ import {
   UserIcon,
   ClipboardDocumentListIcon,
   AdjustmentsHorizontalIcon,
+  MapPinIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -25,7 +27,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { name: 'Dashboard', href: '/', icon: HomeIcon },
     { name: 'Stores', href: '/stores', icon: BuildingStorefrontIcon },
     { name: 'Rules', href: '/rules', icon: CogIcon },
+    { name: 'Locations', href: '/locations', icon: MapPinIcon },
     { name: 'Order Logs', href: '/order-logs', icon: ClipboardDocumentListIcon },
+    { name: 'Reports', href: '/reports', icon: ChartBarIcon },
     { name: 'Settings', href: '/settings', icon: AdjustmentsHorizontalIcon },
   ];
 
