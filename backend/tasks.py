@@ -725,6 +725,11 @@ async def _apply_rule_actions(
                                     await client.add_tags_to_order(order["id"], ["OOS"])
                                     logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy pre-check failure")
                                     
+                                    # Critical: Wait for Shopify to process the OOS tag before continuing
+                                    # This ensures subsequent rules can see the OOS tag in their order refresh
+                                    logger.info("Waiting 1000ms for Shopify to process OOS tag...")
+                                    await asyncio.sleep(1.0)
+                                    
                                     # Record OOS incidents for ONLY the products that were actually unavailable
                                     _record_oos_incident_for_unavailable_items(
                                         db=db,
