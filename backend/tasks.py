@@ -423,11 +423,11 @@ def process_store_orders(self, user_id: int, store_id: int):
         if not user:
             raise ValueError(f"User {user_id} not found")
         
-        # Get active rules for user
+        # Get active rules for user (order by priority ascending: 0, 1, 2, 3...)
         rules = db.query(ProcessingRule).filter(
             ProcessingRule.user_id == user_id,
             ProcessingRule.is_active == True
-        ).order_by(ProcessingRule.priority.desc()).all()
+        ).order_by(ProcessingRule.priority.asc()).all()
         
         if not rules:
             logger.info(f"No active rules found for user {user_id}")
@@ -609,7 +609,9 @@ async def _apply_rule_actions(
                 if isinstance(tags, str):
                     tags = [tags]
                 
+                logger.info(f"Removing tags {tags} from order {order.get('name', order.get('id'))}")
                 result = await client.remove_tags_from_order(order["id"], tags)
+                logger.info(f"Remove tags result: {result}")
                 if not result:
                     success = False
                     

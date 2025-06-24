@@ -232,7 +232,7 @@ async def get_rules(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    rules = db.query(ProcessingRule).filter(ProcessingRule.user_id == current_user.id).all()
+    rules = db.query(ProcessingRule).filter(ProcessingRule.user_id == current_user.id).order_by(ProcessingRule.priority.asc()).all()
     return [
         {
             "id": rule.id,
