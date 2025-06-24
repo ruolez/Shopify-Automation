@@ -535,11 +535,17 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 try:
                     # Apply rules to order
                     rules_applied = False
+                    current_order = order  # Start with the initial order data
+                    
                     for rule in rules:
-                        if rule_engine.evaluate_rule(rule, order):
+                        # Evaluate rule against current order state
+                        if rule_engine.evaluate_rule(rule, current_order):
                             rules_applied = True
+                            logger.info(f"Rule '{rule.name}' (priority {rule.priority}) matched for order {order_number}")
+                            
+                            # Apply rule actions and wait for completion
                             success = await _apply_rule_actions(
-                                client, rule, order, store, db
+                                client, rule, current_order, store, db
                             )
                             
                             if success:
@@ -548,12 +554,29 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                                     order_number, f"applied_rule_{rule.id}", 
                                     "success", {"rule_name": rule.name}
                                 )
+                                
+                                # Re-fetch order to get updated state (tags, fulfillment status, etc.)
+                                # This ensures the next rule sees the changes from this rule
+                                logger.info(f"Re-fetching order {order_number} to get updated state after rule '{rule.name}'")
+                                refreshed_order = await client.get_order_by_id(order_id)
+                                
+                                if refreshed_order:
+                                    current_order = refreshed_order
+                                    logger.info(f"Order {order_number} refreshed - tags: {current_order.get('tags', [])}")
+                                else:
+                                    logger.warning(f"Failed to refresh order {order_number}, continuing with current state")
+                                
+                                # Small delay to ensure Shopify has fully processed the changes
+                                # This is especially important for tag operations
+                                await asyncio.sleep(0.5)
+                                
                             else:
                                 _log_order_action(
                                     db, store.user_id, store.id, order_id, 
                                     order_number, f"applied_rule_{rule.id}", 
                                     "failed", {"rule_name": rule.name}
                                 )
+                                # Continue to next rule even if this one failed
                     
                     # Mark order as processed
                     processed_order = ProcessedOrder(
