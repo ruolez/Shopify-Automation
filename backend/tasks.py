@@ -505,32 +505,32 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 order_created_at = order["createdAt"]
                 fulfillment_status = order.get("displayFulfillmentStatus", "")
                 
-                # Check if order is within last 24 hours OR newer than last sync
-                order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
-                min_24h_date_obj = datetime.fromisoformat(min_24h_date.replace('Z', '+00:00'))
-                last_sync_date_obj = datetime.fromisoformat(last_sync_date.replace('Z', '+00:00'))
-                
-                # Skip orders older than 24 hours AND older than last sync
-                if order_date < min_24h_date_obj and order_date < last_sync_date_obj:
-                    logger.debug(f"Order {order_number} created before both 24h cutoff and last sync, skipping")
-                    continue
-                
-                # Only process orders with "UNFULFILLED" status
+                # First check: Only process orders with "UNFULFILLED" status
                 if fulfillment_status != "UNFULFILLED":
-                    logger.info(f"Order {order_number} has fulfillment status '{fulfillment_status}', skipping (only processing UNFULFILLED orders)")
+                    logger.debug(f"Order {order_number} has fulfillment status '{fulfillment_status}', skipping (only processing UNFULFILLED orders)")
                     continue
                 
-                logger.debug(f"Order {order_number}: created {order_created_at}, status '{fulfillment_status}' - eligible for processing")
-                
-                # Check if order has already been processed
+                # Second check: Skip if order was already processed (avoid duplicates)
                 existing = db.query(ProcessedOrder).filter(
                     ProcessedOrder.store_id == store.id,
                     ProcessedOrder.order_id == order_id
                 ).first()
                 
                 if existing:
-                    logger.info(f"Order {order_number} already processed, skipping")
+                    logger.debug(f"Order {order_number} already processed, skipping")
                     continue
+                
+                # Third check: Date filtering - process if within 24h OR newer than last sync
+                order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
+                min_24h_date_obj = datetime.fromisoformat(min_24h_date.replace('Z', '+00:00'))
+                last_sync_date_obj = datetime.fromisoformat(last_sync_date.replace('Z', '+00:00'))
+                
+                # Skip orders older than 24 hours AND older than last sync
+                if order_date < min_24h_date_obj and order_date < last_sync_date_obj:
+                    logger.debug(f"Order {order_number} created before both 24h cutoff ({min_24h_date}) and last sync ({last_sync_date}), skipping")
+                    continue
+                
+                logger.info(f"Order {order_number}: created {order_created_at}, status '{fulfillment_status}' - processing")
                 
                 try:
                     # Apply rules to order
