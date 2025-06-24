@@ -49,6 +49,7 @@ class ProcessingRule(Base):
     conditions = Column(JSON, nullable=False)  # Rule conditions as JSON
     actions = Column(JSON, nullable=False)     # Actions to take as JSON
     priority = Column(Integer, default=0)     # Higher number = higher priority
+    delay_ms = Column(Integer, default=10)    # Delay in milliseconds after rule execution
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -210,6 +210,7 @@ async def create_rule(
         conditions=[condition.dict() for condition in rule_data.conditions],
         actions=[action.dict() for action in rule_data.actions],
         priority=rule_data.priority,
+        delay_ms=rule_data.delay_ms,
         is_active=rule_data.is_active
     )
     db.add(db_rule)
@@ -223,6 +224,7 @@ async def create_rule(
         "conditions": db_rule.conditions,
         "actions": db_rule.actions,
         "priority": db_rule.priority,
+        "delay_ms": db_rule.delay_ms,
         "is_active": db_rule.is_active,
         "created_at": db_rule.created_at
     }
@@ -241,6 +243,7 @@ async def get_rules(
             "conditions": rule.conditions,
             "actions": rule.actions,
             "priority": rule.priority,
+            "delay_ms": rule.delay_ms,
             "is_active": rule.is_active,
             "created_at": rule.created_at
         }
@@ -287,6 +290,7 @@ async def get_rule(
         "conditions": rule.conditions,
         "actions": rule.actions,
         "priority": rule.priority,
+        "delay_ms": rule.delay_ms,
         "is_active": rule.is_active,
         "created_at": rule.created_at
     }
@@ -314,6 +318,7 @@ async def update_rule(
     rule.conditions = [condition.dict() for condition in rule_data.conditions]
     rule.actions = [action.dict() for action in rule_data.actions]
     rule.priority = rule_data.priority
+    rule.delay_ms = rule_data.delay_ms
     rule.is_active = rule_data.is_active
     
     db.commit()
@@ -326,6 +331,7 @@ async def update_rule(
         "conditions": rule.conditions,
         "actions": rule.actions,
         "priority": rule.priority,
+        "delay_ms": rule.delay_ms,
         "is_active": rule.is_active,
         "created_at": rule.created_at
     }

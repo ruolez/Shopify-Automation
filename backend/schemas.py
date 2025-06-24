@@ -64,6 +64,7 @@ class RuleCreate(BaseModel):
     conditions: List[RuleCondition]
     actions: List[RuleAction]
     priority: int = 0
+    delay_ms: int = 10  # Delay in milliseconds after rule execution
     is_active: bool = True
     
     @validator('name')
@@ -71,6 +72,14 @@ class RuleCreate(BaseModel):
         if len(v.strip()) < 3:
             raise ValueError('Rule name must be at least 3 characters long')
         return v.strip()
+    
+    @validator('delay_ms')
+    def validate_delay_ms(cls, v):
+        if v < 0:
+            raise ValueError('Delay must be non-negative')
+        if v > 60000:  # Max 60 seconds
+            raise ValueError('Delay must be no more than 60 seconds (60000ms)')
+        return v
 
 class RuleResponse(BaseModel):
     id: int
@@ -79,6 +88,7 @@ class RuleResponse(BaseModel):
     conditions: List[RuleCondition]
     actions: List[RuleAction]
     priority: int
+    delay_ms: int
     is_active: bool
     created_at: datetime
     
