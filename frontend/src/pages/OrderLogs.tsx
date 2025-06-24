@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
@@ -8,6 +8,10 @@ import {
   InformationCircleIcon,
   ArrowPathIcon,
   PlayIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  ChevronDownIcon as SortDownIcon,
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
@@ -36,12 +40,28 @@ interface LogsResponse {
   };
 }
 
+interface GroupedOrderLog {
+  order_number: string;
+  order_id: string;
+  store_name: string;
+  logs: OrderLog[];
+  latest_date: string;
+  has_failed: boolean;
+  has_success: boolean;
+}
+
+type SortField = 'order_number' | 'store_name' | 'latest_date' | 'status' | 'action_count';
+type SortDirection = 'asc' | 'desc';
+
 const OrderLogs: React.FC = () => {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [storeFilter, setStoreFilter] = useState<string>('');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedRule, setSelectedRule] = useState<string>('');
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [sortField, setSortField] = useState<SortField>('latest_date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   
   const queryClient = useQueryClient();
 
@@ -76,6 +96,77 @@ const OrderLogs: React.FC = () => {
       return response.data;
     },
   });
+
+  // Group and sort logs
+  const groupedLogs = useMemo(() => {
+    if (!data?.logs) return [];
+
+    // Group logs by order number
+    const grouped = new Map<string, GroupedOrderLog>();
+    
+    data.logs.forEach(log => {
+      const key = log.order_number;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          order_number: log.order_number,
+          order_id: log.order_id,
+          store_name: log.store_name,
+          logs: [],
+          latest_date: log.created_at,
+          has_failed: false,
+          has_success: false,
+        });
+      }
+      
+      const group = grouped.get(key)!;
+      group.logs.push(log);
+      
+      // Update latest date
+      if (new Date(log.created_at) > new Date(group.latest_date)) {
+        group.latest_date = log.created_at;
+      }
+      
+      // Track status flags
+      if (log.status === 'failed') group.has_failed = true;
+      if (log.status === 'success') group.has_success = true;
+    });
+    
+    // Convert to array and sort
+    const groupedArray = Array.from(grouped.values());
+    
+    groupedArray.sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortField) {
+        case 'order_number':
+          comparison = a.order_number.localeCompare(b.order_number);
+          break;
+        case 'store_name':
+          comparison = a.store_name.localeCompare(b.store_name);
+          break;
+        case 'latest_date':
+          comparison = new Date(a.latest_date).getTime() - new Date(b.latest_date).getTime();
+          break;
+        case 'status':
+          const getStatusPriority = (group: GroupedOrderLog) => {
+            if (group.has_failed) return 0;
+            if (group.has_success) return 1;
+            return 2;
+          };
+          comparison = getStatusPriority(a) - getStatusPriority(b);
+          break;
+        case 'action_count':
+          comparison = a.logs.length - b.logs.length;
+          break;
+        default:
+          comparison = 0;
+      }
+      
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+    
+    return groupedArray;
+  }, [data?.logs, sortField, sortDirection]);
 
   const retryOrders = useMutation({
     mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
@@ -120,6 +211,40 @@ const OrderLogs: React.FC = () => {
     }
   };
 
+  const getGroupStatus = (group: GroupedOrderLog) => {
+    if (group.has_failed) return 'failed';
+    if (group.has_success) return 'success';
+    return 'info';
+  };
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortIcon = (field: SortField) => {
+    if (sortField !== field) {
+      return <ChevronUpIcon className="h-4 w-4 text-gray-400" />;
+    }
+    return sortDirection === 'asc' ? 
+      <ChevronUpIcon className="h-4 w-4 text-gray-700" /> : 
+      <SortDownIcon className="h-4 w-4 text-gray-700" />;
+  };
+
+  const toggleOrderExpansion = (orderNumber: string) => {
+    const newExpanded = new Set(expandedOrders);
+    if (newExpanded.has(orderNumber)) {
+      newExpanded.delete(orderNumber);
+    } else {
+      newExpanded.add(orderNumber);
+    }
+    setExpandedOrders(newExpanded);
+  };
+
   const handleSelectOrder = (orderId: string) => {
     const newSelected = new Set(selectedOrders);
     if (newSelected.has(orderId)) {
@@ -131,10 +256,10 @@ const OrderLogs: React.FC = () => {
   };
 
   const handleSelectAll = () => {
-    if (selectedOrders.size === data?.logs.length) {
+    if (selectedOrders.size === groupedLogs.length) {
       setSelectedOrders(new Set());
     } else {
-      const allOrderIds = new Set(data?.logs.map(log => log.order_id) || []);
+      const allOrderIds = new Set(groupedLogs.map(group => group.order_id));
       setSelectedOrders(allOrderIds);
     }
   };
@@ -234,7 +359,7 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Logs table */}
-          {data?.logs.length === 0 ? (
+          {groupedLogs.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-gray-500">No order logs found</p>
             </div>
@@ -246,74 +371,152 @@ const OrderLogs: React.FC = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <input
                         type="checkbox"
-                        checked={selectedOrders.size === data?.logs.length && data?.logs.length > 0}
+                        checked={selectedOrders.size === groupedLogs.length && groupedLogs.length > 0}
                         onChange={handleSelectAll}
                         className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
                       />
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Order
+                      <button
+                        onClick={() => handleSort('order_number')}
+                        className="flex items-center space-x-1 hover:text-gray-700"
+                      >
+                        <span>Order</span>
+                        {getSortIcon('order_number')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Store
+                      <button
+                        onClick={() => handleSort('store_name')}
+                        className="flex items-center space-x-1 hover:text-gray-700"
+                      >
+                        <span>Store</span>
+                        {getSortIcon('store_name')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Action
+                      <button
+                        onClick={() => handleSort('action_count')}
+                        className="flex items-center space-x-1 hover:text-gray-700"
+                      >
+                        <span>Actions</span>
+                        {getSortIcon('action_count')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
+                      <button
+                        onClick={() => handleSort('status')}
+                        className="flex items-center space-x-1 hover:text-gray-700"
+                      >
+                        <span>Status</span>
+                        {getSortIcon('status')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Details
+                      <button
+                        onClick={() => handleSort('latest_date')}
+                        className="flex items-center space-x-1 hover:text-gray-700"
+                      >
+                        <span>Latest Activity</span>
+                        {getSortIcon('latest_date')}
+                      </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Date
+                      Expand
                     </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {data?.logs.map((log) => (
-                    <tr key={log.id}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <input
-                          type="checkbox"
-                          checked={selectedOrders.has(log.order_id)}
-                          onChange={() => handleSelectOrder(log.order_id)}
-                          className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {log.order_number}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {log.store_name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {getActionLabel(log.action)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          {getStatusIcon(log.status)}
-                          <span className="ml-2 text-sm text-gray-500 capitalize">
-                            {log.status}
+                  {groupedLogs.map((group) => (
+                    <React.Fragment key={group.order_number}>
+                      {/* Main row for each order */}
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={selectedOrders.has(group.order_id)}
+                            onChange={() => handleSelectOrder(group.order_id)}
+                            className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {group.order_number}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {group.store_name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            {group.logs.length} action{group.logs.length !== 1 ? 's' : ''}
                           </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {log.error_message ? (
-                          <span className="text-red-600">{log.error_message}</span>
-                        ) : log.details?.rule_name ? (
-                          <span>Rule: {log.details.rule_name}</span>
-                        ) : log.details?.message ? (
-                          <span>{log.details.message}</span>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {format(new Date(log.created_at), 'MMM d, yyyy HH:mm')}
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            {getStatusIcon(getGroupStatus(group))}
+                            <span className="ml-2 text-sm text-gray-500 capitalize">
+                              {group.has_failed && group.has_success ? 'Mixed' : 
+                               group.has_failed ? 'Failed' : 
+                               group.has_success ? 'Success' : 'Info'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {format(new Date(group.latest_date), 'MMM d, yyyy HH:mm')}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() => toggleOrderExpansion(group.order_number)}
+                            className="p-1 text-gray-400 hover:text-gray-600 rounded"
+                          >
+                            {expandedOrders.has(group.order_number) ? (
+                              <ChevronDownIcon className="h-4 w-4" />
+                            ) : (
+                              <ChevronRightIcon className="h-4 w-4" />
+                            )}
+                          </button>
+                        </td>
+                      </tr>
+                      
+                      {/* Expanded rows showing individual log entries */}
+                      {expandedOrders.has(group.order_number) && group.logs.map((log) => (
+                        <tr key={log.id} className="bg-gray-50">
+                          <td className="px-6 py-2"></td>
+                          <td className="px-6 py-2 text-xs text-gray-500">
+                            #{log.id}
+                          </td>
+                          <td className="px-6 py-2 text-xs text-gray-500">
+                            -
+                          </td>
+                          <td className="px-6 py-2 text-xs text-gray-500">
+                            {getActionLabel(log.action)}
+                          </td>
+                          <td className="px-6 py-2">
+                            <div className="flex items-center">
+                              {getStatusIcon(log.status)}
+                              <span className="ml-2 text-xs text-gray-500 capitalize">
+                                {log.status}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-2 text-xs text-gray-500">
+                            {format(new Date(log.created_at), 'MMM d, yyyy HH:mm')}
+                          </td>
+                          <td className="px-6 py-2">
+                            <div className="text-xs text-gray-500 max-w-xs truncate">
+                              {log.error_message ? (
+                                <span className="text-red-600">{log.error_message}</span>
+                              ) : log.details?.rule_name ? (
+                                <span>Rule: {log.details.rule_name}</span>
+                              ) : log.details?.message ? (
+                                <span>{log.details.message}</span>
+                              ) : (
+                                '-'
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -378,7 +581,7 @@ const OrderLogs: React.FC = () => {
           {data && data.pagination.pages > 1 && (
             <div className="mt-4 flex justify-between items-center">
               <div className="text-sm text-gray-700">
-                Showing page {data.pagination.page} of {data.pagination.pages}
+                Showing page {data.pagination.page} of {data.pagination.pages} ({groupedLogs.length} unique orders)
               </div>
               <div className="flex space-x-2">
                 <button
