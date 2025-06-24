@@ -24,6 +24,7 @@ const ruleSchema = z.object({
     parameters: z.record(z.any()),
   })).min(1, 'At least one action is required'),
   priority: z.number().min(0).max(100),
+  delay_ms: z.number().min(0).max(60000),
   is_active: z.boolean(),
 });
 
@@ -77,6 +78,7 @@ const RuleBuilder: React.FC = () => {
       conditions: [{ field: '', operator: '', value: '' }],
       actions: [{ type: '', parameters: {} }],
       priority: 0,
+      delay_ms: 10,
       is_active: true,
     },
   });
@@ -107,6 +109,7 @@ const RuleBuilder: React.FC = () => {
       setValue('conditions', existingRule.conditions);
       setValue('actions', existingRule.actions);
       setValue('priority', existingRule.priority);
+      setValue('delay_ms', existingRule.delay_ms || 10);
       setValue('is_active', existingRule.is_active);
     }
   }, [existingRule, setValue]);
@@ -228,6 +231,26 @@ const RuleBuilder: React.FC = () => {
               {errors.priority && (
                 <p className="mt-1 text-sm text-red-600">{errors.priority.message}</p>
               )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+            <div>
+              <label className="label">Delay After Rule (ms)</label>
+              <input
+                {...register('delay_ms', { valueAsNumber: true })}
+                type="number"
+                min="0"
+                max="60000"
+                className="input"
+                placeholder="10"
+              />
+              {errors.delay_ms && (
+                <p className="mt-1 text-sm text-red-600">{errors.delay_ms.message}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                Time to wait after this rule executes before the next rule runs (0-60000ms)
+              </p>
             </div>
           </div>
 

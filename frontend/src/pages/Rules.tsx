@@ -140,6 +140,9 @@ const Rules: React.FC = () => {
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                       Priority: {rule.priority}
                     </span>
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                      Delay: {rule.delay_ms}ms
+                    </span>
                   </div>
                   
                   {rule.description && (

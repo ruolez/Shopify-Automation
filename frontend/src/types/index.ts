@@ -32,6 +32,7 @@ export interface Rule {
   conditions: RuleCondition[];
   actions: RuleAction[];
   priority: number;
+  delay_ms: number;
   is_active: boolean;
   created_at: string;
 }
@@ -116,5 +117,6 @@ export interface RuleForm {
   conditions: RuleCondition[];
   actions: RuleAction[];
   priority: number;
+  delay_ms: number;
   is_active: boolean;
 }
