@@ -12,7 +12,7 @@ This is a Shopify Multi-Store Order Management System - a comprehensive automate
 
 **Backend (FastAPI + SQLAlchemy + Celery)**
 - `backend/main.py` - FastAPI application with REST endpoints and debugging endpoints
-- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder)
+- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident)
 - `backend/rule_engine.py` - Rule evaluation engine with 15+ operators and field extraction
 - `backend/tasks.py` - Celery background tasks for order processing and store synchronization
 - `backend/shopify_client.py` - Shopify Admin API GraphQL client with order management and fulfillment operations
@@ -20,7 +20,7 @@ This is a Shopify Multi-Store Order Management System - a comprehensive automate
 - `backend/auth.py` - JWT authentication and user management
 
 **Frontend (React + TypeScript + Tailwind)**
-- `frontend/src/pages/` - Main application pages (Dashboard, Stores, Rules, RuleBuilder, Settings, OrderLogs)
+- `frontend/src/pages/` - Main application pages (Dashboard, Stores, Rules, RuleBuilder, Settings, OrderLogs, Reports)
 - `frontend/src/components/` - Reusable UI components
 - `frontend/src/contexts/AuthContext.tsx` - Authentication state management
 - `frontend/src/utils/api.ts` - Axios API client with interceptors
@@ -151,6 +151,8 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 - Rules processed by priority (higher numbers first) for proper override behavior
 - Failed actions don't block subsequent actions in same rule
 - Extensive logging in `OrderLog` for debugging and user visibility
+- **All-or-Nothing Fulfillment Policy**: Products only move if ALL can be fulfilled at target location
+- Inventory pre-check validation before attempting fulfillment moves
 
 ### Background Processing Architecture
 - `process_all_orders_if_enabled` checks user settings before queuing store-specific tasks
@@ -196,4 +198,48 @@ curl "http://localhost:8000/debug/order-data/1?order_name=TS1404" -H "Authorizat
 
 # Monitor weight calculations in logs
 docker-compose logs api worker --tail=50 | grep -A20 -B5 "order_weight\|Weight\|grams"
+```
+
+### Frontend Docker Cache Issues (CRITICAL)
+**Problem**: Docker caches frontend builds, preventing new React changes from appearing in the browser.
+**Solution**: ALWAYS purge Docker cache when frontend changes don't appear:
+```bash
+# REQUIRED process for frontend changes
+docker-compose down
+docker system prune -f  # Purges all cache including build cache
+docker-compose up -d
+```
+**When to use**: Every time frontend changes aren't visible after container restart.
+**Note**: Simple `docker-compose restart frontend` is NOT sufficient - cache persists.
+
+### All-or-Nothing Fulfillment Policy (Added 2025-06-24)
+**Feature**: Fulfillment location changes only proceed if ALL products in an order can be fulfilled at the target location.
+- **Implementation**: Pre-check inventory availability before attempting fulfillment moves
+- **Behavior**: If any product is out of stock at target location, no products are moved
+- **OOS Recording**: Only products that are actually unavailable are recorded as OOS incidents
+- **Location**: `backend/tasks.py` - `_check_inventory_availability()` and fulfillment action processing
+
+### Out of Stock (OOS) Reporting System
+**Components**:
+1. **OOS Incident Tracking**: `OutOfStockIncident` model records product-level OOS data
+2. **Reports Page**: Three tabs - Fulfillment Errors, OOS Orders, Product Analysis
+3. **Product Analysis**: 
+   - Aggregates OOS incidents by product/variant
+   - Shows total incidents, affected quantities, and locations
+   - Supports analyzing selected orders or date ranges
+4. **Location Alias System**: Maps user-friendly names to Shopify location IDs
+
+### GraphQL Query Optimization (Fixed 2025-06-24)
+**Issue**: Shopify GraphQL queries exceeded cost limit (1241 > 1000)
+**Fix**: Reduced fetch limits:
+- `fulfillmentOrders`: 10 → 5
+- `lineItems`: 100 → 20
+**Note**: Pagination may be needed for orders with many items
+
+### Critical CSS Classes
+**Issue**: `btn-primary` and `btn-secondary` classes don't exist in Tailwind
+**Fix**: Use explicit Tailwind classes:
+```tsx
+// Correct button styling
+className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700"
 ```
