@@ -109,6 +109,7 @@ class ShopifyClient:
                         }
                         currentTotalWeight
                         tags
+                        displayFulfillmentStatus
                         customer {
                             id
                             firstName
@@ -475,6 +476,7 @@ class ShopifyClient:
                 }
                 currentTotalWeight
                 tags
+                displayFulfillmentStatus
                 customer {
                     id
                     firstName

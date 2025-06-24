@@ -148,7 +148,7 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 
 ### Rule Processing Safeguards
 - `ProcessedOrder` table with unique constraint prevents duplicate processing
-- Rules processed by priority (higher numbers first) for proper override behavior
+- Rules processed by priority in ascending order (0→1→2→3) - lower numbers execute first
 - Failed actions don't block subsequent actions in same rule
 - Extensive logging in `OrderLog` for debugging and user visibility
 - **All-or-Nothing Fulfillment Policy**: Products only move if ALL can be fulfilled at target location
@@ -174,7 +174,22 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
 
+### Data Reset Feature (Added 2025-06-24)
+**Purpose**: Allows users to purge operational data while preserving configuration.
+- **Location**: Settings page → Data Management section
+- **Safety Features**: Two-factor confirmation with "RESET" typing requirement
+- **Selective Reset**: Checkboxes for order logs, processed orders, OOS incidents, task status
+- **Preserves**: User accounts, store connections, rules, settings, location aliases
+- **Endpoint**: `POST /settings/reset-data` with confirmation validation
+
 ## Critical Bug Fixes & Known Issues
+
+### Rule Priority Execution Order (Fixed 2025-06-24)
+**Issue**: Rules were executing in descending priority order (3→2→1→0) instead of ascending.
+- **Impact**: Remove tag rules ran before prerequisite rules that added the target tags
+- **Fix**: Changed from `.order_by(ProcessingRule.priority.desc())` to `.order_by(ProcessingRule.priority.asc())`
+- **Location**: `backend/tasks.py:430` and `backend/main.py:235`
+- **Behavior**: Rules now execute 0→1→2→3 (lower priority numbers first)
 
 ### Weight Filter Bug (Fixed 2025-06-24)
 **Issue**: Shopify's `currentTotalWeight` field can return incorrect values that don't match the actual sum of line item weights.
@@ -199,6 +214,14 @@ curl "http://localhost:8000/debug/order-data/1?order_name=TS1404" -H "Authorizat
 # Monitor weight calculations in logs
 docker-compose logs api worker --tail=50 | grep -A20 -B5 "order_weight\|Weight\|grams"
 ```
+
+### Order Processing Date Filter Issues
+**Issue**: Orders created during sync windows can be missed due to timing gaps.
+- **Symptom**: New orders show `processed_orders: 0` and aren't processed despite being recent
+- **Cause**: `last_sync` timestamp is updated after processing completes, creating timing gaps
+- **Debug**: Check `last_sync` time vs order creation time in logs
+- **Workaround**: Manually reset store's `last_sync` to time before problem order was created
+- **Long-term Fix**: Use sync start time instead of completion time for date filtering
 
 ### Frontend Docker Cache Issues (CRITICAL)
 **Problem**: Docker caches frontend builds, preventing new React changes from appearing in the browser.
@@ -243,3 +266,28 @@ docker-compose up -d
 // Correct button styling
 className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700"
 ```
+
+## Docker Development Workflow
+**Critical for Frontend Changes**: Docker aggressively caches builds. When React/frontend changes don't appear:
+```bash
+# REQUIRED process - simple restart is NOT enough
+docker-compose down
+docker system prune -f  # Purges build cache
+docker-compose up -d
+```
+
+**Service Restart Commands**:
+```bash
+# Restart individual services (preserves cache)
+docker-compose restart api worker scheduler
+
+# View logs for debugging
+docker-compose logs -f worker  # Background processing
+docker-compose logs -f api     # API requests and rule evaluation
+```
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
