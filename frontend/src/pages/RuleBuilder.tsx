@@ -106,7 +106,16 @@ const RuleBuilder: React.FC = () => {
     if (existingRule) {
       setValue('name', existingRule.name);
       setValue('description', existingRule.description || '');
-      setValue('conditions', existingRule.conditions);
+      
+      // Convert arrays back to comma-separated strings for list operators
+      const processedConditions = existingRule.conditions.map(condition => {
+        if ((condition.operator === 'in_list' || condition.operator === 'not_in_list') && Array.isArray(condition.value)) {
+          return { ...condition, value: condition.value.join(', ') };
+        }
+        return condition;
+      });
+      
+      setValue('conditions', processedConditions);
       setValue('actions', existingRule.actions);
       setValue('priority', existingRule.priority);
       setValue('delay_ms', existingRule.delay_ms || 10);
@@ -148,10 +157,25 @@ const RuleBuilder: React.FC = () => {
   });
 
   const onSubmit = (data: RuleForm) => {
+    // Process conditions to convert comma-separated strings to arrays for list operators
+    const processedData = {
+      ...data,
+      conditions: data.conditions.map(condition => {
+        if (condition.operator === 'in_list' || condition.operator === 'not_in_list') {
+          // Convert comma-separated string to array
+          if (typeof condition.value === 'string') {
+            const trimmedValues = condition.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
+            return { ...condition, value: trimmedValues };
+          }
+        }
+        return condition;
+      })
+    };
+
     if (isEditing) {
-      updateRuleMutation.mutate(data);
+      updateRuleMutation.mutate(processedData);
     } else {
-      createRuleMutation.mutate(data);
+      createRuleMutation.mutate(processedData);
     }
   };
 
@@ -337,12 +361,35 @@ const RuleBuilder: React.FC = () => {
 
                   <div>
                     <label className="label">Value</label>
-                    <input
-                      {...register(`conditions.${index}.value`)}
-                      type="text"
-                      className="input"
-                      placeholder="Enter value"
-                    />
+                    {(() => {
+                      const selectedOperator = watch(`conditions.${index}.operator`);
+                      const isListOperator = selectedOperator === 'in_list' || selectedOperator === 'not_in_list';
+                      
+                      if (isListOperator) {
+                        return (
+                          <div>
+                            <input
+                              {...register(`conditions.${index}.value`)}
+                              type="text"
+                              className="input"
+                              placeholder="PA,NY,CA,TX (comma-separated)"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              Enter multiple values separated by commas (e.g., PA,NY,CA,TX)
+                            </p>
+                          </div>
+                        );
+                      }
+                      
+                      return (
+                        <input
+                          {...register(`conditions.${index}.value`)}
+                          type="text"
+                          className="input"
+                          placeholder="Enter value"
+                        />
+                      );
+                    })()}
                   </div>
 
                   <div className="flex items-end">
