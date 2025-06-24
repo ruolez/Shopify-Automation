@@ -154,3 +154,42 @@ class LocationMapping(Base):
     __table_args__ = (
         UniqueConstraint('alias_id', 'store_id', name='unique_alias_store'),
     )
+
+class OutOfStockIncident(Base):
+    __tablename__ = "out_of_stock_incidents"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id"), nullable=False)
+    order_id = Column(String, nullable=False, index=True)  # Shopify order ID
+    order_number = Column(String, nullable=False, index=True)  # Human readable order number
+    
+    # Product information
+    product_id = Column(String, nullable=False, index=True)  # Shopify product ID
+    variant_id = Column(String, nullable=False, index=True)  # Shopify variant ID
+    product_title = Column(String, nullable=False)
+    variant_title = Column(String)
+    sku = Column(String, index=True)
+    vendor = Column(String, index=True)
+    product_type = Column(String, index=True)
+    
+    # Incident details
+    quantity_attempted = Column(Integer, default=1)  # How many units tried to fulfill
+    attempted_location_id = Column(String, nullable=False)  # Target fulfillment location
+    attempted_location_alias = Column(String)  # Location alias used
+    rule_name = Column(String, nullable=False)  # Which rule triggered this
+    
+    # Timestamps
+    incident_date = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User")
+    store = relationship("ShopifyStore")
+    
+    # Index for efficient queries
+    __table_args__ = (
+        # Index for product-based queries
+        {'mysql_key_block_size': '1024'}
+    )

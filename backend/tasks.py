@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
-from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident
 from shopify_client import ShopifyClient
 from rule_engine import RuleEngine
 
@@ -52,6 +52,294 @@ def get_db():
         return db
     finally:
         db.close()
+
+def _record_oos_incident(
+    db: Session,
+    user_id: int,
+    store_id: int, 
+    order: Dict,
+    rule_name: str,
+    attempted_location_id: str,
+    attempted_location_alias: str = None
+):
+    """Record out-of-stock incidents for all products in an order"""
+    try:
+        order_id = order["id"]
+        order_number = order.get("name", "Unknown")
+        incident_date = datetime.utcnow()
+        
+        # Get line items from the order
+        line_items = order.get("lineItems", {}).get("edges", [])
+        
+        for item_edge in line_items:
+            item = item_edge["node"]
+            product = item.get("product", {})
+            variant = item.get("variant", {})
+            
+            # Extract product information
+            product_id = product.get("id", "")
+            variant_id = variant.get("id", "")
+            product_title = item.get("title", "Unknown Product")
+            variant_title = variant.get("title", "")
+            sku = variant.get("sku", "")
+            vendor = product.get("vendor", "")
+            product_type = product.get("productType", "")
+            quantity = item.get("quantity", 1)
+            
+            # Create OOS incident record
+            oos_incident = OutOfStockIncident(
+                user_id=user_id,
+                store_id=store_id,
+                order_id=order_id,
+                order_number=order_number,
+                product_id=product_id,
+                variant_id=variant_id,
+                product_title=product_title,
+                variant_title=variant_title,
+                sku=sku,
+                vendor=vendor,
+                product_type=product_type,
+                quantity_attempted=quantity,
+                attempted_location_id=attempted_location_id,
+                attempted_location_alias=attempted_location_alias,
+                rule_name=rule_name,
+                incident_date=incident_date
+            )
+            
+            db.add(oos_incident)
+        
+        db.commit()
+        logger.info(f"Recorded OOS incidents for {len(line_items)} products in order {order_number}")
+        
+    except Exception as e:
+        logger.error(f"Failed to record OOS incident for order {order.get('name', 'Unknown')}: {str(e)}")
+        db.rollback()
+
+def _record_oos_incident_for_failed_items(
+    db: Session,
+    user_id: int,
+    store_id: int, 
+    order: Dict,
+    rule_name: str,
+    attempted_location_id: str,
+    attempted_location_alias: str = None,
+    failed_items: List[Dict] = None
+):
+    """Record out-of-stock incidents for specific failed items from partial fulfillment"""
+    try:
+        order_id = order["id"]
+        order_number = order.get("name", "Unknown")
+        incident_date = datetime.utcnow()
+        
+        if not failed_items:
+            logger.warning(f"No failed items provided for OOS incident recording for order {order_number}")
+            return
+        
+        for failed_item in failed_items:
+            # Extract product information from failed item data
+            product_id = failed_item.get("product_id", "")
+            variant_id = failed_item.get("variant_id", "")
+            product_title = failed_item.get("product_title", "Unknown Product")
+            sku = failed_item.get("sku", "")
+            failed_quantity = failed_item.get("failed_quantity", 1)
+            
+            # Create OOS incident record for failed item
+            oos_incident = OutOfStockIncident(
+                user_id=user_id,
+                store_id=store_id,
+                order_id=order_id,
+                order_number=order_number,
+                product_id=product_id,
+                variant_id=variant_id,
+                product_title=product_title,
+                variant_title="",  # Not available in failed_item data
+                sku=sku,
+                vendor="",  # Not available in failed_item data
+                product_type="",  # Not available in failed_item data
+                quantity_attempted=failed_quantity,
+                attempted_location_id=attempted_location_id,
+                attempted_location_alias=attempted_location_alias,
+                rule_name=rule_name,
+                incident_date=incident_date
+            )
+            
+            db.add(oos_incident)
+        
+        db.commit()
+        logger.info(f"Recorded OOS incidents for {len(failed_items)} failed items in order {order_number}")
+        
+    except Exception as e:
+        logger.error(f"Failed to record OOS incident for failed items in order {order.get('name', 'Unknown')}: {str(e)}")
+        db.rollback()
+
+def _record_oos_incident_for_unavailable_items(
+    db: Session,
+    user_id: int,
+    store_id: int, 
+    order: Dict,
+    rule_name: str,
+    attempted_location_id: str,
+    attempted_location_alias: str = None,
+    unavailable_items: List[Dict] = None
+):
+    """Record out-of-stock incidents for items that were unavailable during inventory pre-check"""
+    try:
+        order_id = order["id"]
+        order_number = order.get("name", "Unknown")
+        incident_date = datetime.utcnow()
+        
+        if not unavailable_items:
+            logger.warning(f"No unavailable items provided for OOS incident recording for order {order_number}")
+            return
+        
+        for unavailable_item in unavailable_items:
+            # Extract product information from inventory check data
+            product_title = unavailable_item.get("product_title", "Unknown Product")
+            variant_id = unavailable_item.get("variant_id", "")
+            sku = unavailable_item.get("sku", "")
+            required_quantity = unavailable_item.get("required_quantity", 1)
+            available_quantity = unavailable_item.get("available_quantity", 0)
+            
+            # For unavailable items from inventory check, we may not have all product details
+            # Extract product_id from variant_id if available
+            product_id = ""
+            if variant_id:
+                # Try to extract from order line items for more complete data
+                line_items = order.get("lineItems", {}).get("edges", [])
+                for item_edge in line_items:
+                    item = item_edge["node"]
+                    if item.get("variant", {}).get("id") == variant_id:
+                        product = item.get("product", {})
+                        product_id = product.get("id", "")
+                        # Use more complete product info from order line items
+                        if not product_title or product_title == "Unknown Product":
+                            product_title = item.get("title", "Unknown Product")
+                        break
+            
+            # Create OOS incident record for unavailable item
+            oos_incident = OutOfStockIncident(
+                user_id=user_id,
+                store_id=store_id,
+                order_id=order_id,
+                order_number=order_number,
+                product_id=product_id,
+                variant_id=variant_id,
+                product_title=product_title,
+                variant_title="",  # May not be available in inventory check data
+                sku=sku,
+                vendor="",  # May not be available in inventory check data
+                product_type="",  # May not be available in inventory check data
+                quantity_attempted=required_quantity,
+                attempted_location_id=attempted_location_id,
+                attempted_location_alias=attempted_location_alias,
+                rule_name=rule_name,
+                incident_date=incident_date
+            )
+            
+            db.add(oos_incident)
+        
+        db.commit()
+        logger.info(f"Recorded OOS incidents for {len(unavailable_items)} unavailable items in order {order_number}")
+        
+    except Exception as e:
+        logger.error(f"Failed to record OOS incident for unavailable items in order {order.get('name', 'Unknown')}: {str(e)}")
+        db.rollback()
+
+async def _check_inventory_availability(
+    client: ShopifyClient,
+    fulfillment_order: Dict,
+    target_location_id: str,
+    order_name: str
+) -> Dict[str, Any]:
+    """Check if all products in fulfillment order are available at target location"""
+    try:
+        logger.info(f"Checking inventory availability for order {order_name} at location {target_location_id}")
+        
+        line_items = fulfillment_order.get("lineItems", {}).get("edges", [])
+        available_items = []
+        unavailable_items = []
+        
+        # Debug: log the fulfillment order structure to understand the issue
+        logger.debug(f"Fulfillment order structure for {order_name}: {fulfillment_order}")
+        logger.info(f"Found {len(line_items)} line items in fulfillment order for {order_name}")
+        
+        # If no line items found, this is suspicious - fail the check
+        if len(line_items) == 0:
+            logger.error(f"No line items found in fulfillment order for {order_name} - this should not happen!")
+            return {
+                "all_available": False,
+                "available_items": [],
+                "unavailable_items": [],
+                "total_items": 0,
+                "error": "No line items found in fulfillment order"
+            }
+        
+        for item_edge in line_items:
+            item = item_edge["node"]
+            variant = item.get("variant", {})
+            product = variant.get("product", {})
+            
+            product_title = product.get("title", "Unknown Product")
+            variant_id = variant.get("id", "")
+            sku = variant.get("sku", "")
+            required_quantity = item.get("totalQuantity", 1)
+            
+            logger.info(f"Checking inventory for: {product_title} (SKU: {sku}), variant: {variant_id}, required: {required_quantity}")
+            
+            try:
+                # Check inventory level at target location for this variant
+                inventory_available = await client.check_inventory_at_location(
+                    variant_id, target_location_id
+                )
+                
+                item_info = {
+                    "product_title": product_title,
+                    "variant_id": variant_id,
+                    "sku": sku,
+                    "required_quantity": required_quantity,
+                    "available_quantity": inventory_available
+                }
+                
+                if inventory_available >= required_quantity:
+                    available_items.append(item_info)
+                    logger.info(f"✓ {product_title} (SKU: {sku}): {inventory_available} >= {required_quantity}")
+                else:
+                    unavailable_items.append(item_info)
+                    logger.warning(f"✗ {product_title} (SKU: {sku}): {inventory_available} < {required_quantity}")
+                    
+            except Exception as item_error:
+                logger.error(f"Failed to check inventory for {product_title} (SKU: {sku}): {str(item_error)}")
+                # Assume unavailable if we can't check
+                unavailable_items.append({
+                    "product_title": product_title,
+                    "variant_id": variant_id,
+                    "sku": sku,
+                    "required_quantity": required_quantity,
+                    "available_quantity": 0,
+                    "error": str(item_error)
+                })
+        
+        all_available = len(unavailable_items) == 0 and len(line_items) > 0
+        
+        logger.info(f"Inventory check for order {order_name}: {len(available_items)} available, {len(unavailable_items)} unavailable, all_available: {all_available}")
+        
+        return {
+            "all_available": all_available,
+            "available_items": available_items,
+            "unavailable_items": unavailable_items,
+            "total_items": len(line_items)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to check inventory availability for order {order_name}: {str(e)}")
+        # Assume all unavailable if we can't check
+        return {
+            "all_available": False,
+            "available_items": [],
+            "unavailable_items": [],
+            "total_items": 0,
+            "error": str(e)
+        }
 
 def resolve_location_alias(alias_name: str, store_id: int, db: Session) -> str | None:
     """Resolve a location alias to the actual Shopify location ID for a specific store"""
@@ -360,11 +648,117 @@ async def _apply_rule_actions(
                         
                         if fo["status"].upper() in ["OPEN", "SCHEDULED"]:
                             logger.info(f"Moving fulfillment order {fo['id']} to location {location_id}")
+                            
+                            # Pre-check: Verify ALL products are available at target location (all-or-nothing policy)
+                            inventory_check = await _check_inventory_availability(
+                                client, fo, location_id, order.get("name", "Unknown")
+                            )
+                            
+                            if not inventory_check["all_available"]:
+                                # Some products not available - skip the move entirely
+                                logger.warning(f"All-or-nothing policy: Skipping fulfillment move for {fo['id']} - {len(inventory_check['unavailable_items'])} products not available at target location")
+                                
+                                # Log as complete failure due to all-or-nothing policy
+                                _log_order_action(
+                                    db, store.user_id, store.id, order["id"], 
+                                    order.get("name", "Unknown"), "fulfillment_move_failed", 
+                                    "failed", 
+                                    {
+                                        "rule_name": rule.name,
+                                        "target_location_id": location_id,
+                                        "fulfillment_order_id": fo["id"],
+                                        "location_alias": location_alias or "direct_id",
+                                        "policy": "all_or_nothing",
+                                        "pre_check_failed": True,
+                                        "available_items": inventory_check["available_items"],
+                                        "unavailable_items": inventory_check["unavailable_items"]
+                                    },
+                                    error_message=f"All-or-nothing policy: {len(inventory_check['unavailable_items'])} products not available at target location, skipped fulfillment move"
+                                )
+                                
+                                # Add "OOS" tag and record incidents for ONLY unavailable products (not all products)
+                                try:
+                                    await client.add_tags_to_order(order["id"], ["OOS"])
+                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy pre-check failure")
+                                    
+                                    # Record OOS incidents for ONLY the products that were actually unavailable
+                                    _record_oos_incident_for_unavailable_items(
+                                        db=db,
+                                        user_id=store.user_id,
+                                        store_id=store.id,
+                                        order=order,
+                                        rule_name=rule.name,
+                                        attempted_location_id=location_id,
+                                        attempted_location_alias=location_alias,
+                                        unavailable_items=inventory_check["unavailable_items"]
+                                    )
+                                    
+                                except Exception as tag_error:
+                                    logger.error(f"Failed to add OOS tag for all-or-nothing pre-check failure: {str(tag_error)}")
+                                
+                                success = False
+                                continue  # Skip to next fulfillment order
+                            
+                            # All products available - proceed with fulfillment move
+                            logger.info(f"All-or-nothing pre-check passed: All {len(inventory_check['available_items'])} products available at target location")
                             result = await client.move_fulfillment_order(
                                 fo["id"], location_id
                             )
-                            if not result:
-                                logger.error(f"Failed to move fulfillment order {fo['id']}")
+                            
+                            if result.get("partial_success"):
+                                # Partial success detected - this violates all-or-nothing policy
+                                moved_items = result.get("moved_items", [])
+                                failed_items = result.get("failed_items", [])
+                                
+                                logger.warning(f"All-or-nothing policy violation for {fo['id']}: {len(moved_items)} items moved, {len(failed_items)} items failed")
+                                logger.error(f"This should not happen with proper pre-checks! Some items were moved but others failed.")
+                                
+                                # Log as complete failure due to all-or-nothing policy violation
+                                _log_order_action(
+                                    db, store.user_id, store.id, order["id"], 
+                                    order.get("name", "Unknown"), "fulfillment_move_failed", 
+                                    "failed", 
+                                    {
+                                        "rule_name": rule.name,
+                                        "target_location_id": location_id,
+                                        "fulfillment_order_id": fo["id"],
+                                        "location_alias": location_alias or "direct_id",
+                                        "policy": "all_or_nothing",
+                                        "policy_violation": True,
+                                        "moved_items_count": len(moved_items),
+                                        "failed_items_count": len(failed_items),
+                                        "moved_items": moved_items,
+                                        "failed_items": failed_items
+                                    },
+                                    error_message=f"All-or-nothing policy violation: {len(failed_items)} products failed after {len(moved_items)} were already moved. Manual intervention may be required."
+                                )
+                                
+                                # Add "OOS" tag and record incidents for ONLY the failed products (not moved ones)
+                                try:
+                                    await client.add_tags_to_order(order["id"], ["OOS"])
+                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy violation")
+                                    
+                                    # Record OOS incidents for ONLY the products that actually failed to move
+                                    _record_oos_incident_for_failed_items(
+                                        db=db,
+                                        user_id=store.user_id,
+                                        store_id=store.id,
+                                        order=order,
+                                        rule_name=rule.name,
+                                        attempted_location_id=location_id,
+                                        attempted_location_alias=location_alias,
+                                        failed_items=failed_items
+                                    )
+                                    
+                                except Exception as tag_error:
+                                    logger.error(f"Failed to add OOS tag for all-or-nothing failure: {str(tag_error)}")
+                                
+                                # Consider this as complete failure
+                                success = False
+                                    
+                            elif not result["success"]:
+                                # Complete failure
+                                logger.error(f"Failed to move fulfillment order {fo['id']}: {result.get('errors', [])}")
                                 success = False
                                 
                                 # Log fulfillment error details for reporting
@@ -376,7 +770,8 @@ async def _apply_rule_actions(
                                         "rule_name": rule.name,
                                         "target_location_id": location_id,
                                         "fulfillment_order_id": fo["id"],
-                                        "location_alias": location_alias or "direct_id"
+                                        "location_alias": location_alias or "direct_id",
+                                        "errors": result.get("errors", [])
                                     },
                                     error_message="Failed to move fulfillment order - likely out of stock at target location"
                                 )
@@ -385,11 +780,26 @@ async def _apply_rule_actions(
                                 try:
                                     await client.add_tags_to_order(order["id"], ["OOS"])
                                     logger.info(f"Added OOS tag to order {order.get('name', order['id'])}")
+                                    
+                                    # Record OOS incident for all products since the entire fulfillment failed
+                                    # (we don't have specific info about which products caused the failure)
+                                    _record_oos_incident(
+                                        db=db,
+                                        user_id=store.user_id,
+                                        store_id=store.id,
+                                        order=order,
+                                        rule_name=rule.name,
+                                        attempted_location_id=location_id,
+                                        attempted_location_alias=location_alias
+                                    )
+                                    
                                 except Exception as tag_error:
                                     logger.error(f"Failed to add OOS tag: {str(tag_error)}")
                                     
                             else:
-                                logger.info(f"Successfully moved fulfillment order {fo['id']}")
+                                # Complete success
+                                moved_items = result.get("moved_items", [])
+                                logger.info(f"Successfully moved fulfillment order {fo['id']} - {len(moved_items)} items moved")
                                 
                                 # Log successful fulfillment move
                                 _log_order_action(
@@ -400,7 +810,9 @@ async def _apply_rule_actions(
                                         "rule_name": rule.name,
                                         "target_location_id": location_id,
                                         "fulfillment_order_id": fo["id"],
-                                        "location_alias": location_alias or "direct_id"
+                                        "location_alias": location_alias or "direct_id",
+                                        "moved_items_count": len(moved_items),
+                                        "moved_items": moved_items
                                     }
                                 )
                         else:

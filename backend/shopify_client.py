@@ -129,7 +129,7 @@ class ShopifyClient:
                                 }
                             }
                         }
-                        lineItems(first: 100) {
+                        lineItems(first: 20) {
                             edges {
                                 node {
                                     id
@@ -156,7 +156,7 @@ class ShopifyClient:
                                 }
                             }
                         }
-                        fulfillmentOrders(first: 10) {
+                        fulfillmentOrders(first: 5) {
                             edges {
                                 node {
                                     id
@@ -165,6 +165,23 @@ class ShopifyClient:
                                         location {
                                             id
                                             name
+                                        }
+                                    }
+                                    lineItems(first: 20) {
+                                        edges {
+                                            node {
+                                                id
+                                                totalQuantity
+                                                remainingQuantity
+                                                variant {
+                                                    id
+                                                    sku
+                                                    product {
+                                                        id
+                                                        title
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -259,7 +276,7 @@ class ShopifyClient:
         fulfillment_order_id: str, 
         new_location_id: str,
         line_items: Optional[List[Dict]] = None
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """Move fulfillment order to new location"""
         mutation = """
         mutation fulfillmentOrderMove($id: ID!, $newLocationId: ID!, $fulfillmentOrderLineItems: [FulfillmentOrderLineItemInput!]) {
@@ -274,6 +291,43 @@ class ShopifyClient:
                         location {
                             id
                             name
+                        }
+                    }
+                    lineItems(first: 50) {
+                        edges {
+                            node {
+                                id
+                                totalQuantity
+                                remainingQuantity
+                                variant {
+                                    id
+                                    sku
+                                    product {
+                                        id
+                                        title
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                remainingFulfillmentOrder {
+                    id
+                    lineItems(first: 50) {
+                        edges {
+                            node {
+                                id
+                                totalQuantity
+                                remainingQuantity
+                                variant {
+                                    id
+                                    sku
+                                    product {
+                                        id
+                                        title
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -295,13 +349,74 @@ class ShopifyClient:
         
         try:
             result = await self._make_graphql_request(mutation, variables)
-            if result["data"]["fulfillmentOrderMove"]["userErrors"]:
-                logger.error(f"Error moving fulfillment order: {result['data']['fulfillmentOrderMove']['userErrors']}")
-                return False
-            return True
+            
+            move_result = result["data"]["fulfillmentOrderMove"]
+            
+            if move_result["userErrors"]:
+                logger.error(f"Error moving fulfillment order: {move_result['userErrors']}")
+                return {
+                    "success": False,
+                    "errors": move_result["userErrors"],
+                    "moved_items": [],
+                    "failed_items": []
+                }
+            
+            # Analyze what was moved vs what remained
+            moved_items = []
+            failed_items = []
+            
+            # Items that were successfully moved
+            if move_result["movedFulfillmentOrder"]:
+                moved_fo = move_result["movedFulfillmentOrder"]
+                for item_edge in moved_fo.get("lineItems", {}).get("edges", []):
+                    item = item_edge["node"]
+                    moved_items.append({
+                        "line_item_id": item["id"],
+                        "product_id": item["variant"]["product"]["id"],
+                        "variant_id": item["variant"]["id"], 
+                        "product_title": item["variant"]["product"]["title"],
+                        "sku": item["variant"]["sku"],
+                        "moved_quantity": item["totalQuantity"],
+                        "remaining_quantity": item["remainingQuantity"]
+                    })
+            
+            # Items that couldn't be moved (remaining in original location)
+            if move_result["remainingFulfillmentOrder"]:
+                remaining_fo = move_result["remainingFulfillmentOrder"]
+                for item_edge in remaining_fo.get("lineItems", {}).get("edges", []):
+                    item = item_edge["node"]
+                    failed_items.append({
+                        "line_item_id": item["id"],
+                        "product_id": item["variant"]["product"]["id"],
+                        "variant_id": item["variant"]["id"],
+                        "product_title": item["variant"]["product"]["title"], 
+                        "sku": item["variant"]["sku"],
+                        "failed_quantity": item["remainingQuantity"]
+                    })
+            
+            # Determine overall success
+            has_failures = len(failed_items) > 0
+            has_successes = len(moved_items) > 0
+            
+            if has_failures:
+                logger.warning(f"Partial fulfillment move - {len(moved_items)} items moved, {len(failed_items)} items failed")
+            
+            return {
+                "success": not has_failures,  # Only true if everything moved
+                "partial_success": has_successes and has_failures,
+                "moved_items": moved_items,
+                "failed_items": failed_items,
+                "errors": []
+            }
+            
         except Exception as e:
             logger.error(f"Failed to move fulfillment order {fulfillment_order_id}: {str(e)}")
-            return False
+            return {
+                "success": False,
+                "errors": [{"message": str(e)}],
+                "moved_items": [],
+                "failed_items": []
+            }
     
     async def get_locations(self) -> List[Dict]:
         """Get available fulfillment locations"""
@@ -407,7 +522,7 @@ class ShopifyClient:
                         }
                     }
                 }
-                fulfillmentOrders(first: 10) {
+                fulfillmentOrders(first: 5) {
                     edges {
                         node {
                             id
@@ -416,6 +531,23 @@ class ShopifyClient:
                                 location {
                                     id
                                     name
+                                }
+                            }
+                            lineItems(first: 20) {
+                                edges {
+                                    node {
+                                        id
+                                        totalQuantity
+                                        remainingQuantity
+                                        variant {
+                                            id
+                                            sku
+                                            product {
+                                                id
+                                                title
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -440,3 +572,61 @@ class ShopifyClient:
         except Exception as e:
             logger.error(f"Failed to fetch order {order_id}: {str(e)}")
             return None
+    
+    async def check_inventory_at_location(self, variant_id: str, location_id: str) -> int:
+        """Check available inventory for a variant at a specific location"""
+        query = """
+        query($variantId: ID!, $locationId: ID!) {
+            productVariant(id: $variantId) {
+                id
+                inventoryItem {
+                    id
+                    inventoryLevel(locationId: $locationId) {
+                        id
+                        location {
+                            id
+                        }
+                        quantities(names: ["available"]) {
+                            name
+                            quantity
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {
+            "variantId": variant_id,
+            "locationId": location_id
+        }
+        
+        try:
+            result = await self._make_graphql_request(query, variables)
+            
+            product_variant = result["data"]["productVariant"]
+            if not product_variant or not product_variant.get("inventoryItem"):
+                logger.warning(f"No inventory item found for variant {variant_id}")
+                return 0
+            
+            inventory_level = product_variant["inventoryItem"]["inventoryLevel"]
+            
+            if not inventory_level:
+                logger.warning(f"No inventory level found for variant {variant_id} at location {location_id}")
+                return 0
+            
+            # Look for the "available" quantity
+            quantities = inventory_level.get("quantities", [])
+            for quantity_obj in quantities:
+                if quantity_obj.get("name") == "available":
+                    available = quantity_obj.get("quantity", 0)
+                    logger.debug(f"Inventory for variant {variant_id} at location {location_id}: {available}")
+                    return available or 0
+            
+            # If no "available" quantity found, assume 0
+            logger.warning(f"No 'available' quantity found for variant {variant_id} at location {location_id}")
+            return 0
+            
+        except Exception as e:
+            logger.error(f"Failed to check inventory for variant {variant_id} at location {location_id}: {str(e)}")
+            return 0

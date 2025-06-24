@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 from database import engine, get_db, create_tables
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
 from schemas import (
     UserCreate, UserLogin, TokenResponse, ShopifyStoreCreate, RuleCreate, SettingsUpdate, SettingsResponse, OrderLogQuery,
@@ -1416,10 +1416,10 @@ async def get_oos_orders_report(
 ):
     """Get orders tagged with OOS (Out of Stock) during the specified period"""
     try:
-        # Get orders that failed fulfillment moves and should have OOS tags
+        # Get orders that failed fulfillment moves (complete or partial) and should have OOS tags
         query = db.query(OrderLog).filter(
             OrderLog.user_id == current_user.id,
-            OrderLog.action == "fulfillment_move_failed"
+            OrderLog.action.in_(["fulfillment_move_failed", "fulfillment_partial_move"])
         )
         
         # Apply date filters
@@ -1473,6 +1473,223 @@ async def get_oos_orders_report(
     except Exception as e:
         logger.error(f"Error generating OOS orders report: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to generate OOS report")
+
+@app.get("/reports/oos-products")
+async def get_oos_products_report(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get product-grouped out-of-stock incidents report"""
+    try:
+        from sqlalchemy import func, desc
+        
+        # Build base query for OOS incidents
+        query = db.query(OutOfStockIncident).filter(
+            OutOfStockIncident.user_id == current_user.id
+        )
+        
+        # Apply date filters
+        if start_date:
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            query = query.filter(OutOfStockIncident.incident_date >= start_dt)
+        
+        if end_date:
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            query = query.filter(OutOfStockIncident.incident_date <= end_dt)
+        
+        # Get aggregated product data
+        product_aggregates = db.query(
+            OutOfStockIncident.product_id,
+            OutOfStockIncident.variant_id,
+            OutOfStockIncident.product_title,
+            OutOfStockIncident.variant_title,
+            OutOfStockIncident.sku,
+            OutOfStockIncident.vendor,
+            OutOfStockIncident.product_type,
+            func.count(OutOfStockIncident.id).label('total_incidents'),
+            func.sum(OutOfStockIncident.quantity_attempted).label('total_quantity_affected'),
+            func.count(func.distinct(OutOfStockIncident.order_id)).label('affected_orders'),
+            func.min(OutOfStockIncident.incident_date).label('first_incident'),
+            func.max(OutOfStockIncident.incident_date).label('last_incident')
+        ).filter(
+            OutOfStockIncident.user_id == current_user.id
+        )
+        
+        # Apply same date filters to aggregation
+        if start_date:
+            product_aggregates = product_aggregates.filter(OutOfStockIncident.incident_date >= start_dt)
+        if end_date:
+            product_aggregates = product_aggregates.filter(OutOfStockIncident.incident_date <= end_dt)
+        
+        # Group by product and variant
+        product_aggregates = product_aggregates.group_by(
+            OutOfStockIncident.product_id,
+            OutOfStockIncident.variant_id,
+            OutOfStockIncident.product_title,
+            OutOfStockIncident.variant_title,
+            OutOfStockIncident.sku,
+            OutOfStockIncident.vendor,
+            OutOfStockIncident.product_type
+        ).order_by(desc('total_incidents')).all()
+        
+        # Get total counts
+        total_incidents = query.count()
+        unique_products = len(product_aggregates)
+        
+        # Format product data
+        products = []
+        for product in product_aggregates:
+            # Get affected locations for this product
+            locations_query = db.query(
+                func.distinct(OutOfStockIncident.attempted_location_alias)
+            ).filter(
+                OutOfStockIncident.user_id == current_user.id,
+                OutOfStockIncident.product_id == product.product_id,
+                OutOfStockIncident.variant_id == product.variant_id
+            )
+            
+            if start_date:
+                locations_query = locations_query.filter(OutOfStockIncident.incident_date >= start_dt)
+            if end_date:
+                locations_query = locations_query.filter(OutOfStockIncident.incident_date <= end_dt)
+                
+            locations_affected = [loc[0] for loc in locations_query.all() if loc[0]]
+            
+            # Calculate incident frequency (incidents per day)
+            if product.first_incident and product.last_incident:
+                days_span = max(1, (product.last_incident - product.first_incident).days + 1)
+                incident_frequency = round(product.total_incidents / days_span, 2)
+            else:
+                incident_frequency = 0
+            
+            products.append({
+                "product_id": product.product_id,
+                "variant_id": product.variant_id,
+                "product_title": product.product_title,
+                "variant_title": product.variant_title or "",
+                "sku": product.sku or "",
+                "vendor": product.vendor or "",
+                "product_type": product.product_type or "",
+                "total_incidents": product.total_incidents,
+                "total_quantity_affected": product.total_quantity_affected,
+                "affected_orders": product.affected_orders,
+                "locations_affected": locations_affected,
+                "first_incident": product.first_incident.isoformat() if product.first_incident else None,
+                "last_incident": product.last_incident.isoformat() if product.last_incident else None,
+                "incident_frequency": incident_frequency
+            })
+        
+        return {
+            "total_oos_incidents": total_incidents,
+            "unique_products": unique_products,
+            "date_range": {
+                "start_date": start_date,
+                "end_date": end_date
+            },
+            "products": products
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating OOS products report: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate OOS products report")
+
+@app.post("/reports/oos-products/analyze")
+async def analyze_selected_oos_orders(
+    request: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Analyze selected OOS orders to generate detailed product breakdown"""
+    try:
+        from sqlalchemy import func, desc
+        
+        order_ids = request.get("order_ids", [])
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="No orders selected")
+        
+        # Get OOS incidents for selected orders (by order number, not order ID)
+        incidents = db.query(OutOfStockIncident).filter(
+            OutOfStockIncident.user_id == current_user.id,
+            OutOfStockIncident.order_number.in_(order_ids)
+        ).all()
+        
+        if not incidents:
+            return {
+                "message": "No OOS incidents found for selected orders",
+                "total_oos_incidents": 0,
+                "unique_products": 0,
+                "products": []
+            }
+        
+        # Aggregate by product/variant
+        product_data = {}
+        for incident in incidents:
+            key = f"{incident.product_id}|{incident.variant_id}"
+            
+            if key not in product_data:
+                product_data[key] = {
+                    "product_id": incident.product_id,
+                    "variant_id": incident.variant_id,
+                    "product_title": incident.product_title,
+                    "variant_title": incident.variant_title or "",
+                    "sku": incident.sku or "",
+                    "vendor": incident.vendor or "",
+                    "product_type": incident.product_type or "",
+                    "total_incidents": 0,
+                    "total_quantity_affected": 0,
+                    "affected_orders": set(),
+                    "locations_affected": set(),
+                    "incidents": []
+                }
+            
+            product_data[key]["total_incidents"] += 1
+            product_data[key]["total_quantity_affected"] += incident.quantity_attempted
+            product_data[key]["affected_orders"].add(incident.order_number)
+            if incident.attempted_location_alias:
+                product_data[key]["locations_affected"].add(incident.attempted_location_alias)
+            
+            product_data[key]["incidents"].append({
+                "order_number": incident.order_number,
+                "incident_date": incident.incident_date.isoformat(),
+                "quantity_attempted": incident.quantity_attempted,
+                "attempted_location_alias": incident.attempted_location_alias,
+                "rule_name": incident.rule_name
+            })
+        
+        # Convert to final format
+        products = []
+        for data in product_data.values():
+            products.append({
+                "product_id": data["product_id"],
+                "variant_id": data["variant_id"],
+                "product_title": data["product_title"],
+                "variant_title": data["variant_title"],
+                "sku": data["sku"],
+                "vendor": data["vendor"],
+                "product_type": data["product_type"],
+                "total_incidents": data["total_incidents"],
+                "total_quantity_affected": data["total_quantity_affected"],
+                "affected_orders": len(data["affected_orders"]),
+                "affected_order_numbers": list(data["affected_orders"]),
+                "locations_affected": list(data["locations_affected"]),
+                "incidents": data["incidents"]
+            })
+        
+        # Sort by total incidents descending
+        products.sort(key=lambda x: x["total_incidents"], reverse=True)
+        
+        return {
+            "total_oos_incidents": len(incidents),
+            "unique_products": len(products),
+            "selected_orders": len(order_ids),
+            "products": products
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing selected OOS orders: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to analyze selected orders")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
