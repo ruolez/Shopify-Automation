@@ -86,6 +86,9 @@ class RuleEngine:
             if field in ["shipping_province", "shipping_country", "billing_province", "billing_country"]:
                 if isinstance(expected_value, str):
                     expected_value = expected_value.upper()
+                elif isinstance(expected_value, list):
+                    # Convert all list items to uppercase for case-insensitive comparison
+                    expected_value = [str(item).upper() for item in expected_value]
             
             # Apply the operator
             if operator not in self.operators:
