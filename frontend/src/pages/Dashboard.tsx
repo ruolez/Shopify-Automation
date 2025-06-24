@@ -4,9 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   BuildingStorefrontIcon,
   CogIcon,
-  ClockIcon,
-  CheckCircleIcon,
-  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import api from '../utils/api';
 import { DashboardStats } from '../types';
@@ -46,16 +43,6 @@ const Dashboard: React.FC = () => {
     },
   ];
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'success':
-        return <CheckCircleIcon className="h-5 w-5 text-green-500" />;
-      case 'failed':
-        return <ExclamationTriangleIcon className="h-5 w-5 text-red-500" />;
-      default:
-        return <ClockIcon className="h-5 w-5 text-yellow-500" />;
-    }
-  };
 
   return (
     <div className="space-y-8">
@@ -89,62 +76,12 @@ const Dashboard: React.FC = () => {
         ))}
       </div>
 
-      {/* Recent Activity */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="card"
-      >
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-gray-900">Recent Activity</h2>
-        </div>
-
-        {stats?.recent_activity && stats.recent_activity.length > 0 ? (
-          <div className="space-y-4">
-            {stats.recent_activity.map((activity) => (
-              <div
-                key={activity.id}
-                className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
-              >
-                <div className="flex items-center space-x-3">
-                  {getStatusIcon(activity.status)}
-                  <div>
-                    <p className="font-medium text-gray-900">
-                      Order {activity.order_number}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      {activity.action.replace(/_/g, ' ')}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-gray-500">
-                    {new Date(activity.created_at).toLocaleDateString()}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    {new Date(activity.created_at).toLocaleTimeString()}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8">
-            <ClockIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-500">No recent activity</p>
-            <p className="text-sm text-gray-400 mt-1">
-              Activity will appear here once you set up stores and rules
-            </p>
-          </div>
-        )}
-      </motion.div>
 
       {/* Quick Actions */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
+        transition={{ delay: 0.2 }}
         className="card"
       >
         <h2 className="text-xl font-semibold text-gray-900 mb-6">Quick Actions</h2>
