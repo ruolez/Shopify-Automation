@@ -72,9 +72,14 @@ cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-# Run backend tests
+# Run backend tests (uses Pytest framework)
 cd backend
-pytest
+pytest                    # Run all tests
+pytest -m "not slow"      # Skip slow integration tests
+pytest -m unit           # Run only unit tests
+pytest -m integration    # Run only integration tests
+pytest -v                # Verbose output
+pytest --cov=.           # Generate coverage report
 
 # Access database via container
 docker exec shopify_api python -c "from database import engine; print('DB accessible')"
@@ -91,9 +96,11 @@ npm run dev
 # Build for production
 npm run build
 
-# Run tests
-npm test
-npm run test:coverage
+# Run tests (uses Vitest framework)
+npm test                # Run all tests
+npm run test:ui         # Interactive test UI
+npm run test:coverage   # Generate coverage report
+npm run test:watch      # Watch mode for development
 
 # Lint code
 npm run lint
@@ -174,13 +181,27 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
 
-### Data Reset Feature (Added 2025-06-24)
+### Recent Feature Additions (2025-06-24)
+
+#### Enhanced Order Logs Page
+- **Grouped View**: Orders now grouped by order number with expand/collapse functionality
+- **Sorting**: All columns (Order, Store, Actions, Status, Latest Activity) are sortable
+- **Space Efficiency**: One line per order by default, expandable to show all log entries
+- **Status Indicators**: Visual badges showing Mixed, Failed, Success, Info status for each order
+- **Action Count**: Badge showing number of events per order
+
+#### Data Reset Feature
 **Purpose**: Allows users to purge operational data while preserving configuration.
 - **Location**: Settings page → Data Management section
 - **Safety Features**: Two-factor confirmation with "RESET" typing requirement
 - **Selective Reset**: Checkboxes for order logs, processed orders, OOS incidents, task status
 - **Preserves**: User accounts, store connections, rules, settings, location aliases
 - **Endpoint**: `POST /settings/reset-data` with confirmation validation
+
+#### Dashboard Simplification
+- **Removed Redundancy**: Eliminated "Recent Activity" section that duplicated Order Logs functionality
+- **Focused Design**: Dashboard now focuses on essential metrics (stores, rules) and quick actions
+- **Improved UX**: Users directed to enhanced Order Logs page for detailed order processing information
 
 ## Critical Bug Fixes & Known Issues
 
@@ -190,6 +211,16 @@ This system handles complex real-time order processing with proper error handlin
 - **Fix**: Changed from `.order_by(ProcessingRule.priority.desc())` to `.order_by(ProcessingRule.priority.asc())`
 - **Location**: `backend/tasks.py:430` and `backend/main.py:235`
 - **Behavior**: Rules now execute 0→1→2→3 (lower priority numbers first)
+
+### Rule Execution Timing and Synchronization (Fixed 2025-06-24)
+**Issue**: Rules weren't seeing state changes from previous rules due to caching and timing issues.
+- **Problems Solved**:
+  - Order refresh now happens after ANY matching rule (not just successful ones)
+  - Added configurable `delay_ms` parameter to each rule (default 10ms, max 60000ms)
+  - Added critical 1000ms delay after OOS tag addition to ensure proper synchronization
+  - Fixed IN LIST operator case sensitivity for province/state fields
+- **UI Enhancement**: Rules page now shows delay_ms with purple badge
+- **Database**: Added `delay_ms` column to ProcessingRule model
 
 ### Weight Filter Bug (Fixed 2025-06-24)
 **Issue**: Shopify's `currentTotalWeight` field can return incorrect values that don't match the actual sum of line item weights.
@@ -268,15 +299,24 @@ className="inline-flex items-center justify-center px-4 py-2 border border-trans
 ```
 
 ## Docker Development Workflow
-**Critical for Frontend Changes**: Docker aggressively caches builds. When React/frontend changes don't appear:
+
+### Development vs Production
+- **Development**: Uses volume mounting for hot reload (Vite polling enabled for Docker compatibility)
+- **Production**: Frontend built into static files, served by Nginx with security headers and rate limiting
+
+### Critical Frontend Cache Issues
+**Problem**: Docker aggressively caches builds, preventing new React changes from appearing in the browser.
+**Solution**: ALWAYS purge Docker cache when frontend changes don't appear:
 ```bash
 # REQUIRED process - simple restart is NOT enough
 docker-compose down
 docker system prune -f  # Purges build cache
 docker-compose up -d
 ```
+**When to use**: Every time frontend changes aren't visible after container restart.
+**Note**: Simple `docker-compose restart frontend` is NOT sufficient - cache persists.
 
-**Service Restart Commands**:
+### Service Management
 ```bash
 # Restart individual services (preserves cache)
 docker-compose restart api worker scheduler
@@ -284,7 +324,52 @@ docker-compose restart api worker scheduler
 # View logs for debugging
 docker-compose logs -f worker  # Background processing
 docker-compose logs -f api     # API requests and rule evaluation
+
+# Production deployment with build
+docker-compose up -d --build
 ```
+
+## Testing Framework Details
+
+### Backend Testing (Pytest)
+The project uses a comprehensive Pytest setup with:
+- **Test Markers**: `unit`, `integration`, `slow` for selective test execution
+- **Isolated Test Database**: In-memory SQLite for each test session
+- **Fixtures**: Pre-configured authentication, stores, and rules for testing
+- **Coverage**: Built-in coverage reporting with pytest-cov
+
+**Test Structure**:
+- Unit tests: Fast, isolated component testing
+- Integration tests: End-to-end API and database testing
+- Slow tests: External API calls and complex workflows
+
+### Frontend Testing (Vitest)
+Modern testing setup with:
+- **Browser API Mocking**: IntersectionObserver, ResizeObserver, localStorage automatically mocked
+- **JSX/DOM Testing**: Complete React component testing environment
+- **Coverage**: V8-based coverage reporting
+- **Interactive UI**: `npm run test:ui` for visual test debugging
+
+## Production Infrastructure
+
+### Nginx Configuration
+Production setup includes:
+- **Rate Limiting**: 100 req/min for API, 20 req/min for auth endpoints
+- **Security Headers**: HSTS, XSS protection, frame options, content type sniffing protection
+- **SSL Ready**: Configuration prepared for SSL certificate integration
+- **Reverse Proxy**: Load balancing between frontend and API services
+
+### Environment Variables
+Comprehensive configuration via `.env.example`:
+- Database settings and JWT configuration
+- Redis connection parameters
+- Shopify API settings and debug flags
+- Docker service ports and volumes
+
+### Data Persistence
+- **SQLite Database**: Persistent volume for production data
+- **Redis**: Persistent volume for task queue state
+- **Logs**: Mounted directory for centralized logging
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
