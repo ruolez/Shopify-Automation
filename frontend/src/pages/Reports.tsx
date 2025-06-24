@@ -166,12 +166,23 @@ const Reports: React.FC = () => {
   });
 
   const handleRefresh = () => {
+    toast.loading('Generating report...', { id: 'report-loading' });
+    
     if (activeTab === 'fulfillment-errors') {
-      refetchFulfillment();
+      refetchFulfillment().finally(() => {
+        toast.dismiss('report-loading');
+        toast.success('Fulfillment errors report updated');
+      });
     } else if (activeTab === 'oos-orders') {
-      refetchOOS();
+      refetchOOS().finally(() => {
+        toast.dismiss('report-loading');
+        toast.success('OOS orders report updated');
+      });
     } else {
-      refetchProducts();
+      refetchProducts().finally(() => {
+        toast.dismiss('report-loading');
+        toast.success('Product analysis report updated');
+      });
     }
   };
 
@@ -283,7 +294,7 @@ const Reports: React.FC = () => {
           <div className="flex items-end">
             <button
               onClick={handleRefresh}
-              className="btn-primary w-full"
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 w-full"
             >
               Generate Report
             </button>
@@ -363,7 +374,7 @@ const Reports: React.FC = () => {
                   <div className="flex items-end">
                     <button
                       onClick={() => exportToCSV(fulfillmentReport.detailed_logs, 'fulfillment-errors.csv')}
-                      className="btn-secondary w-full flex items-center justify-center"
+                      className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 w-full"
                     >
                       <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
                       Export CSV
@@ -497,7 +508,7 @@ const Reports: React.FC = () => {
                   <div className="flex items-end">
                     <button
                       onClick={() => exportToCSV(oosReport.orders, 'oos-orders.csv')}
-                      className="btn-secondary w-full flex items-center justify-center"
+                      className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 w-full"
                     >
                       <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
                       Export CSV
@@ -638,6 +649,7 @@ const Reports: React.FC = () => {
             ) : (selectedAnalysisData || productReport) ? (
               (() => {
                 const dataToUse = selectedAnalysisData || productReport;
+                if (!dataToUse) return null;
                 return (
               <div className="space-y-6">
                 {/* Analysis Type Indicator */}
@@ -680,7 +692,7 @@ const Reports: React.FC = () => {
                   <div className="flex items-end">
                     <button
                       onClick={() => exportToCSV(dataToUse.products, 'oos-products-analysis.csv')}
-                      className="btn-secondary w-full flex items-center justify-center"
+                      className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 w-full"
                     >
                       <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
                       Export Products CSV

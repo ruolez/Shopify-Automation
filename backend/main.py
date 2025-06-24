@@ -505,6 +505,146 @@ async def update_settings(
     db.refresh(settings)
     return settings
 
+@app.post("/settings/reset-data")
+async def reset_user_data(
+    reset_options: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reset user data while preserving configuration"""
+    # Validate confirmation
+    confirmation_text = reset_options.get("confirmation", "")
+    if confirmation_text != "RESET":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid confirmation. Please type 'RESET' to confirm."
+        )
+    
+    # Get options
+    reset_order_logs = reset_options.get("reset_order_logs", True)
+    reset_processed_orders = reset_options.get("reset_processed_orders", True)
+    reset_oos_incidents = reset_options.get("reset_oos_incidents", True)
+    reset_task_status = reset_options.get("reset_task_status", False)
+    
+    deleted_counts = {}
+    
+    try:
+        # Delete order logs
+        if reset_order_logs:
+            count = db.query(OrderLog).filter(OrderLog.user_id == current_user.id).count()
+            db.query(OrderLog).filter(OrderLog.user_id == current_user.id).delete()
+            deleted_counts["order_logs"] = count
+            logger.info(f"Deleted {count} order logs for user {current_user.id}")
+        
+        # Delete processed orders (allows reprocessing)
+        if reset_processed_orders:
+            # Get user's store IDs
+            store_ids = db.query(ShopifyStore.id).filter(
+                ShopifyStore.user_id == current_user.id
+            ).all()
+            store_ids = [s[0] for s in store_ids]
+            
+            count = db.query(ProcessedOrder).filter(
+                ProcessedOrder.store_id.in_(store_ids)
+            ).count()
+            db.query(ProcessedOrder).filter(
+                ProcessedOrder.store_id.in_(store_ids)
+            ).delete(synchronize_session=False)
+            deleted_counts["processed_orders"] = count
+            logger.info(f"Deleted {count} processed orders for user {current_user.id}")
+        
+        # Delete OOS incidents
+        if reset_oos_incidents:
+            count = db.query(OutOfStockIncident).filter(
+                OutOfStockIncident.user_id == current_user.id
+            ).count()
+            db.query(OutOfStockIncident).filter(
+                OutOfStockIncident.user_id == current_user.id
+            ).delete()
+            deleted_counts["oos_incidents"] = count
+            logger.info(f"Deleted {count} OOS incidents for user {current_user.id}")
+        
+        # Delete old task status records (optional)
+        if reset_task_status:
+            # Only delete completed tasks older than 1 day
+            cutoff_date = datetime.utcnow() - timedelta(days=1)
+            count = db.query(TaskStatus).filter(
+                TaskStatus.completed_at < cutoff_date,
+                TaskStatus.status.in_(["success", "failed"])
+            ).count()
+            db.query(TaskStatus).filter(
+                TaskStatus.completed_at < cutoff_date,
+                TaskStatus.status.in_(["success", "failed"])
+            ).delete()
+            deleted_counts["task_status"] = count
+            logger.info(f"Deleted {count} old task status records")
+        
+        # Commit all deletions
+        db.commit()
+        
+        # Log the reset action
+        reset_log = OrderLog(
+            user_id=current_user.id,
+            store_id=0,  # System action, no specific store
+            order_id="SYSTEM_RESET",
+            order_number="SYSTEM",
+            action="data_reset",
+            status="success",
+            details={
+                "deleted_counts": deleted_counts,
+                "options": {
+                    "reset_order_logs": reset_order_logs,
+                    "reset_processed_orders": reset_processed_orders,
+                    "reset_oos_incidents": reset_oos_incidents,
+                    "reset_task_status": reset_task_status
+                }
+            }
+        )
+        db.add(reset_log)
+        db.commit()
+        
+        return {
+            "message": "Data reset completed successfully",
+            "deleted_counts": deleted_counts,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Data reset failed for user {current_user.id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset data: {str(e)}"
+        )
+
+@app.get("/settings/data-stats")
+async def get_data_statistics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get statistics about user's data for reset confirmation"""
+    # Get user's store IDs
+    store_ids = db.query(ShopifyStore.id).filter(
+        ShopifyStore.user_id == current_user.id
+    ).all()
+    store_ids = [s[0] for s in store_ids]
+    
+    stats = {
+        "order_logs": db.query(OrderLog).filter(OrderLog.user_id == current_user.id).count(),
+        "processed_orders": db.query(ProcessedOrder).filter(
+            ProcessedOrder.store_id.in_(store_ids)
+        ).count() if store_ids else 0,
+        "oos_incidents": db.query(OutOfStockIncident).filter(
+            OutOfStockIncident.user_id == current_user.id
+        ).count(),
+        "task_status": db.query(TaskStatus).filter(
+            TaskStatus.completed_at < datetime.utcnow() - timedelta(days=1),
+            TaskStatus.status.in_(["success", "failed"])
+        ).count()
+    }
+    
+    return stats
+
 # Order logs endpoints
 @app.get("/order-logs")
 async def get_order_logs(
