@@ -107,7 +107,7 @@ class ShopifyClient:
                                 currencyCode
                             }
                         }
-                        totalWeight
+                        currentTotalWeight
                         tags
                         customer {
                             id
@@ -342,3 +342,101 @@ class ShopifyClient:
         
         logger.info(f"Returning {len(locations)} active locations")
         return locations
+    
+    async def get_order_by_id(self, order_id: str) -> Dict | None:
+        """Get a specific order by ID for retry processing"""
+        query = """
+        query getOrderById($id: ID!) {
+            order(id: $id) {
+                id
+                name
+                createdAt
+                updatedAt
+                totalPriceSet {
+                    shopMoney {
+                        amount
+                        currencyCode
+                    }
+                }
+                currentTotalWeight
+                tags
+                customer {
+                    id
+                    firstName
+                    lastName
+                    email
+                }
+                shippingAddress {
+                    province
+                    country
+                    city
+                    zip
+                }
+                shippingLines(first: 10) {
+                    edges {
+                        node {
+                            title
+                            code
+                        }
+                    }
+                }
+                lineItems(first: 100) {
+                    edges {
+                        node {
+                            id
+                            title
+                            quantity
+                            product {
+                                id
+                                productType
+                                vendor
+                                tags
+                            }
+                            variant {
+                                id
+                                sku
+                                inventoryItem {
+                                    measurement {
+                                        weight {
+                                            value
+                                            unit
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                fulfillmentOrders(first: 10) {
+                    edges {
+                        node {
+                            id
+                            status
+                            assignedLocation {
+                                location {
+                                    id
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {"id": order_id}
+        
+        try:
+            result = await self._make_graphql_request(query, variables)
+            order = result.get("data", {}).get("order")
+            
+            if not order:
+                logger.warning(f"Order {order_id} not found in Shopify")
+                return None
+                
+            return order
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch order {order_id}: {str(e)}")
+            return None

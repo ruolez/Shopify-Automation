@@ -16,7 +16,7 @@ class TestRuleEngine:
                     "currencyCode": "USD"
                 }
             },
-            "totalWeightGrams": 1500,
+            "currentTotalWeight": 1500,
             "shippingAddress": {
                 "provinceCode": "CA",
                 "countryCode": "US"

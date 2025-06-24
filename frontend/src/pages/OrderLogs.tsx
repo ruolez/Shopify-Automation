@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import {
   CheckCircleIcon,
   XCircleIcon,
   InformationCircleIcon,
   ArrowPathIcon,
+  PlayIcon,
 } from '@heroicons/react/24/outline';
+import toast from 'react-hot-toast';
 import api from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 
@@ -38,11 +40,23 @@ const OrderLogs: React.FC = () => {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [storeFilter, setStoreFilter] = useState<string>('');
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [selectedRule, setSelectedRule] = useState<string>('');
+  
+  const queryClient = useQueryClient();
 
   const { data: stores } = useQuery({
     queryKey: ['stores'],
     queryFn: async () => {
       const response = await api.get('/stores');
+      return response.data;
+    },
+  });
+
+  const { data: rules } = useQuery({
+    queryKey: ['rules'],
+    queryFn: async () => {
+      const response = await api.get('/rules');
       return response.data;
     },
   });
@@ -60,6 +74,22 @@ const OrderLogs: React.FC = () => {
       
       const response = await api.get(`/order-logs?${params}`);
       return response.data;
+    },
+  });
+
+  const retryOrders = useMutation({
+    mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
+      const response = await api.post('/order-logs/retry', data);
+      return response.data;
+    },
+    onSuccess: (result) => {
+      toast.success(`Retry completed: ${result.processed_count} processed, ${result.failed_count} failed`);
+      queryClient.invalidateQueries({ queryKey: ['order-logs'] });
+      setSelectedOrders(new Set());
+      setSelectedRule('');
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to retry orders');
     },
   });
 
@@ -83,9 +113,45 @@ const OrderLogs: React.FC = () => {
         return 'No Rules Matched';
       case 'processing_error':
         return 'Processing Error';
+      case 'retry_processing':
+        return 'Retry Processing';
       default:
         return action;
     }
+  };
+
+  const handleSelectOrder = (orderId: string) => {
+    const newSelected = new Set(selectedOrders);
+    if (newSelected.has(orderId)) {
+      newSelected.delete(orderId);
+    } else {
+      newSelected.add(orderId);
+    }
+    setSelectedOrders(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedOrders.size === data?.logs.length) {
+      setSelectedOrders(new Set());
+    } else {
+      const allOrderIds = new Set(data?.logs.map(log => log.order_id) || []);
+      setSelectedOrders(allOrderIds);
+    }
+  };
+
+  const handleRetryWithAllRules = () => {
+    if (selectedOrders.size === 0) return;
+    retryOrders.mutate({
+      order_ids: Array.from(selectedOrders)
+    });
+  };
+
+  const handleRetryWithSpecificRule = () => {
+    if (selectedOrders.size === 0 || !selectedRule) return;
+    retryOrders.mutate({
+      order_ids: Array.from(selectedOrders),
+      rule_id: parseInt(selectedRule)
+    });
   };
 
   if (isLoading) {
@@ -178,6 +244,14 @@ const OrderLogs: React.FC = () => {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={selectedOrders.size === data?.logs.length && data?.logs.length > 0}
+                        onChange={handleSelectAll}
+                        className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Order
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -200,6 +274,14 @@ const OrderLogs: React.FC = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {data?.logs.map((log) => (
                     <tr key={log.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedOrders.has(log.order_id)}
+                          onChange={() => handleSelectOrder(log.order_id)}
+                          className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         {log.order_number}
                       </td>
@@ -235,6 +317,60 @@ const OrderLogs: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Retry Action Bar */}
+          {selectedOrders.size > 0 && (
+            <div className="mt-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <span className="text-sm font-medium text-gray-700">
+                    {selectedOrders.size} order{selectedOrders.size !== 1 ? 's' : ''} selected
+                  </span>
+                  
+                  <button
+                    onClick={handleRetryWithAllRules}
+                    disabled={retryOrders.isPending}
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
+                  >
+                    {retryOrders.isPending ? (
+                      <LoadingSpinner size="sm" className="mr-2" />
+                    ) : (
+                      <PlayIcon className="h-4 w-4 mr-2" />
+                    )}
+                    Retry with All Rules
+                  </button>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <select
+                    value={selectedRule}
+                    onChange={(e) => setSelectedRule(e.target.value)}
+                    className="block w-48 text-sm border-gray-300 rounded-md shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                  >
+                    <option value="">Select a specific rule...</option>
+                    {rules?.map((rule: any) => (
+                      <option key={rule.id} value={rule.id}>
+                        {rule.name}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <button
+                    onClick={handleRetryWithSpecificRule}
+                    disabled={retryOrders.isPending || !selectedRule}
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
+                  >
+                    {retryOrders.isPending ? (
+                      <LoadingSpinner size="sm" className="mr-2" />
+                    ) : (
+                      <PlayIcon className="h-4 w-4 mr-2" />
+                    )}
+                    Retry with Rule
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

@@ -171,3 +171,29 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 - User registration/login with bcrypt password hashing
 
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
+
+## Critical Bug Fixes & Known Issues
+
+### Weight Filter Bug (Fixed 2025-06-24)
+**Issue**: Shopify's `currentTotalWeight` field can return incorrect values that don't match the actual sum of line item weights.
+- **Example**: Order with 245g product showed `currentTotalWeight: 33` but calculated weight was 245g
+- **Root Cause**: Shopify API data inconsistency between `currentTotalWeight` and individual product weights
+- **Fix**: Rule engine now calculates weight from line items and falls back to `currentTotalWeight` only when values match
+- **Location**: `backend/rule_engine.py` lines 123-171
+- **Warning**: Large discrepancies (>1g) are logged and calculated weight is used instead
+
+```python
+# Weight calculation logic - uses line item weights when Shopify's currentTotalWeight is incorrect
+if abs(total_calculated_weight - weight_grams) > 1:
+    logger.warning(f"Large discrepancy between Shopify currentTotalWeight ({weight_grams}g) and calculated weight ({total_calculated_weight}g). Using calculated weight.")
+    return total_calculated_weight
+```
+
+**Debug Commands for Weight Issues**:
+```bash
+# Check detailed weight breakdown for specific order
+curl "http://localhost:8000/debug/order-data/1?order_name=TS1404" -H "Authorization: Bearer TOKEN"
+
+# Monitor weight calculations in logs
+docker-compose logs api worker --tail=50 | grep -A20 -B5 "order_weight\|Weight\|grams"
+```

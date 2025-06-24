@@ -121,7 +121,54 @@ class RuleEngine:
                 return float(total_price.get("amount", 0))
             
             elif field == "order_weight":
-                return float(order.get("totalWeight", 0))
+                # Shopify returns weight in grams via currentTotalWeight field
+                weight_grams = order.get("currentTotalWeight", 0)
+                if weight_grams is None or weight_grams == "":
+                    logger.info(f"Order {order.get('name', 'unknown')}: No weight data available")
+                    return 0
+                weight_grams = float(weight_grams)
+                
+                # Debug: Also check individual line item weights to verify calculation
+                line_items = order.get("lineItems", {}).get("edges", [])
+                total_calculated_weight = 0
+                logger.info(f"Order {order.get('name', 'unknown')}: Checking individual line item weights:")
+                
+                for item_edge in line_items:
+                    item = item_edge["node"]
+                    quantity = item.get("quantity", 0)
+                    variant = item.get("variant", {})
+                    inventory_item = variant.get("inventoryItem", {})
+                    measurement = inventory_item.get("measurement", {})
+                    weight_obj = measurement.get("weight", {})
+                    
+                    item_weight_value = weight_obj.get("value", 0) if weight_obj else 0
+                    item_weight_unit = weight_obj.get("unit", "GRAMS") if weight_obj else "GRAMS"
+                    
+                    # Convert to grams if needed
+                    if item_weight_unit == "POUNDS":
+                        item_weight_grams = float(item_weight_value) * 453.592
+                    elif item_weight_unit == "OUNCES":
+                        item_weight_grams = float(item_weight_value) * 28.3495
+                    elif item_weight_unit == "KILOGRAMS":
+                        item_weight_grams = float(item_weight_value) * 1000
+                    else:  # GRAMS
+                        item_weight_grams = float(item_weight_value)
+                    
+                    total_item_weight = item_weight_grams * quantity
+                    total_calculated_weight += total_item_weight
+                    
+                    logger.info(f"  - {item.get('title', 'Unknown')}: {quantity} x {item_weight_value} {item_weight_unit} = {total_item_weight}g")
+                
+                logger.info(f"Order {order.get('name', 'unknown')}: Shopify currentTotalWeight = {weight_grams}g")
+                logger.info(f"Order {order.get('name', 'unknown')}: Calculated from line items = {total_calculated_weight}g")
+                
+                # Use calculated weight if it's significantly different from Shopify's value
+                # This handles cases where Shopify's currentTotalWeight is incorrect
+                if abs(total_calculated_weight - weight_grams) > 1:  # More than 1g difference
+                    logger.warning(f"Order {order.get('name', 'unknown')}: Large discrepancy between Shopify currentTotalWeight ({weight_grams}g) and calculated weight ({total_calculated_weight}g). Using calculated weight.")
+                    return total_calculated_weight
+                
+                return weight_grams
             
             elif field == "shipping_province":
                 shipping_addr = order.get("shippingAddress", {})

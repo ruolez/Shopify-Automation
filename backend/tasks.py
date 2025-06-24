@@ -4,7 +4,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
@@ -178,11 +178,10 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     rule_engine = RuleEngine()
     
     # Get orders from last 24 hours if no previous sync, otherwise from last sync
-    created_at_min = None
     if store.last_sync:
         created_at_min = store.last_sync.strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
-        # First sync - get orders from last 24 hours
+        # First sync - get orders from last 24 hours only
         yesterday = datetime.utcnow() - timedelta(days=1)
         created_at_min = yesterday.strftime("%Y-%m-%dT%H:%M:%SZ")
     
@@ -210,13 +209,13 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 order_number = order["name"]
                 order_created_at = order["createdAt"]
                 
-                # Check if order is newer than last sync (date filtering)
-                if created_at_min:
-                    order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
-                    min_date = datetime.fromisoformat(created_at_min.replace('Z', '+00:00'))
-                    if order_date < min_date:
-                        logger.debug(f"Order {order_number} created before {created_at_min}, skipping")
-                        continue
+                # Check if order is newer than cutoff time (date filtering)
+                # Always filter by date - either last sync or 24 hours ago for first sync
+                order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
+                min_date = datetime.fromisoformat(created_at_min.replace('Z', '+00:00'))
+                if order_date < min_date:
+                    logger.debug(f"Order {order_number} created before {created_at_min}, skipping")
+                    continue
                 
                 # Check if order has already been processed
                 existing = db.query(ProcessedOrder).filter(
@@ -603,3 +602,120 @@ def test_store_connection(self, store_id: int):
         raise
     finally:
         db.close()
+
+async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], user_id: int, db: Session):
+    """Retry processing specific orders with all rules or a specific rule"""
+    processed_count = 0
+    failed_count = 0
+    
+    # Get user's active rules
+    if rule_id:
+        logger.info(f"Retrying with specific rule ID: {rule_id}")
+        rules = db.query(ProcessingRule).filter(
+            ProcessingRule.id == rule_id,
+            ProcessingRule.user_id == user_id,
+            ProcessingRule.is_active == True
+        ).all()
+        if not rules:
+            raise ValueError(f"Rule {rule_id} not found or inactive")
+        logger.info(f"Found specific rule: {rules[0].name}")
+    else:
+        logger.info("Retrying with all active rules")
+        rules = db.query(ProcessingRule).filter(
+            ProcessingRule.user_id == user_id,
+            ProcessingRule.is_active == True
+        ).order_by(ProcessingRule.priority.desc()).all()
+        logger.info(f"Found {len(rules)} active rules: {[r.name for r in rules]}")
+    
+    if not rules:
+        raise ValueError("No active rules found")
+    
+    # Get user's stores for order lookup
+    stores = db.query(ShopifyStore).filter(
+        ShopifyStore.user_id == user_id,
+        ShopifyStore.is_active == True
+    ).all()
+    
+    if not stores:
+        raise ValueError("No active stores found")
+    
+    rule_engine = RuleEngine()
+    
+    for order_id in order_ids:
+        try:
+            # Find which store this order belongs to by trying each store
+            order_data = None
+            store = None
+            
+            for s in stores:
+                client = ShopifyClient(s.shop_domain, s.access_token)
+                order_data = await client.get_order_by_id(order_id)
+                if order_data:
+                    store = s
+                    break
+            
+            if not order_data or not store:
+                logger.error(f"Order {order_id} not found in any store")
+                _log_order_action(
+                    db, user_id, 0, order_id, "Unknown", "retry_processing", "failed",
+                    {"retry_type": "specific_rule" if rule_id else "all_rules", "rule_id": rule_id},
+                    error_message="Order not found in any connected store"
+                )
+                failed_count += 1
+                continue
+            
+            # Apply rules to the order
+            rules_applied = False
+            client = ShopifyClient(store.shop_domain, store.access_token)
+            
+            logger.info(f"Found {len(rules)} active rules for retry processing")
+            for rule in rules:
+                logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
+                if rule_engine.evaluate_rule(rule, order_data):
+                    rules_applied = True
+                    logger.info(f"Rule '{rule.name}' matched! Applying actions...")
+                    success = await _apply_rule_actions(client, rule, order_data, store, db)
+                    
+                    # Log retry attempt
+                    _log_order_action(
+                        db, user_id, store.id, order_id, 
+                        order_data.get("name", "Unknown"), "retry_processing", 
+                        "success" if success else "failed",
+                        {
+                            "retry_type": "specific_rule" if rule_id else "all_rules",
+                            "rule_id": rule_id,
+                            "rule_name": rule.name,
+                            "applied_rule_id": rule.id
+                        }
+                    )
+                else:
+                    logger.info(f"Rule '{rule.name}' did not match order {order_data.get('name', 'Unknown')}")
+            
+            # Log if no rules matched
+            if not rules_applied:
+                _log_order_action(
+                    db, user_id, store.id, order_id,
+                    order_data.get("name", "Unknown"), "retry_processing", "info",
+                    {
+                        "retry_type": "specific_rule" if rule_id else "all_rules", 
+                        "rule_id": rule_id,
+                        "message": "No rules matched this order"
+                    }
+                )
+            
+            processed_count += 1
+            
+        except Exception as e:
+            logger.error(f"Error retrying order {order_id}: {str(e)}")
+            _log_order_action(
+                db, user_id, 0, order_id, "Unknown", "retry_processing", "failed",
+                {"retry_type": "specific_rule" if rule_id else "all_rules", "rule_id": rule_id},
+                error_message=str(e)
+            )
+            failed_count += 1
+    
+    return {
+        "processed_count": processed_count,
+        "failed_count": failed_count,
+        "total_count": len(order_ids)
+    }

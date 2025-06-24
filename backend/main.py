@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, date
 import uvicorn
 import os
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
@@ -560,6 +561,63 @@ async def get_order_logs(
         }
     }
 
+@app.post("/order-logs/retry")
+async def retry_order_processing_endpoint(
+    retry_request: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retry processing for selected orders"""
+    from tasks import retry_order_processing
+    
+    order_ids = retry_request.get("order_ids", [])
+    rule_id = retry_request.get("rule_id")  # Optional - if not provided, retry with all rules
+    
+    if not order_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No order IDs provided"
+        )
+    
+    if len(order_ids) > 50:  # Limit batch size
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many orders selected. Maximum 50 orders at once."
+        )
+    
+    # Validate rule_id if provided
+    if rule_id:
+        rule = db.query(ProcessingRule).filter(
+            ProcessingRule.id == rule_id,
+            ProcessingRule.user_id == current_user.id,
+            ProcessingRule.is_active == True
+        ).first()
+        if not rule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Rule not found or inactive"
+            )
+    
+    try:
+        # Run async retry processing using await (FastAPI already has event loop)
+        result = await retry_order_processing(order_ids, rule_id, current_user.id, db)
+        
+        return {
+            "message": "Order retry processing completed",
+            "processed_count": result["processed_count"],
+            "failed_count": result["failed_count"],
+            "total_count": result["total_count"],
+            "retry_type": "specific_rule" if rule_id else "all_rules",
+            "rule_id": rule_id
+        }
+            
+    except Exception as e:
+        logger.error(f"Order retry processing failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retry order processing: {str(e)}"
+        )
+
 # Manual sync endpoints
 @app.post("/sync/store/{store_id}")
 async def sync_store_orders(
@@ -883,6 +941,74 @@ async def debug_move_fulfillment(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error moving fulfillment: {str(e)}")
+
+@app.get("/debug/order-data/{store_id}")
+async def debug_order_data(
+    store_id: int,
+    order_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to show raw order data structure"""
+    try:
+        # Get store
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id,
+            ShopifyStore.is_active == True
+        ).first()
+        
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+        
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        
+        # Find order by name
+        orders_data = await client.get_orders(limit=50)
+        target_order = None
+        
+        for order_edge in orders_data["edges"]:
+            order = order_edge["node"]
+            if order["name"] == order_name:
+                target_order = order
+                break
+        
+        if not target_order:
+            return {"error": f"Order {order_name} not found"}
+        
+        # Extract weight information
+        weight_info = {
+            "order_name": target_order.get("name"),
+            "currentTotalWeight": target_order.get("currentTotalWeight"),
+            "currentTotalWeight_type": type(target_order.get("currentTotalWeight")).__name__,
+            "totalWeight": target_order.get("totalWeight"),  # Check if this field exists
+        }
+        
+        # Also show line item weights
+        line_items = target_order.get("lineItems", {}).get("edges", [])
+        item_weights = []
+        for item_edge in line_items:
+            item = item_edge["node"]
+            variant = item.get("variant", {})
+            inventory_item = variant.get("inventoryItem", {})
+            measurement = inventory_item.get("measurement", {})
+            weight = measurement.get("weight", {})
+            
+            item_weights.append({
+                "title": item.get("title"),
+                "quantity": item.get("quantity"),
+                "weight_value": weight.get("value"),
+                "weight_unit": weight.get("unit")
+            })
+        
+        return {
+            "weight_info": weight_info,
+            "line_item_weights": item_weights,
+            "full_order_data": target_order
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting order data: {str(e)}")
 
 # Location Alias Management endpoints
 @app.get("/location-aliases", response_model=list[LocationAliasResponse])
