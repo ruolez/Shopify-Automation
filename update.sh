@@ -173,8 +173,10 @@ if [ -n "$RESTORE_FROM" ]; then
 fi
 
 # Create backup (unless keeping database)
+BACKUP_CREATED=false
 if [ "$BACKUP_ONLY" = true ] || [ "$KEEP_DB" = false ]; then
     backup_data
+    BACKUP_CREATED=true
 fi
 
 # Exit if backup-only
@@ -209,6 +211,13 @@ docker-compose -f "$COMPOSE_FILE" up -d
 print_info "Waiting for services to start..."
 sleep 10
 
+# Restore database backup if one was created
+if [ "$BACKUP_CREATED" = true ] && [ "$KEEP_DB" = false ]; then
+    print_info "Restoring database from backup created during this update..."
+    restore_data "$BACKUP_DIR"
+    print_success "Database restored from backup!"
+fi
+
 # Check if services are running
 print_info "Checking service status..."
 if docker-compose -f "$COMPOSE_FILE" ps | grep -q "Up"; then
@@ -222,9 +231,9 @@ print_success "Update completed!"
 print_info "Backup saved to: $BACKUP_DIR"
 
 if [ "$KEEP_DB" = false ]; then
-    print_info "Database was backed up and preserved"
+    print_info "Database was backed up and automatically restored"
 else
-    print_info "Database was kept without backup"
+    print_info "Database was kept without backup (using existing data)"
 fi
 
 print_info "You can now access the application at http://localhost"
