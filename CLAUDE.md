@@ -12,7 +12,7 @@ This is a Shopify Multi-Store Order Management System - a comprehensive automate
 
 **Backend (FastAPI + SQLAlchemy + Celery)**
 - `backend/main.py` - FastAPI application with REST endpoints and debugging endpoints
-- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident)
+- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU)
 - `backend/rule_engine.py` - Rule evaluation engine with 15+ operators and field extraction
 - `backend/tasks.py` - Celery background tasks for order processing and store synchronization
 - `backend/shopify_client.py` - Shopify Admin API GraphQL client with order management and fulfillment operations
@@ -193,7 +193,29 @@ docker exec shopify_api python -c "from tasks import test_celery_connection; tes
 
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
 
-### Recent Feature Additions (2025-06-24)
+### Recent Feature Additions
+
+#### SKU Exclusion System (2025-06-25)
+**Purpose**: Allows users to exclude specific SKU patterns from weight calculations and OOS reporting while preserving fulfillment functionality.
+- **Location**: Settings page → Excluded SKUs section
+- **Key Features**:
+  - Case-insensitive substring pattern matching (e.g., "TEST", "SAMPLE", "_EXCLUDED")
+  - User-scoped exclusion patterns with optional descriptions
+  - Active/inactive toggle for temporary exclusions
+  - Comprehensive CRUD operations via UI and API
+- **Database**: New `ExcludedSKU` model with automatic table creation
+- **API Endpoints**: 
+  - `GET /settings/excluded-skus` - List all patterns
+  - `POST /settings/excluded-skus` - Create new pattern
+  - `PUT /settings/excluded-skus/{id}` - Update pattern
+  - `DELETE /settings/excluded-skus/{id}` - Delete pattern
+- **Behavior**:
+  - Excluded SKUs are filtered from weight calculations in rule conditions
+  - Excluded SKUs don't generate OOS incidents when unavailable
+  - **Critical**: Excluded SKUs still participate in fulfillment location moves
+  - Extensive logging for debugging and visibility
+
+#### Previous Features (2025-06-24)
 
 #### Enhanced Order Logs Page
 - **Grouped View**: Orders now grouped by order number with expand/collapse functionality
