@@ -658,18 +658,12 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                                 client, rule, current_order, store, db, excluded_sku_patterns
                             )
                             
-                            if success:
-                                _log_order_action(
-                                    db, store.user_id, store.id, order_id, 
-                                    order_number, f"applied_rule_{rule.id}", 
-                                    "success", {"rule_name": rule.name}
-                                )
-                            else:
-                                _log_order_action(
-                                    db, store.user_id, store.id, order_id, 
-                                    order_number, f"applied_rule_{rule.id}", 
-                                    "failed", {"rule_name": rule.name}
-                                )
+                            # Rule matched and was applied (regardless of success/failure)
+                            _log_order_action(
+                                db, store.user_id, store.id, order_id, 
+                                order_number, f"applied_rule_{rule.id}", 
+                                "match", {"rule_name": rule.name, "actions_successful": success}
+                            )
                             
                             # ALWAYS re-fetch order after a rule matches and executes (regardless of success/failure)
                             # This ensures the next rule sees any changes from this rule
@@ -702,7 +696,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     if not rules_applied:
                         _log_order_action(
                             db, store.user_id, store.id, order_id,
-                            order_number, "no_rules_matched", "info",
+                            order_number, "no_rules_matched", "skipped",
                             {"message": "No rules matched this order"}
                         )
                     
@@ -712,7 +706,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     logger.error(f"Error processing order {order_number}: {str(e)}")
                     _log_order_action(
                         db, store.user_id, store.id, order_id, 
-                        order_number, "processing_error", "failed", 
+                        order_number, "processing_error", "error", 
                         error_message=str(e)
                     )
             
@@ -813,11 +807,11 @@ async def _apply_rule_actions(
                                 # Some products not available - skip the move entirely
                                 logger.warning(f"All-or-nothing policy: Skipping fulfillment move for {fo['id']} - {len(inventory_check['unavailable_items'])} products not available at target location")
                                 
-                                # Log as complete failure due to all-or-nothing policy
+                                # Log fulfillment failure as informational - rule still matched successfully
                                 _log_order_action(
                                     db, store.user_id, store.id, order["id"], 
                                     order.get("name", "Unknown"), "fulfillment_move_failed", 
-                                    "failed", 
+                                    "info", 
                                     {
                                         "rule_name": rule.name,
                                         "target_location_id": location_id,
@@ -826,7 +820,8 @@ async def _apply_rule_actions(
                                         "policy": "all_or_nothing",
                                         "pre_check_failed": True,
                                         "available_items": inventory_check["available_items"],
-                                        "unavailable_items": inventory_check["unavailable_items"]
+                                        "unavailable_items": inventory_check["unavailable_items"],
+                                        "reason": "out_of_stock"
                                     },
                                     error_message=f"All-or-nothing policy: {len(inventory_check['unavailable_items'])} products not available at target location, skipped fulfillment move"
                                 )
@@ -915,17 +910,18 @@ async def _apply_rule_actions(
                                 logger.error(f"Failed to move fulfillment order {fo['id']}: {result.get('errors', [])}")
                                 success = False
                                 
-                                # Log fulfillment error details for reporting
+                                # Log fulfillment failure as informational - rule still matched successfully  
                                 _log_order_action(
                                     db, store.user_id, store.id, order["id"], 
                                     order.get("name", "Unknown"), "fulfillment_move_failed", 
-                                    "failed", 
+                                    "info", 
                                     {
                                         "rule_name": rule.name,
                                         "target_location_id": location_id,
                                         "fulfillment_order_id": fo["id"],
                                         "location_alias": location_alias or "direct_id",
-                                        "errors": result.get("errors", [])
+                                        "errors": result.get("errors", []),
+                                        "reason": "out_of_stock"
                                     },
                                     error_message="Failed to move fulfillment order - likely out of stock at target location"
                                 )
@@ -1243,16 +1239,17 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
                     logger.info(f"Rule '{rule.name}' matched! Applying actions...")
                     success = await _apply_rule_actions(client, rule, order_data, store, db)
                     
-                    # Log retry attempt
+                    # Log retry attempt - rule matched regardless of action success
                     _log_order_action(
                         db, user_id, store.id, order_id, 
                         order_data.get("name", "Unknown"), "retry_processing", 
-                        "success" if success else "failed",
+                        "match",
                         {
                             "retry_type": "specific_rule" if rule_id else "all_rules",
                             "rule_id": rule_id,
                             "rule_name": rule.name,
-                            "applied_rule_id": rule.id
+                            "applied_rule_id": rule.id,
+                            "actions_successful": success
                         }
                     )
                 else:
@@ -1262,7 +1259,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
             if not rules_applied:
                 _log_order_action(
                     db, user_id, store.id, order_id,
-                    order_data.get("name", "Unknown"), "retry_processing", "info",
+                    order_data.get("name", "Unknown"), "retry_processing", "skipped",
                     {
                         "retry_type": "specific_rule" if rule_id else "all_rules", 
                         "rule_id": rule_id,
@@ -1275,7 +1272,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
         except Exception as e:
             logger.error(f"Error retrying order {order_id}: {str(e)}")
             _log_order_action(
-                db, user_id, 0, order_id, "Unknown", "retry_processing", "failed",
+                db, user_id, 0, order_id, "Unknown", "retry_processing", "error",
                 {"retry_type": "specific_rule" if rule_id else "all_rules", "rule_id": rule_id},
                 error_message=str(e)
             )

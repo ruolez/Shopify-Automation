@@ -126,9 +126,10 @@ const OrderLogs: React.FC = () => {
         group.latest_date = log.created_at;
       }
       
-      // Track status flags
-      if (log.status === 'failed') group.has_failed = true;
-      if (log.status === 'success') group.has_success = true;
+      // Track status flags - only count actual failures, not info/skipped
+      if (log.status === 'error' || log.status === 'failed') group.has_failed = true;
+      if (log.status === 'match' || log.status === 'success') group.has_success = true;
+      // Note: 'info' and 'skipped' are neutral and don't affect group status
     });
     
     // Convert to array and sort
@@ -186,10 +187,19 @@ const OrderLogs: React.FC = () => {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
+      case 'match':
+        return <CheckCircleIcon className="h-5 w-5 text-green-500" />;
+      case 'skipped':
+        return <InformationCircleIcon className="h-5 w-5 text-gray-500" />;
+      case 'error':
+        return <XCircleIcon className="h-5 w-5 text-red-500" />;
+      // Legacy status support
       case 'success':
         return <CheckCircleIcon className="h-5 w-5 text-green-500" />;
       case 'failed':
         return <XCircleIcon className="h-5 w-5 text-red-500" />;
+      case 'info':
+        return <InformationCircleIcon className="h-5 w-5 text-blue-500" />;
       default:
         return <InformationCircleIcon className="h-5 w-5 text-blue-500" />;
     }
@@ -212,9 +222,9 @@ const OrderLogs: React.FC = () => {
   };
 
   const getGroupStatus = (group: GroupedOrderLog) => {
-    if (group.has_failed) return 'failed';
-    if (group.has_success) return 'success';
-    return 'info';
+    if (group.has_failed) return 'error';
+    if (group.has_success) return 'match';
+    return 'skipped';
   };
 
   const handleSort = (field: SortField) => {
@@ -351,9 +361,13 @@ const OrderLogs: React.FC = () => {
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
               >
                 <option value="">All Statuses</option>
-                <option value="success">Success</option>
-                <option value="failed">Failed</option>
-                <option value="info">Info</option>
+                <option value="match">Match</option>
+                <option value="skipped">Skipped</option>
+                <option value="error">Error</option>
+                {/* Legacy status support */}
+                <option value="success">Success (Legacy)</option>
+                <option value="failed">Failed (Legacy)</option>
+                <option value="info">Info (Legacy)</option>
               </select>
             </div>
           </div>
@@ -455,8 +469,8 @@ const OrderLogs: React.FC = () => {
                             {getStatusIcon(getGroupStatus(group))}
                             <span className="ml-2 text-sm text-gray-500 capitalize">
                               {group.has_failed && group.has_success ? 'Mixed' : 
-                               group.has_failed ? 'Failed' : 
-                               group.has_success ? 'Success' : 'Info'}
+                               group.has_failed ? 'Error' : 
+                               group.has_success ? 'Match' : 'Skipped'}
                             </span>
                           </div>
                         </td>
