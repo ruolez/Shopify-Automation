@@ -1202,6 +1202,16 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
     if not stores:
         raise ValueError("No active stores found")
     
+    # Get excluded SKUs for this user
+    excluded_skus_query = db.query(ExcludedSKU).filter(
+        ExcludedSKU.user_id == user_id,
+        ExcludedSKU.is_active == True
+    ).all()
+    excluded_sku_patterns = [sku.sku_pattern for sku in excluded_skus_query]
+    
+    if excluded_sku_patterns:
+        logger.info(f"Loaded {len(excluded_sku_patterns)} excluded SKU patterns for retry processing: {excluded_sku_patterns}")
+    
     rule_engine = RuleEngine()
     
     for order_id in order_ids:
@@ -1234,10 +1244,10 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
             logger.info(f"Found {len(rules)} active rules for retry processing")
             for rule in rules:
                 logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
-                if rule_engine.evaluate_rule(rule, order_data):
+                if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns):
                     rules_applied = True
                     logger.info(f"Rule '{rule.name}' matched! Applying actions...")
-                    success = await _apply_rule_actions(client, rule, order_data, store, db)
+                    success = await _apply_rule_actions(client, rule, order_data, store, db, excluded_sku_patterns)
                     
                     # Log retry attempt - rule matched regardless of action success
                     _log_order_action(
