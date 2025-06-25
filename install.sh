@@ -64,8 +64,9 @@ cleanup_previous_installation() {
     # Clean up Docker system
     docker system prune -f
     
-    # Remove logs
+    # Remove logs and environment files
     sudo rm -rf logs/* 2>/dev/null || true
+    rm -f frontend/.env 2>/dev/null || true
     
     print_success "Previous installation cleaned up."
 }
@@ -409,6 +410,13 @@ fi
 
 print_success "CORS configuration updated for server IP."
 
+# Create frontend .env file for build-time environment variables
+print_status "Creating frontend .env file for build..."
+cat > frontend/.env << EOF
+VITE_API_URL=http://$SERVER_IP:8000
+EOF
+print_success "Frontend .env file created with API URL: http://$SERVER_IP:8000"
+
 # Step 4: Check port availability
 print_status "Checking port availability..."
 PORTS=(8000 3000 80 6379)
@@ -454,6 +462,13 @@ if grep -q "http://$SERVER_IP" backend/main.py; then
     print_success "✓ CORS configuration updated"
 else
     print_error "✗ CORS configuration not updated"
+    exit 1
+fi
+
+if [ -f frontend/.env ] && grep -q "VITE_API_URL=http://$SERVER_IP:8000" frontend/.env; then
+    print_success "✓ Frontend .env file has correct API URL"
+else
+    print_error "✗ Frontend .env file missing or incorrect"
     exit 1
 fi
 
@@ -543,8 +558,9 @@ echo
 echo -e "${YELLOW}🔧 Configuration:${NC}"
 echo -e "  • Server IP: ${GREEN}$SERVER_IP${NC}"
 echo -e "  • Frontend served via nginx on port 80"
-echo -e "  • API proxied through /api/ path"
-echo -e "  • Backend running on port 8000 (internal)"
+echo -e "  • Frontend API calls: ${GREEN}http://$SERVER_IP:8000${NC}"
+echo -e "  • Backend running on port 8000"
+echo -e "  • CORS configured for server IP"
 echo
 if [[ "$SERVER_IP" != "localhost" && "$SERVER_IP" != "127.0.0.1" ]]; then
     echo -e "${BLUE}🌐 Network Access:${NC}"
