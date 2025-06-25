@@ -254,6 +254,13 @@ This system handles complex real-time order processing with proper error handlin
   - **Critical**: Excluded SKUs still participate in fulfillment location moves
   - Extensive logging for debugging and visibility
 
+**Security Hardening (2025-06-25)**:
+- **Critical vulnerability fixed**: Partial fulfillment scenarios where Shopify API returned incomplete SKU data
+- **SKU lookup fallback**: Automatically retrieves missing SKU data from original order when API fails
+- **Enhanced monitoring**: Comprehensive logging with `✅ EXCLUDED:` markers for tracking effectiveness
+- **Parameter validation**: All OOS recording functions include exclusion checks with warnings for compromised data
+- **100% coverage**: Both normal processing and retry processing properly exclude SKUs
+
 #### OOS Reports Deduplication System (2025-06-25)
 **Purpose**: Prevents duplicate orders from appearing in reports when multiple retries or rules affect the same order.
 - **Key Improvements**:
