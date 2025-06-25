@@ -86,6 +86,18 @@ docker exec shopify_api python -c "from database import engine; print('DB access
 ```
 
 ### Frontend Development
+
+**Hot Reload Setup (Recommended)**
+The Docker setup is configured for development mode with hot reload and volume mounting:
+```bash
+# Start all services with hot reload enabled
+docker-compose up -d
+
+# Frontend automatically runs in development mode with hot reload
+# Changes to React/CSS files are instantly visible without rebuilds
+```
+
+**Local Development (Alternative)**
 ```bash
 # Start backend services then run frontend locally
 docker-compose up -d redis api worker scheduler
@@ -304,17 +316,39 @@ className="inline-flex items-center justify-center px-4 py-2 border border-trans
 - **Development**: Uses volume mounting for hot reload (Vite polling enabled for Docker compatibility)
 - **Production**: Frontend built into static files, served by Nginx with security headers and rate limiting
 
-### Critical Frontend Cache Issues
-**Problem**: Docker aggressively caches builds, preventing new React changes from appearing in the browser.
-**Solution**: ALWAYS purge Docker cache when frontend changes don't appear:
+### Hot Reload Configuration (Fixed 2025-06-25)
+**Important**: The Docker setup now includes proper hot reload configuration that persists across new installations:
+
+**Frontend Dockerfile** - Configured for development mode:
+```dockerfile
+# Start in development mode with hot reload
+CMD ["npm", "run", "dev"]
+```
+
+**docker-compose.yml** - Volume mounting enabled:
+```yaml
+frontend:
+  volumes:
+    - ./frontend:/app
+    - /app/node_modules
+```
+
+**For New Installations**: Hot reload is automatically enabled. No manual configuration needed.
+**Benefits**: 
+- CSS/React changes instantly visible without rebuilds
+- No more Docker cache purging required for UI updates
+- Consistent development experience across all environments
+
+### Critical Frontend Cache Issues (Legacy - Now Fixed)
+**Previous Problem**: Docker aggressively cached builds, preventing new React changes from appearing.
+**Fixed**: Hot reload now eliminates the need for cache purging in most cases.
+**Legacy Solution** (only if hot reload fails):
 ```bash
 # REQUIRED process - simple restart is NOT enough
 docker-compose down
 docker system prune -f  # Purges build cache
 docker-compose up -d
 ```
-**When to use**: Every time frontend changes aren't visible after container restart.
-**Note**: Simple `docker-compose restart frontend` is NOT sufficient - cache persists.
 
 ### Service Management
 ```bash
