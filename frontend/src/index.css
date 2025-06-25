@@ -25,6 +25,25 @@
     @apply block w-full rounded-lg border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm;
   }
   
+  /* Ensure all form elements have visible borders using direct CSS */
+  select, input, textarea {
+    border-color: #d1d5db !important; /* gray-300 - light but still visible */
+    border-width: 1px !important;
+    border-style: solid !important;
+    padding: 6px 16px !important; /* even less height, good left spacing */
+    min-height: 34px !important; /* smaller minimum height */
+  }
+  
+  /* Override any specific border classes for consistency */
+  select.border-gray-300,
+  select.input,
+  input.border-gray-300,
+  input.input,
+  textarea.border-gray-300,
+  textarea.input {
+    border-color: #d1d5db !important; /* gray-300 - light but still visible */
+  }
+  
   .label {
     @apply block text-sm font-medium text-gray-700 mb-2;
   }
