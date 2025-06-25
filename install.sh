@@ -49,7 +49,77 @@ if [[ "$OSTYPE" != "linux-gnu"* ]]; then
     exit 1
 fi
 
+# Function to clean up previous installation
+cleanup_previous_installation() {
+    print_warning "Cleaning up previous installation..."
+    
+    # Stop and remove containers
+    if docker compose ps >/dev/null 2>&1; then
+        docker compose down -v 2>/dev/null || true
+    fi
+    
+    # Remove Docker images
+    docker rmi $(docker images | grep shopify | awk '{print $3}') 2>/dev/null || true
+    
+    # Clean up Docker system
+    docker system prune -f
+    
+    # Remove logs
+    sudo rm -rf logs/* 2>/dev/null || true
+    
+    print_success "Previous installation cleaned up."
+}
+
+# Get server configuration
+get_server_config() {
+    echo
+    print_status "Server Configuration Setup"
+    echo
+    
+    # Get server IP address
+    echo -e "${BLUE}Please enter the server IP address that will host this application:${NC}"
+    echo -e "${YELLOW}  - For local installation: use 'localhost' or '127.0.0.1'${NC}"
+    echo -e "${YELLOW}  - For network installation: use the server's LAN IP (e.g., 192.168.1.112)${NC}"
+    echo -e "${YELLOW}  - For internet access: use the server's public IP${NC}"
+    echo
+    read -p "Server IP address: " SERVER_IP
+    
+    if [ -z "$SERVER_IP" ]; then
+        print_error "Server IP address is required!"
+        exit 1
+    fi
+    
+    # Validate IP format (basic check)
+    if [[ ! "$SERVER_IP" =~ ^(localhost|127\.0\.0\.1|([0-9]{1,3}\.){3}[0-9]{1,3})$ ]]; then
+        print_warning "Warning: '$SERVER_IP' doesn't look like a standard IP address or localhost."
+        read -p "Are you sure this is correct? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+    
+    export SERVER_IP
+    print_success "Server IP set to: $SERVER_IP"
+}
+
 print_status "Starting installation process..."
+
+# Check if this is a cleanup/reinstall
+if [ "$1" = "--clean" ] || [ -f docker-compose.yml ]; then
+    if [ "$1" = "--clean" ]; then
+        cleanup_previous_installation
+    else
+        read -p "Previous installation detected. Clean up first? (Y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            cleanup_previous_installation
+        fi
+    fi
+fi
+
+# Get server configuration
+get_server_config
 
 # Step 0: Check and install system dependencies
 print_status "Checking system dependencies..."
@@ -288,33 +358,44 @@ mkdir -p logs
 mkdir -p nginx/ssl
 print_success "Directories created."
 
-# Step 3: Setup environment file
+# Step 3: Setup environment file and docker-compose
 print_status "Setting up environment configuration..."
-if [ ! -f .env ]; then
-    if [ -f .env.example ]; then
-        cp .env.example .env
-        
-        # Generate a secure secret key
-        SECRET_KEY=$(openssl rand -hex 32)
-        
-        # Update the secret key in .env
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS
-            sed -i '' "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
-        else
-            # Linux
-            sed -i "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
-        fi
-        
-        print_success "Environment file created with secure secret key."
-        print_warning "Please edit .env file to add your Shopify API credentials if needed."
+
+# Always recreate .env with current settings
+if [ -f .env.example ]; then
+    cp .env.example .env
+    
+    # Generate a secure secret key
+    SECRET_KEY=$(openssl rand -hex 32)
+    
+    # Update the secret key and API URL in .env
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        sed -i '' "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
+        sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" .env
     else
-        print_error ".env.example file not found!"
-        exit 1
+        # Linux
+        sed -i "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
+        sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" .env
     fi
+    
+    print_success "Environment file created with secure secret key and correct API URL."
 else
-    print_warning ".env file already exists. Skipping..."
+    print_error ".env.example file not found!"
+    exit 1
 fi
+
+# Update docker-compose.yml with correct API URL
+print_status "Updating docker-compose configuration..."
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" docker-compose.yml
+else
+    # Linux
+    sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" docker-compose.yml
+fi
+
+print_success "Docker configuration updated with correct API URL."
 
 # Step 4: Check port availability
 print_status "Checking port availability..."
@@ -383,11 +464,18 @@ fi
 print_status "Performing health check..."
 sleep 5
 
-# Check API health
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health | grep -q "200"; then
-    print_success "API is healthy!"
+# Check application health via nginx
+if curl -s -o /dev/null -w "%{http_code}" http://$SERVER_IP/health | grep -q "200"; then
+    print_success "Application is healthy and accessible via nginx!"
 else
-    print_warning "API health check failed. It may still be starting up."
+    print_warning "Health check failed. The application may still be starting up."
+fi
+
+# Check direct API health
+if curl -s -o /dev/null -w "%{http_code}" http://$SERVER_IP:8000/health | grep -q "200"; then
+    print_success "Direct API is also healthy!"
+else
+    print_warning "Direct API health check failed but this is normal if using nginx proxy only."
 fi
 
 # Final summary
@@ -396,20 +484,35 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}       Installation completed successfully!${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo
-echo -e "${BLUE}Access your application at:${NC}"
-echo -e "  • Frontend: ${GREEN}http://localhost:3000${NC}"
-echo -e "  • API Docs: ${GREEN}http://localhost:8000/docs${NC}"
+echo -e "${BLUE}🌐 Access your application at:${NC}"
+echo -e "  • ${GREEN}Frontend (Main App): http://$SERVER_IP${NC}"
+echo -e "  • ${GREEN}API Documentation: http://$SERVER_IP/api/docs${NC}"
+echo -e "  • ${GREEN}Direct API Access: http://$SERVER_IP:8000/docs${NC} (if needed)"
 echo
-echo -e "${BLUE}Next steps:${NC}"
-echo -e "  1. Register a new user at ${GREEN}http://localhost:3000/register${NC}"
-echo -e "  2. Add your Shopify stores in Settings → Stores"
-echo -e "  3. Create processing rules in the Rules section"
-echo -e "  4. Configure sync settings in Settings → Order Processing"
+echo -e "${BLUE}📝 Next steps:${NC}"
+echo -e "  1. Open ${GREEN}http://$SERVER_IP${NC} in your browser"
+echo -e "  2. Register a new user account"
+echo -e "  3. Add your Shopify stores in Settings → Stores"
+echo -e "  4. Create processing rules in the Rules section"
+echo -e "  5. Configure sync settings in Settings → Order Processing"
 echo
-echo -e "${YELLOW}Important:${NC}"
-echo -e "  • To view logs: ${GREEN}docker compose logs -f${NC}"
-echo -e "  • To stop services: ${GREEN}docker compose stop${NC}"
-echo -e "  • To update: ${GREEN}./update.sh${NC}"
+echo -e "${YELLOW}⚙️  Management commands:${NC}"
+echo -e "  • View logs: ${GREEN}docker compose logs -f${NC}"
+echo -e "  • Stop services: ${GREEN}docker compose stop${NC}"
+echo -e "  • Update application: ${GREEN}./update.sh${NC}"
+echo -e "  • Clean reinstall: ${GREEN}./install.sh --clean${NC}"
 echo
-echo -e "${YELLOW}If you added yourself to the docker group, please log out and back in.${NC}"
+echo -e "${YELLOW}🔧 Configuration:${NC}"
+echo -e "  • Server IP: ${GREEN}$SERVER_IP${NC}"
+echo -e "  • Frontend served via nginx on port 80"
+echo -e "  • API proxied through /api/ path"
+echo -e "  • Backend running on port 8000 (internal)"
+echo
+if [[ "$SERVER_IP" != "localhost" && "$SERVER_IP" != "127.0.0.1" ]]; then
+    echo -e "${BLUE}🌐 Network Access:${NC}"
+    echo -e "  • The application is accessible from other devices on your network"
+    echo -e "  • Make sure port 80 is open in your firewall if needed"
+    echo
+fi
+echo -e "${YELLOW}ℹ️  If you added yourself to the docker group, please log out and back in.${NC}"
 echo

@@ -4,13 +4,27 @@ A powerful automated order processing system for managing multiple Shopify store
 
 ## 🚀 Quick Start - Linux Docker Installation
 
+### One-Command Installation
+
+```bash
+git clone https://github.com/ruolez/Shopify-Automation.git
+cd Shopify-Automation
+./install.sh
+```
+
+The install script will:
+- Install Docker and Docker Compose v2 automatically
+- Ask for your server IP address
+- Configure the application for network access
+- Set up all services on port 80
+- Create secure environment configuration
+
 ### Prerequisites
 
-- Linux-based operating system (Ubuntu 20.04+ recommended)
-- Docker Engine 20.10.0 or higher
-- Docker Compose v2.0.0 or higher
+- Linux-based operating system (Ubuntu 20.04+ recommended)  
 - Git
 - At least 4GB RAM and 10GB free disk space
+- **Note**: Docker and dependencies will be installed automatically
 
 ### Step 1: Install Docker (if not already installed)
 
@@ -115,14 +129,20 @@ print('Database initialized successfully!')
 
 ### Step 6: Access the Application
 
+The installation script will ask for your server IP address and configure everything automatically.
+
 Open your web browser and navigate to:
-- **Frontend**: http://localhost:3000
-- **API Documentation**: http://localhost:8000/docs
-- **Health Check**: http://localhost:8000/health
+- **Frontend**: http://[YOUR-SERVER-IP] (port 80)
+- **API Documentation**: http://[YOUR-SERVER-IP]/api/docs  
+- **Health Check**: http://[YOUR-SERVER-IP]/health
+
+For example, if your server IP is 192.168.1.112:
+- **Frontend**: http://192.168.1.112
+- **API Documentation**: http://192.168.1.112/api/docs
 
 ### Step 7: Create Your First User
 
-1. Navigate to http://localhost:3000/register
+1. Navigate to http://[YOUR-SERVER-IP]/register (the install script will show you the exact URL)
 2. Create an account with your email and password
 3. Login with your credentials
 
@@ -167,13 +187,28 @@ docker compose down -v
 ### Update the Application
 
 ```bash
-# Pull latest changes
-git pull
+# Using the update script (recommended)
+./update.sh
 
-# Rebuild and restart
+# Manual update
+git pull
 docker compose down
 docker compose build
 docker compose up -d
+```
+
+### Clean Reinstall
+
+```bash
+# Clean up previous installation and reinstall
+./install.sh --clean
+
+# This will:
+# - Stop and remove all containers
+# - Remove Docker images  
+# - Clean up logs and data
+# - Ask for server IP again
+# - Reinstall everything fresh
 ```
 
 ## 🔧 Troubleshooting
