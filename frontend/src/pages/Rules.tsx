@@ -234,7 +234,7 @@ const Rules: React.FC = () => {
               Get started by creating your first automation rule.
             </p>
             <div className="mt-6">
-              <Link to="/rules/new" className="btn-primary">
+              <Link to="/rules/new" className="btn-primary flex items-center">
                 <PlusIcon className="h-5 w-5 mr-2" />
                 Create Rule
               </Link>
