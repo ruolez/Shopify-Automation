@@ -14,10 +14,12 @@ cd Shopify-Automation
 
 The install script will:
 - Install Docker and Docker Compose v2 automatically
-- Ask for your server IP address
-- Configure the application for network access
-- Set up all services on port 80
-- Create secure environment configuration
+- Ask for your server IP address during setup
+- Configure frontend and backend with correct URLs
+- Update CORS settings for network access
+- Build all services with proper configuration
+- Verify configuration before building
+- Set up all services on port 80 (frontend) and 8000 (API)
 
 ### Prerequisites
 

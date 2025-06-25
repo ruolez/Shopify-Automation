@@ -433,6 +433,31 @@ fi
 # Step 5: Build Docker images
 print_status "Building Docker images (this may take a few minutes)..."
 print_status "Note: Frontend will be built with API URL: http://$SERVER_IP:8000"
+
+# Verify configuration before building
+print_status "Verifying configuration..."
+if grep -q "VITE_API_URL=http://$SERVER_IP:8000" .env; then
+    print_success "✓ .env file has correct API URL"
+else
+    print_error "✗ .env file does not have correct API URL"
+    exit 1
+fi
+
+if grep -q "VITE_API_URL=http://$SERVER_IP:8000" docker-compose.yml; then
+    print_success "✓ docker-compose.yml has correct API URL"
+else
+    print_error "✗ docker-compose.yml does not have correct API URL"
+    exit 1
+fi
+
+if grep -q "http://$SERVER_IP" backend/main.py; then
+    print_success "✓ CORS configuration updated"
+else
+    print_error "✗ CORS configuration not updated"
+    exit 1
+fi
+
+# Build with no cache to ensure fresh build
 docker compose build --no-cache
 print_success "Docker images built successfully!"
 
