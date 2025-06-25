@@ -432,7 +432,8 @@ fi
 
 # Step 5: Build Docker images
 print_status "Building Docker images (this may take a few minutes)..."
-docker compose build
+print_status "Note: Frontend will be built with API URL: http://$SERVER_IP:8000"
+docker compose build --no-cache
 print_success "Docker images built successfully!"
 
 # Step 6: Start services
