@@ -1579,9 +1579,19 @@ async def get_oos_orders_report(
         
         oos_logs = query.order_by(OrderLog.created_at.desc()).all()
         
-        # Group by location for summary
-        location_summary = {}
+        # Deduplicate orders by order_number - keep most recent entry for each order
+        unique_orders = {}
         for log in oos_logs:
+            order_number = log.order_number
+            if order_number not in unique_orders or log.created_at > unique_orders[order_number].created_at:
+                unique_orders[order_number] = log
+        
+        # Convert back to list, sorted by creation date descending
+        deduplicated_logs = sorted(unique_orders.values(), key=lambda x: x.created_at, reverse=True)
+        
+        # Group by location for summary using deduplicated data
+        location_summary = {}
+        for log in deduplicated_logs:
             details = log.details or {}
             location_alias = details.get("location_alias", "unknown")
             
@@ -1599,7 +1609,7 @@ async def get_oos_orders_report(
             })
         
         return {
-            "total_oos_orders": len(oos_logs),
+            "total_oos_orders": len(deduplicated_logs),
             "date_range": {
                 "start_date": start_date,
                 "end_date": end_date
@@ -1612,7 +1622,7 @@ async def get_oos_orders_report(
                     "location_alias": log.details.get("location_alias") if log.details else None,
                     "rule_name": log.details.get("rule_name") if log.details else None
                 }
-                for log in oos_logs
+                for log in deduplicated_logs
             ]
         }
         
@@ -1645,7 +1655,7 @@ async def get_oos_products_report(
             end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
             query = query.filter(OutOfStockIncident.incident_date <= end_dt)
         
-        # Get aggregated product data
+        # Get aggregated product data with deduplication
         product_aggregates = db.query(
             OutOfStockIncident.product_id,
             OutOfStockIncident.variant_id,
@@ -1654,7 +1664,8 @@ async def get_oos_products_report(
             OutOfStockIncident.sku,
             OutOfStockIncident.vendor,
             OutOfStockIncident.product_type,
-            func.count(OutOfStockIncident.id).label('total_incidents'),
+            func.count(func.distinct(func.concat(OutOfStockIncident.order_id, '|', OutOfStockIncident.rule_name, '|', OutOfStockIncident.attempted_location_id))).label('unique_incidents'),
+            func.count(OutOfStockIncident.id).label('total_records'),
             func.sum(OutOfStockIncident.quantity_attempted).label('total_quantity_affected'),
             func.count(func.distinct(OutOfStockIncident.order_id)).label('affected_orders'),
             func.min(OutOfStockIncident.incident_date).label('first_incident'),
@@ -1678,7 +1689,7 @@ async def get_oos_products_report(
             OutOfStockIncident.sku,
             OutOfStockIncident.vendor,
             OutOfStockIncident.product_type
-        ).order_by(desc('total_incidents')).all()
+        ).order_by(desc('unique_incidents')).all()
         
         # Get total counts
         total_incidents = query.count()
@@ -1706,7 +1717,7 @@ async def get_oos_products_report(
             # Calculate incident frequency (incidents per day)
             if product.first_incident and product.last_incident:
                 days_span = max(1, (product.last_incident - product.first_incident).days + 1)
-                incident_frequency = round(product.total_incidents / days_span, 2)
+                incident_frequency = round(product.unique_incidents / days_span, 2)
             else:
                 incident_frequency = 0
             
@@ -1718,7 +1729,8 @@ async def get_oos_products_report(
                 "sku": product.sku or "",
                 "vendor": product.vendor or "",
                 "product_type": product.product_type or "",
-                "total_incidents": product.total_incidents,
+                "unique_incidents": product.unique_incidents,
+                "total_records": product.total_records,
                 "total_quantity_affected": product.total_quantity_affected,
                 "affected_orders": product.affected_orders,
                 "locations_affected": locations_affected,

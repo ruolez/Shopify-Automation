@@ -99,6 +99,20 @@ def _record_oos_incident(
             product_type = product.get("productType", "")
             quantity = item.get("quantity", 1)
             
+            # Check if this exact incident already exists to prevent duplicates
+            existing_incident = db.query(OutOfStockIncident).filter(
+                OutOfStockIncident.user_id == user_id,
+                OutOfStockIncident.order_id == order_id,
+                OutOfStockIncident.product_id == product_id,
+                OutOfStockIncident.variant_id == variant_id,
+                OutOfStockIncident.rule_name == rule_name,
+                OutOfStockIncident.attempted_location_id == attempted_location_id
+            ).first()
+            
+            if existing_incident:
+                logger.info(f"OOS incident already exists for {product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
+                continue
+            
             # Create OOS incident record
             oos_incident = OutOfStockIncident(
                 user_id=user_id,
@@ -169,6 +183,20 @@ def _record_oos_incident_for_failed_items(
                 if skip_item:
                     continue
             failed_quantity = failed_item.get("failed_quantity", 1)
+            
+            # Check if this exact incident already exists to prevent duplicates
+            existing_incident = db.query(OutOfStockIncident).filter(
+                OutOfStockIncident.user_id == user_id,
+                OutOfStockIncident.order_id == order_id,
+                OutOfStockIncident.product_id == product_id,
+                OutOfStockIncident.variant_id == variant_id,
+                OutOfStockIncident.rule_name == rule_name,
+                OutOfStockIncident.attempted_location_id == attempted_location_id
+            ).first()
+            
+            if existing_incident:
+                logger.info(f"OOS incident already exists for {product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
+                continue
             
             # Create OOS incident record for failed item
             oos_incident = OutOfStockIncident(
