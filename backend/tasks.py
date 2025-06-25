@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
-from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU
 from shopify_client import ShopifyClient
 from rule_engine import RuleEngine
 
@@ -60,7 +60,8 @@ def _record_oos_incident(
     order: Dict,
     rule_name: str,
     attempted_location_id: str,
-    attempted_location_alias: str = None
+    attempted_location_alias: str = None,
+    excluded_skus: List[str] = None
 ):
     """Record out-of-stock incidents for all products in an order"""
     try:
@@ -70,6 +71,7 @@ def _record_oos_incident(
         
         # Get line items from the order
         line_items = order.get("lineItems", {}).get("edges", [])
+        excluded_skus = excluded_skus or []
         
         for item_edge in line_items:
             item = item_edge["node"]
@@ -82,6 +84,17 @@ def _record_oos_incident(
             product_title = item.get("title", "Unknown Product")
             variant_title = variant.get("title", "")
             sku = variant.get("sku", "")
+            
+            # Skip excluded SKUs
+            if sku and excluded_skus:
+                skip_item = False
+                for excluded_pattern in excluded_skus:
+                    if excluded_pattern.lower() in sku.lower():
+                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        skip_item = True
+                        break
+                if skip_item:
+                    continue
             vendor = product.get("vendor", "")
             product_type = product.get("productType", "")
             quantity = item.get("quantity", 1)
@@ -123,7 +136,8 @@ def _record_oos_incident_for_failed_items(
     rule_name: str,
     attempted_location_id: str,
     attempted_location_alias: str = None,
-    failed_items: List[Dict] = None
+    failed_items: List[Dict] = None,
+    excluded_skus: List[str] = None
 ):
     """Record out-of-stock incidents for specific failed items from partial fulfillment"""
     try:
@@ -135,12 +149,25 @@ def _record_oos_incident_for_failed_items(
             logger.warning(f"No failed items provided for OOS incident recording for order {order_number}")
             return
         
+        excluded_skus = excluded_skus or []
+        
         for failed_item in failed_items:
             # Extract product information from failed item data
             product_id = failed_item.get("product_id", "")
             variant_id = failed_item.get("variant_id", "")
             product_title = failed_item.get("product_title", "Unknown Product")
             sku = failed_item.get("sku", "")
+            
+            # Skip excluded SKUs
+            if sku and excluded_skus:
+                skip_item = False
+                for excluded_pattern in excluded_skus:
+                    if excluded_pattern.lower() in sku.lower():
+                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        skip_item = True
+                        break
+                if skip_item:
+                    continue
             failed_quantity = failed_item.get("failed_quantity", 1)
             
             # Create OOS incident record for failed item
@@ -180,7 +207,8 @@ def _record_oos_incident_for_unavailable_items(
     rule_name: str,
     attempted_location_id: str,
     attempted_location_alias: str = None,
-    unavailable_items: List[Dict] = None
+    unavailable_items: List[Dict] = None,
+    excluded_skus: List[str] = None
 ):
     """Record out-of-stock incidents for items that were unavailable during inventory pre-check"""
     try:
@@ -192,11 +220,24 @@ def _record_oos_incident_for_unavailable_items(
             logger.warning(f"No unavailable items provided for OOS incident recording for order {order_number}")
             return
         
+        excluded_skus = excluded_skus or []
+        
         for unavailable_item in unavailable_items:
             # Extract product information from inventory check data
             product_title = unavailable_item.get("product_title", "Unknown Product")
             variant_id = unavailable_item.get("variant_id", "")
             sku = unavailable_item.get("sku", "")
+            
+            # Skip excluded SKUs
+            if sku and excluded_skus:
+                skip_item = False
+                for excluded_pattern in excluded_skus:
+                    if excluded_pattern.lower() in sku.lower():
+                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        skip_item = True
+                        break
+                if skip_item:
+                    continue
             required_quantity = unavailable_item.get("required_quantity", 1)
             available_quantity = unavailable_item.get("available_quantity", 0)
             
@@ -249,7 +290,8 @@ async def _check_inventory_availability(
     client: ShopifyClient,
     fulfillment_order: Dict,
     target_location_id: str,
-    order_name: str
+    order_name: str,
+    excluded_skus: List[str] = None
 ) -> Dict[str, Any]:
     """Check if all products in fulfillment order are available at target location"""
     try:
@@ -274,6 +316,8 @@ async def _check_inventory_availability(
                 "error": "No line items found in fulfillment order"
             }
         
+        excluded_skus = excluded_skus or []
+        
         for item_edge in line_items:
             item = item_edge["node"]
             variant = item.get("variant", {})
@@ -283,6 +327,26 @@ async def _check_inventory_availability(
             variant_id = variant.get("id", "")
             sku = variant.get("sku", "")
             required_quantity = item.get("totalQuantity", 1)
+            
+            # Skip excluded SKUs from inventory check (they'll still be included in fulfillment move)
+            if sku and excluded_skus:
+                skip_item = False
+                for excluded_pattern in excluded_skus:
+                    if excluded_pattern.lower() in sku.lower():
+                        logger.info(f"Skipping inventory check for excluded SKU: {sku} (matches pattern '{excluded_pattern}') - will be included in fulfillment anyway")
+                        # Add to available items so it doesn't block fulfillment
+                        available_items.append({
+                            "product_title": product_title,
+                            "variant_id": variant_id,
+                            "sku": sku,
+                            "required_quantity": required_quantity,
+                            "available_quantity": "excluded_sku",
+                            "skipped_from_check": True
+                        })
+                        skip_item = True
+                        break
+                if skip_item:
+                    continue
             
             logger.info(f"Checking inventory for: {product_title} (SKU: {sku}), variant: {variant_id}, required: {required_quantity}")
             
@@ -471,6 +535,18 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     client = ShopifyClient(store.shop_domain, store.access_token)
     rule_engine = RuleEngine()
     
+    # Get excluded SKUs for this user
+    excluded_skus_query = db.query(ExcludedSKU).filter(
+        ExcludedSKU.user_id == store.user_id,
+        ExcludedSKU.is_active == True
+    ).all()
+    excluded_sku_patterns = [sku.sku_pattern for sku in excluded_skus_query]
+    
+    if excluded_sku_patterns:
+        logger.info(f"Loaded {len(excluded_sku_patterns)} excluded SKU patterns for user {store.user_id}: {excluded_sku_patterns}")
+    else:
+        logger.info(f"No excluded SKUs configured for user {store.user_id}")
+    
     # Always check orders from last 24 hours to catch any missed orders
     yesterday = datetime.utcnow() - timedelta(days=1)
     min_24h_date = yesterday.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -545,13 +621,13 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     
                     for rule in rules:
                         # Evaluate rule against current order state
-                        if rule_engine.evaluate_rule(rule, current_order):
+                        if rule_engine.evaluate_rule(rule, current_order, excluded_sku_patterns):
                             rules_applied = True
                             logger.info(f"Rule '{rule.name}' (priority {rule.priority}) matched for order {order_number}")
                             
                             # Apply rule actions and wait for completion
                             success = await _apply_rule_actions(
-                                client, rule, current_order, store, db
+                                client, rule, current_order, store, db, excluded_sku_patterns
                             )
                             
                             if success:
@@ -633,7 +709,8 @@ async def _apply_rule_actions(
     rule: ProcessingRule, 
     order: Dict, 
     store: ShopifyStore, 
-    db: Session
+    db: Session,
+    excluded_skus: List[str] = None
 ) -> bool:
     """Apply rule actions to an order"""
     success = True
@@ -701,7 +778,7 @@ async def _apply_rule_actions(
                             
                             # Pre-check: Verify ALL products are available at target location (all-or-nothing policy)
                             inventory_check = await _check_inventory_availability(
-                                client, fo, location_id, order.get("name", "Unknown")
+                                client, fo, location_id, order.get("name", "Unknown"), excluded_skus
                             )
                             
                             if not inventory_check["all_available"]:
@@ -795,7 +872,8 @@ async def _apply_rule_actions(
                                         rule_name=rule.name,
                                         attempted_location_id=location_id,
                                         attempted_location_alias=location_alias,
-                                        failed_items=failed_items
+                                        failed_items=failed_items,
+                                        excluded_skus=excluded_skus
                                     )
                                     
                                 except Exception as tag_error:
@@ -838,7 +916,8 @@ async def _apply_rule_actions(
                                         order=order,
                                         rule_name=rule.name,
                                         attempted_location_id=location_id,
-                                        attempted_location_alias=location_alias
+                                        attempted_location_alias=location_alias,
+                                        excluded_skus=excluded_skus
                                     )
                                     
                                 except Exception as tag_error:

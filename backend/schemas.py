@@ -226,3 +226,36 @@ class StoreLocationResponse(BaseModel):
     store_name: str
     store_domain: str
     locations: List[Dict[str, str]]  # [{"id": "gid://...", "name": "Location Name"}]
+
+# Excluded SKU schemas
+class ExcludedSKUCreate(BaseModel):
+    sku_pattern: str
+    description: Optional[str] = None
+    
+    @validator('sku_pattern')
+    def validate_sku_pattern(cls, v):
+        if not v or not v.strip():
+            raise ValueError('SKU pattern cannot be empty')
+        return v.strip()
+
+class ExcludedSKUUpdate(BaseModel):
+    sku_pattern: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    
+    @validator('sku_pattern')
+    def validate_sku_pattern(cls, v):
+        if v is not None and (not v or not v.strip()):
+            raise ValueError('SKU pattern cannot be empty')
+        return v.strip() if v else v
+
+class ExcludedSKUResponse(BaseModel):
+    id: int
+    sku_pattern: str
+    description: Optional[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True

@@ -20,6 +20,7 @@ class User(Base):
     order_logs = relationship("OrderLog", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("Settings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     location_aliases = relationship("LocationAlias", back_populates="user", cascade="all, delete-orphan")
+    excluded_skus = relationship("ExcludedSKU", back_populates="user", cascade="all, delete-orphan")
 
 class ShopifyStore(Base):
     __tablename__ = "shopify_stores"
@@ -193,4 +194,23 @@ class OutOfStockIncident(Base):
     __table_args__ = (
         # Index for product-based queries
         {'mysql_key_block_size': '1024'}
+    )
+
+class ExcludedSKU(Base):
+    __tablename__ = "excluded_skus"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    sku_pattern = Column(String, nullable=False, index=True)  # SKU pattern to match (can contain wildcards)
+    description = Column(Text)  # Optional description for why excluded
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User", back_populates="excluded_skus")
+    
+    # Unique constraint per user
+    __table_args__ = (
+        UniqueConstraint('user_id', 'sku_pattern', name='unique_user_excluded_sku'),
     )

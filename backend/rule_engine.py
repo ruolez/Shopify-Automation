@@ -28,7 +28,7 @@ class RuleEngine:
             "is_not_empty": self._is_not_empty
         }
     
-    def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any]) -> bool:
+    def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:
         """Evaluate if a rule applies to an order"""
         try:
             order_name = order.get("name", "unknown")
@@ -50,7 +50,7 @@ class RuleEngine:
             
             results = []
             for condition in conditions:
-                result = self._evaluate_condition(condition, order)
+                result = self._evaluate_condition(condition, order, excluded_skus)
                 results.append(result)
                 logger.info(f"  Condition {condition}: {result}")
             
@@ -68,7 +68,7 @@ class RuleEngine:
             logger.error(f"Error evaluating rule {rule.id}: {str(e)}")
             return False
     
-    def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any]) -> bool:
+    def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:
         """Evaluate a single condition"""
         try:
             field = condition.get("field")
@@ -80,7 +80,7 @@ class RuleEngine:
                 return False
             
             # Get the actual value from the order
-            actual_value = self._get_order_field_value(field, order)
+            actual_value = self._get_order_field_value(field, order, excluded_skus)
             
             # Convert expected value to uppercase for province/state/country fields to make comparison case-insensitive
             if field in ["shipping_province", "shipping_country", "billing_province", "billing_country"]:
@@ -101,7 +101,7 @@ class RuleEngine:
             logger.error(f"Error evaluating condition: {str(e)}")
             return False
     
-    def _get_order_field_value(self, field: str, order: Dict[str, Any]) -> Any:
+    def _get_order_field_value(self, field: str, order: Dict[str, Any], excluded_skus: List[str] = None) -> Any:
         """Extract field value from order data"""
         try:
             # Handle nested field access with dot notation
@@ -131,15 +131,33 @@ class RuleEngine:
                     return 0
                 weight_grams = float(weight_grams)
                 
-                # Debug: Also check individual line item weights to verify calculation
+                # Calculate weight from individual line items, excluding specified SKUs
                 line_items = order.get("lineItems", {}).get("edges", [])
                 total_calculated_weight = 0
-                logger.info(f"Order {order.get('name', 'unknown')}: Checking individual line item weights:")
+                excluded_skus = excluded_skus or []
+                excluded_count = 0
+                
+                logger.info(f"Order {order.get('name', 'unknown')}: Calculating weight (excluding {len(excluded_skus)} SKU patterns)")
                 
                 for item_edge in line_items:
                     item = item_edge["node"]
-                    quantity = item.get("quantity", 0)
                     variant = item.get("variant", {})
+                    sku = variant.get("sku", "")
+                    
+                    # Check if this SKU should be excluded
+                    skip_item = False
+                    if sku and excluded_skus:
+                        for excluded_pattern in excluded_skus:
+                            if excluded_pattern.lower() in sku.lower():
+                                skip_item = True
+                                excluded_count += 1
+                                logger.info(f"  - EXCLUDED: {item.get('title', 'Unknown')} (SKU: {sku}) matches pattern '{excluded_pattern}'")
+                                break
+                    
+                    if skip_item:
+                        continue
+                    
+                    quantity = item.get("quantity", 0)
                     inventory_item = variant.get("inventoryItem", {})
                     measurement = inventory_item.get("measurement", {})
                     weight_obj = measurement.get("weight", {})
@@ -160,10 +178,18 @@ class RuleEngine:
                     total_item_weight = item_weight_grams * quantity
                     total_calculated_weight += total_item_weight
                     
-                    logger.info(f"  - {item.get('title', 'Unknown')}: {quantity} x {item_weight_value} {item_weight_unit} = {total_item_weight}g")
+                    logger.info(f"  - {item.get('title', 'Unknown')} (SKU: {sku}): {quantity} x {item_weight_value} {item_weight_unit} = {total_item_weight}g")
+                
+                if excluded_count > 0:
+                    logger.info(f"Order {order.get('name', 'unknown')}: Excluded {excluded_count} items from weight calculation")
                 
                 logger.info(f"Order {order.get('name', 'unknown')}: Shopify currentTotalWeight = {weight_grams}g")
-                logger.info(f"Order {order.get('name', 'unknown')}: Calculated from line items = {total_calculated_weight}g")
+                logger.info(f"Order {order.get('name', 'unknown')}: Calculated from included line items = {total_calculated_weight}g")
+                
+                # When SKUs are excluded, always use calculated weight instead of Shopify's total
+                if excluded_skus and excluded_count > 0:
+                    logger.info(f"Order {order.get('name', 'unknown')}: Using calculated weight due to SKU exclusions")
+                    return total_calculated_weight
                 
                 # Use calculated weight if it's significantly different from Shopify's value
                 # This handles cases where Shopify's currentTotalWeight is incorrect

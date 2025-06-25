@@ -13,12 +13,12 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 from database import engine, get_db, create_tables
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
 from schemas import (
     UserCreate, UserLogin, TokenResponse, ShopifyStoreCreate, RuleCreate, SettingsUpdate, SettingsResponse, OrderLogQuery,
     LocationAliasCreate, LocationAliasUpdate, LocationAliasResponse, LocationMappingCreate, LocationMappingUpdate, 
-    LocationMappingResponse, StoreLocationResponse
+    LocationMappingResponse, StoreLocationResponse, ExcludedSKUCreate, ExcludedSKUUpdate, ExcludedSKUResponse
 )
 from shopify_client import ShopifyClient
 from tasks import test_celery_connection, process_store_orders, process_all_orders
@@ -1836,6 +1836,140 @@ async def analyze_selected_oos_orders(
     except Exception as e:
         logger.error(f"Error analyzing selected OOS orders: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to analyze selected orders")
+
+# Excluded SKU endpoints
+@app.get("/settings/excluded-skus", response_model=List[ExcludedSKUResponse])
+async def get_excluded_skus(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all excluded SKUs for the current user"""
+    try:
+        excluded_skus = db.query(ExcludedSKU).filter(
+            ExcludedSKU.user_id == current_user.id
+        ).order_by(ExcludedSKU.created_at.desc()).all()
+        
+        return excluded_skus
+        
+    except Exception as e:
+        logger.error(f"Error fetching excluded SKUs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch excluded SKUs")
+
+@app.post("/settings/excluded-skus", response_model=ExcludedSKUResponse)
+async def create_excluded_sku(
+    excluded_sku: ExcludedSKUCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new excluded SKU pattern"""
+    try:
+        # Check if pattern already exists for this user
+        existing = db.query(ExcludedSKU).filter(
+            ExcludedSKU.user_id == current_user.id,
+            ExcludedSKU.sku_pattern == excluded_sku.sku_pattern
+        ).first()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail="SKU pattern already exists")
+        
+        # Create new excluded SKU
+        db_excluded_sku = ExcludedSKU(
+            user_id=current_user.id,
+            sku_pattern=excluded_sku.sku_pattern,
+            description=excluded_sku.description
+        )
+        
+        db.add(db_excluded_sku)
+        db.commit()
+        db.refresh(db_excluded_sku)
+        
+        logger.info(f"Created excluded SKU pattern '{excluded_sku.sku_pattern}' for user {current_user.id}")
+        return db_excluded_sku
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating excluded SKU: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create excluded SKU")
+
+@app.put("/settings/excluded-skus/{sku_id}", response_model=ExcludedSKUResponse)
+async def update_excluded_sku(
+    sku_id: int,
+    excluded_sku_update: ExcludedSKUUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an excluded SKU pattern"""
+    try:
+        db_excluded_sku = db.query(ExcludedSKU).filter(
+            ExcludedSKU.id == sku_id,
+            ExcludedSKU.user_id == current_user.id
+        ).first()
+        
+        if not db_excluded_sku:
+            raise HTTPException(status_code=404, detail="Excluded SKU not found")
+        
+        # Check if new pattern conflicts with existing ones
+        if excluded_sku_update.sku_pattern and excluded_sku_update.sku_pattern != db_excluded_sku.sku_pattern:
+            existing = db.query(ExcludedSKU).filter(
+                ExcludedSKU.user_id == current_user.id,
+                ExcludedSKU.sku_pattern == excluded_sku_update.sku_pattern,
+                ExcludedSKU.id != sku_id
+            ).first()
+            
+            if existing:
+                raise HTTPException(status_code=400, detail="SKU pattern already exists")
+        
+        # Update fields
+        if excluded_sku_update.sku_pattern is not None:
+            db_excluded_sku.sku_pattern = excluded_sku_update.sku_pattern
+        if excluded_sku_update.description is not None:
+            db_excluded_sku.description = excluded_sku_update.description
+        if excluded_sku_update.is_active is not None:
+            db_excluded_sku.is_active = excluded_sku_update.is_active
+        
+        db.commit()
+        db.refresh(db_excluded_sku)
+        
+        logger.info(f"Updated excluded SKU {sku_id} for user {current_user.id}")
+        return db_excluded_sku
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating excluded SKU: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update excluded SKU")
+
+@app.delete("/settings/excluded-skus/{sku_id}")
+async def delete_excluded_sku(
+    sku_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an excluded SKU pattern"""
+    try:
+        db_excluded_sku = db.query(ExcludedSKU).filter(
+            ExcludedSKU.id == sku_id,
+            ExcludedSKU.user_id == current_user.id
+        ).first()
+        
+        if not db_excluded_sku:
+            raise HTTPException(status_code=404, detail="Excluded SKU not found")
+        
+        db.delete(db_excluded_sku)
+        db.commit()
+        
+        logger.info(f"Deleted excluded SKU {sku_id} for user {current_user.id}")
+        return {"message": "Excluded SKU deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting excluded SKU: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete excluded SKU")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

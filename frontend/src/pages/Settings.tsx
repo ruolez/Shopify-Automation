@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Switch } from '@headlessui/react';
 import { Dialog } from '@headlessui/react';
-import { ExclamationTriangleIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, TrashIcon, PlusIcon, PencilIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -32,6 +32,307 @@ interface ResetOptions {
   reset_task_status: boolean;
   confirmation: string;
 }
+
+interface ExcludedSKU {
+  id: number;
+  sku_pattern: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+const ExcludedSKUsSection: React.FC = () => {
+  const queryClient = useQueryClient();
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingSku, setEditingSku] = useState<ExcludedSKU | null>(null);
+  const [formData, setFormData] = useState({
+    sku_pattern: '',
+    description: ''
+  });
+
+  const { data: excludedSkus, isLoading } = useQuery<ExcludedSKU[]>({
+    queryKey: ['excluded-skus'],
+    queryFn: async () => {
+      const response = await api.get('/settings/excluded-skus');
+      return response.data;
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: { sku_pattern: string; description?: string }) => {
+      const response = await api.post('/settings/excluded-skus', data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['excluded-skus'] });
+      toast.success('Excluded SKU added successfully');
+      setShowAddModal(false);
+      setFormData({ sku_pattern: '', description: '' });
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to add excluded SKU');
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: Partial<ExcludedSKU> }) => {
+      const response = await api.put(`/settings/excluded-skus/${id}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['excluded-skus'] });
+      toast.success('Excluded SKU updated successfully');
+      setEditingSku(null);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to update excluded SKU');
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/settings/excluded-skus/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['excluded-skus'] });
+      toast.success('Excluded SKU deleted successfully');
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to delete excluded SKU');
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.sku_pattern.trim()) {
+      toast.error('SKU pattern is required');
+      return;
+    }
+
+    if (editingSku) {
+      updateMutation.mutate({
+        id: editingSku.id,
+        data: {
+          sku_pattern: formData.sku_pattern,
+          description: formData.description || undefined
+        }
+      });
+    } else {
+      createMutation.mutate({
+        sku_pattern: formData.sku_pattern,
+        description: formData.description || undefined
+      });
+    }
+  };
+
+  const startEdit = (sku: ExcludedSKU) => {
+    setEditingSku(sku);
+    setFormData({
+      sku_pattern: sku.sku_pattern,
+      description: sku.description || ''
+    });
+    setShowAddModal(true);
+  };
+
+  const cancelEdit = () => {
+    setEditingSku(null);
+    setFormData({ sku_pattern: '', description: '' });
+    setShowAddModal(false);
+  };
+
+  const toggleActive = (sku: ExcludedSKU) => {
+    updateMutation.mutate({
+      id: sku.id,
+      data: { is_active: !sku.is_active }
+    });
+  };
+
+  return (
+    <>
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-medium leading-6 text-gray-900">
+                Excluded SKUs
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                SKU patterns to exclude from weight calculations and OOS reporting. These products will still be moved during fulfillment location changes.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
+            >
+              <PlusIcon className="h-4 w-4 mr-2" />
+              Add SKU Pattern
+            </button>
+          </div>
+
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <LoadingSpinner size="md" />
+            </div>
+          ) : excludedSkus && excludedSkus.length > 0 ? (
+            <div className="space-y-3">
+              {excludedSkus.map((sku) => (
+                <div
+                  key={sku.id}
+                  className="flex items-center justify-between p-4 border border-gray-200 rounded-lg"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-3">
+                      <code className="px-2 py-1 bg-gray-100 rounded text-sm font-mono">
+                        {sku.sku_pattern}
+                      </code>
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          sku.is_active
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {sku.is_active ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    {sku.description && (
+                      <p className="mt-1 text-sm text-gray-600">{sku.description}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-400">
+                      Created: {new Date(sku.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      checked={sku.is_active}
+                      onChange={() => toggleActive(sku)}
+                      className={`${
+                        sku.is_active ? 'bg-shopify-600' : 'bg-gray-200'
+                      } relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-shopify-500 focus:ring-offset-2`}
+                    >
+                      <span className="sr-only">Toggle active status</span>
+                      <span
+                        className={`${
+                          sku.is_active ? 'translate-x-6' : 'translate-x-1'
+                        } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                      />
+                    </Switch>
+                    <button
+                      onClick={() => startEdit(sku)}
+                      className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
+                      title="Edit SKU pattern"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm('Are you sure you want to delete this SKU pattern?')) {
+                          deleteMutation.mutate(sku.id);
+                        }
+                      }}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete SKU pattern"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <p>No excluded SKU patterns configured.</p>
+              <p className="text-sm">Add patterns to exclude specific products from weight calculations and OOS reporting.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Add/Edit Modal */}
+      <Dialog
+        open={showAddModal}
+        onClose={cancelEdit}
+        className="fixed inset-0 z-50 overflow-y-auto"
+      >
+        <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+          <Dialog.Overlay className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+
+          <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+            <div>
+              <div className="mt-3 text-center sm:mt-0 sm:text-left">
+                <Dialog.Title
+                  as="h3"
+                  className="text-lg leading-6 font-medium text-gray-900"
+                >
+                  {editingSku ? 'Edit' : 'Add'} Excluded SKU Pattern
+                </Dialog.Title>
+                <div className="mt-4">
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                      <label htmlFor="sku_pattern" className="block text-sm font-medium text-gray-700">
+                        SKU Pattern
+                      </label>
+                      <input
+                        type="text"
+                        id="sku_pattern"
+                        value={formData.sku_pattern}
+                        onChange={(e) => setFormData({ ...formData, sku_pattern: e.target.value })}
+                        placeholder="e.g., SAMPLE, TEST-, _EXCLUDED"
+                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                        required
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Products with SKUs containing this text will be excluded (case-insensitive)
+                      </p>
+                    </div>
+                    <div>
+                      <label htmlFor="description" className="block text-sm font-medium text-gray-700">
+                        Description (optional)
+                      </label>
+                      <textarea
+                        id="description"
+                        value={formData.description}
+                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                        placeholder="Why is this SKU pattern excluded?"
+                        rows={3}
+                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                      />
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+              <button
+                type="submit"
+                onClick={handleSubmit}
+                disabled={createMutation.isPending || updateMutation.isPending}
+                className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-shopify-600 text-base font-medium text-white hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+              >
+                {createMutation.isPending || updateMutation.isPending ? (
+                  <>
+                    <LoadingSpinner size="sm" className="mr-2" />
+                    {editingSku ? 'Updating...' : 'Adding...'}
+                  </>
+                ) : (
+                  editingSku ? 'Update' : 'Add'
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={cancelEdit}
+                className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 sm:mt-0 sm:w-auto sm:text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </Dialog>
+    </>
+  );
+};
 
 const Settings: React.FC = () => {
   const queryClient = useQueryClient();
@@ -242,6 +543,9 @@ const Settings: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Excluded SKUs section */}
+      <ExcludedSKUsSection />
 
       {/* Data Management section */}
       <div className="bg-white shadow rounded-lg">
