@@ -107,13 +107,26 @@ if ! command -v docker &> /dev/null; then
             lsb-release \
             software-properties-common
         
+        # Install lsb-release if missing
+        if ! command -v lsb_release &> /dev/null; then
+            sudo apt-get install -y lsb-release
+        fi
+        
         # Add Docker's official GPG key
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+        
+        # Determine Ubuntu codename
+        if command -v lsb_release &> /dev/null; then
+            UBUNTU_CODENAME=$(lsb_release -cs)
+        else
+            # Fallback method using /etc/os-release
+            UBUNTU_CODENAME=$(grep VERSION_CODENAME /etc/os-release | cut -d'=' -f2)
+        fi
         
         # Add Docker repository
         echo \
           "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-          $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          ${UBUNTU_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
         
         # Install Docker
         sudo apt-get update
@@ -144,17 +157,41 @@ if ! command -v docker &> /dev/null; then
     sudo usermod -aG docker $USER
     
     # Start Docker service
-    sudo systemctl start docker
-    sudo systemctl enable docker
+    sudo systemctl start docker || sudo service docker start
+    sudo systemctl enable docker || true
+    
+    # Fix Docker socket permissions
+    sudo chmod 666 /var/run/docker.sock || true
     
     print_success "Docker installed successfully!"
     print_warning "You need to log out and back in for group changes to take effect."
     
     # Try to activate group without logout (may not work on all systems)
-    newgrp docker || true
+    if [ "$SKIP_GROUP_REFRESH" != "true" ]; then
+        export SKIP_GROUP_REFRESH=true
+        exec sg docker "$0 $@"
+    fi
 else
     print_success "Docker is already installed."
 fi
+
+# Ensure Docker daemon is running
+print_status "Checking Docker daemon..."
+if ! docker info >/dev/null 2>&1; then
+    print_warning "Docker daemon is not running. Starting Docker..."
+    sudo systemctl start docker || sudo service docker start
+    sleep 5
+    
+    # Fix permissions if needed
+    sudo chmod 666 /var/run/docker.sock || true
+    
+    if ! docker info >/dev/null 2>&1; then
+        print_error "Docker daemon failed to start. Please check Docker installation."
+        print_error "Try running: sudo dockerd"
+        exit 1
+    fi
+fi
+print_success "Docker daemon is running."
 
 # Check Docker Compose v2
 if ! docker compose version &> /dev/null; then
