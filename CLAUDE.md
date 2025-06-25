@@ -157,6 +157,45 @@ docker exec shopify_worker celery -A tasks.celery inspect active
 docker exec shopify_api python -c "from tasks import test_celery_connection; test_celery_connection.delay()"
 ```
 
+### Production Update and Deployment
+
+**Update Script Usage (2025-06-25)**
+The `update.sh` script provides flexible deployment options for production servers:
+
+```bash
+# Full update with data protection (DEFAULT - RECOMMENDED)
+./update.sh
+# - Creates backup of database and Redis data
+# - Pulls latest code from git
+# - Rebuilds containers with new code  
+# - Automatically restores database from backup
+# - Use when: deploying code changes with maximum safety
+
+# Code-only update (preserves existing data as-is)
+./update.sh --keep-db
+# - No backup created or restored
+# - Pulls latest code from git
+# - Rebuilds containers with new code
+# - Database volume persists unchanged through rebuild
+# - Use when: confident in data integrity, want faster updates
+
+# Other options
+./update.sh --backup-only           # Just create backup, no update
+./update.sh --restore-from BACKUP   # Restore from specific backup  
+./update.sh --no-pull              # Update without pulling git changes
+```
+
+**Migration-Safe Updates**
+For schema changes, use `update-with-migration.sh`:
+```bash
+# Schema-safe update (handles database structure changes)
+./update-with-migration.sh
+# - Exports data as SQL before update (schema-independent)
+# - Pulls latest code and rebuilds containers
+# - Imports data into new schema structure
+# - Use when: database model changes, new tables added
+```
+
 ## Critical Implementation Details
 
 ### Shopify GraphQL Integration
@@ -215,13 +254,45 @@ This system handles complex real-time order processing with proper error handlin
   - **Critical**: Excluded SKUs still participate in fulfillment location moves
   - Extensive logging for debugging and visibility
 
+#### OOS Reports Deduplication System (2025-06-25)
+**Purpose**: Prevents duplicate orders from appearing in reports when multiple retries or rules affect the same order.
+- **Key Improvements**:
+  - **Order-Level Deduplication**: OOS orders report now shows each order only once (keeps most recent entry)
+  - **Product-Level Deduplication**: OOS products report uses composite key deduplication for accurate incident counts
+  - **Transparent Metrics**: Reports show both `unique_incidents` (deduplicated) and `total_records` (raw count)
+  - **Prevention Logic**: Database-level checks prevent duplicate OOS incident creation
+- **Implementation**: 
+  - `backend/main.py` - Updated report endpoints with deduplication queries
+  - `backend/tasks.py` - Added existence checks before creating OOS incidents
+  - Applied to all three OOS recording functions: `_record_oos_incident`, `_record_oos_incident_for_failed_items`
+- **Result**: Accurate reporting regardless of how many times orders are retried or processed by multiple rules
+
+#### Order Logs Status Classification (2025-06-25)
+**Purpose**: Provides clear, meaningful status classification that distinguishes rule matching from action outcomes.
+- **New Status Logic**:
+  - **"Match"** = Rule matched and was applied (even if fulfillment failed due to inventory issues)
+  - **"Skipped"** = No rules matched the order
+  - **"Error"** = System errors or Shopify API errors (non-inventory issues)
+- **Key Changes**:
+  - Rule matching always shows "Match" status regardless of action success/failure
+  - `fulfillment_move_failed` logs use "info" status (don't affect main order status)
+  - Frontend updated with new status icons and filter options
+  - Backward compatibility maintained for historical data
+- **Implementation**:
+  - `backend/tasks.py` - Updated rule processing and retry logic status assignment
+  - `frontend/src/pages/OrderLogs.tsx` - New status icons, filters, and grouping logic
+- **Benefits**:
+  - Clear distinction between "rule matched" vs "actions succeeded"
+  - Out-of-stock fulfillment failures don't mask successful rule application
+  - Better user understanding of order processing outcomes
+
 #### Previous Features (2025-06-24)
 
 #### Enhanced Order Logs Page
 - **Grouped View**: Orders now grouped by order number with expand/collapse functionality
 - **Sorting**: All columns (Order, Store, Actions, Status, Latest Activity) are sortable
 - **Space Efficiency**: One line per order by default, expandable to show all log entries
-- **Status Indicators**: Visual badges showing Mixed, Failed, Success, Info status for each order
+- **Status Indicators**: Visual badges showing Match, Error, Skipped status for each order (updated in 2025-06-25)
 - **Action Count**: Badge showing number of events per order
 
 #### Data Reset Feature
