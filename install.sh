@@ -53,9 +53,33 @@ fi
 cleanup_previous_installation() {
     print_warning "Cleaning up previous installation..."
     
+    # Backup database if requested
+    if [ "$KEEP_DATABASE" = "true" ]; then
+        print_status "Backing up existing database..."
+        BACKUP_DIR="./backups/install_backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+        
+        # Backup SQLite database
+        if docker volume inspect shopify-automation_sqlite_data >/dev/null 2>&1; then
+            docker run --rm -v shopify-automation_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
+            print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
+            export RESTORE_DB_PATH="$BACKUP_DIR"
+        fi
+        
+        # Backup Redis data
+        if docker volume inspect shopify-automation_redis_data >/dev/null 2>&1; then
+            docker run --rm -v shopify-automation_redis_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/redis_data.tar.gz -C /source .
+            print_success "Redis data backed up to $BACKUP_DIR/redis_data.tar.gz"
+        fi
+    fi
+    
     # Stop and remove containers
     if docker compose ps >/dev/null 2>&1; then
-        docker compose down -v 2>/dev/null || true
+        if [ "$KEEP_DATABASE" = "true" ]; then
+            docker compose down 2>/dev/null || true
+        else
+            docker compose down -v 2>/dev/null || true
+        fi
     fi
     
     # Remove Docker images
@@ -69,6 +93,30 @@ cleanup_previous_installation() {
     rm -f frontend/.env 2>/dev/null || true
     
     print_success "Previous installation cleaned up."
+}
+
+# Function to restore database from backup
+restore_database() {
+    local backup_path="$1"
+    
+    if [ ! -d "$backup_path" ]; then
+        print_error "Backup directory $backup_path does not exist!"
+        return 1
+    fi
+    
+    print_status "Restoring database from backup..."
+    
+    # Restore SQLite database
+    if [ -f "$backup_path/sqlite_data.tar.gz" ]; then
+        docker run --rm -v shopify-automation_sqlite_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/sqlite_data.tar.gz -C /target"
+        print_success "Database restored"
+    fi
+    
+    # Restore Redis data
+    if [ -f "$backup_path/redis_data.tar.gz" ]; then
+        docker run --rm -v shopify-automation_redis_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/redis_data.tar.gz -C /target"
+        print_success "Redis data restored"
+    fi
 }
 
 # Get server configuration
@@ -104,18 +152,67 @@ get_server_config() {
     print_success "Server IP set to: $SERVER_IP"
 }
 
+# Parse command line arguments
+KEEP_DATABASE=false
+CLEAN_INSTALL=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --clean)
+            CLEAN_INSTALL=true
+            shift
+            ;;
+        --keep-db)
+            KEEP_DATABASE=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --clean               Clean installation (remove all previous data)"
+            echo "  --keep-db             Keep existing database during reinstall"
+            echo "  --help, -h            Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $0                    # Fresh installation"
+            echo "  $0 --clean           # Clean installation (remove all data)"
+            echo "  $0 --keep-db          # Reinstall but keep existing database"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 print_status "Starting installation process..."
 
 # Check if this is a cleanup/reinstall
-if [ "$1" = "--clean" ] || [ -f docker-compose.yml ]; then
-    if [ "$1" = "--clean" ]; then
+if [ "$CLEAN_INSTALL" = true ] || [ -f docker-compose.yml ]; then
+    if [ "$CLEAN_INSTALL" = true ]; then
+        cleanup_previous_installation
+    elif [ "$KEEP_DATABASE" = true ]; then
+        print_status "Keeping existing database and updating application..."
         cleanup_previous_installation
     else
-        read -p "Previous installation detected. Clean up first? (Y/n) " -n 1 -r
+        read -p "Previous installation detected. What would you like to do? (c)lean all, (k)eep database, (a)bort? " -n 1 -r
         echo
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            cleanup_previous_installation
-        fi
+        case $REPLY in
+            [Cc])
+                cleanup_previous_installation
+                ;;
+            [Kk])
+                KEEP_DATABASE=true
+                cleanup_previous_installation
+                ;;
+            *)
+                print_status "Installation aborted by user."
+                exit 0
+                ;;
+        esac
     fi
 fi
 
@@ -493,9 +590,14 @@ fi
 
 print_success "All services started successfully!"
 
-# Step 7: Initialize database
-print_status "Initializing database..."
-docker exec shopify_api python -c "
+# Step 7: Initialize or restore database
+if [ -n "$RESTORE_DB_PATH" ]; then
+    print_status "Restoring database from backup..."
+    restore_database "$RESTORE_DB_PATH"
+    print_success "Database restored from backup!"
+else
+    print_status "Initializing database..."
+    docker exec shopify_api python -c "
 from database import Base, engine
 from models import *
 try:
@@ -506,11 +608,12 @@ except Exception as e:
     exit(1)
 "
 
-if [ $? -eq 0 ]; then
-    print_success "Database initialized successfully!"
-else
-    print_error "Database initialization failed!"
-    exit 1
+    if [ $? -eq 0 ]; then
+        print_success "Database initialized successfully!"
+    else
+        print_error "Database initialization failed!"
+        exit 1
+    fi
 fi
 
 # Step 8: Health check

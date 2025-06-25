@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Shopify Multi-Store Order Management System
-# Update Script - Pull latest changes and rebuild
+# Shopify Automation - Update Script
+# Safely updates the application while preserving data
 
-set -e  # Exit on error
+set -e  # Exit on any error
 
 # Colors for output
 RED='\033[0;31m'
@@ -12,164 +12,226 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Function to print colored output
-print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+# Configuration
+BACKUP_DIR="./backups/$(date +%Y%m%d_%H%M%S)"
+COMPOSE_FILE="docker-compose.prod.yml"
+
+print_header() {
+    echo -e "${BLUE}================================================${NC}"
+    echo -e "${BLUE}     Shopify Automation - Update Script        ${NC}"
+    echo -e "${BLUE}================================================${NC}"
+    echo ""
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${GREEN}✓ $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}⚠ $1${NC}"
 }
 
-# Banner
-echo -e "${BLUE}"
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║     Shopify Multi-Store Order Management System           ║"
-echo "║                    Update Script                          ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
 
-# Check if Docker is running
-if ! docker info > /dev/null 2>&1; then
-    print_error "Docker is not running. Please start Docker and try again."
-    exit 1
-fi
+print_info() {
+    echo -e "${BLUE}ℹ $1${NC}"
+}
 
-# Step 1: Check for uncommitted changes
-print_status "Checking for uncommitted changes..."
-if [[ -n $(git status -s) ]]; then
-    print_warning "You have uncommitted changes:"
-    git status -s
-    read -p "Do you want to stash these changes and continue? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        git stash push -m "Auto-stash before update $(date +%Y%m%d-%H%M%S)"
-        print_success "Changes stashed."
+# Function to backup database and redis data
+backup_data() {
+    print_info "Creating backup in $BACKUP_DIR..."
+    mkdir -p "$BACKUP_DIR"
+    
+    # Backup SQLite database
+    if docker volume inspect shopify-automation_sqlite_data >/dev/null 2>&1; then
+        print_info "Backing up SQLite database..."
+        docker run --rm -v shopify-automation_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
+        print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
     else
-        print_error "Update cancelled. Please commit or stash your changes first."
-        exit 1
+        print_warning "SQLite volume not found, skipping database backup"
+    fi
+    
+    # Backup Redis data
+    if docker volume inspect shopify-automation_redis_data >/dev/null 2>&1; then
+        print_info "Backing up Redis data..."
+        docker run --rm -v shopify-automation_redis_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/redis_data.tar.gz -C /source .
+        print_success "Redis data backed up to $BACKUP_DIR/redis_data.tar.gz"
+    else
+        print_warning "Redis volume not found, skipping Redis backup"
+    fi
+    
+    # Backup logs if they exist
+    if [ -d "./logs" ]; then
+        print_info "Backing up logs..."
+        cp -r ./logs "$BACKUP_DIR/"
+        print_success "Logs backed up"
+    fi
+}
+
+# Function to restore database from backup
+restore_data() {
+    local backup_path="$1"
+    
+    if [ ! -d "$backup_path" ]; then
+        print_error "Backup directory $backup_path does not exist!"
+        return 1
+    fi
+    
+    print_info "Restoring data from $backup_path..."
+    
+    # Restore SQLite database
+    if [ -f "$backup_path/sqlite_data.tar.gz" ]; then
+        print_info "Restoring SQLite database..."
+        docker run --rm -v shopify-automation_sqlite_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/sqlite_data.tar.gz -C /target"
+        print_success "Database restored"
+    fi
+    
+    # Restore Redis data
+    if [ -f "$backup_path/redis_data.tar.gz" ]; then
+        print_info "Restoring Redis data..."
+        docker run --rm -v shopify-automation_redis_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/redis_data.tar.gz -C /target"
+        print_success "Redis data restored"
+    fi
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --keep-db              Keep existing database (don't backup/restore)"
+    echo "  --backup-only          Only create backup, don't update"
+    echo "  --restore-from PATH    Restore from specific backup directory"
+    echo "  --no-pull              Don't pull latest code from git"
+    echo "  --help, -h             Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0                     # Full update with backup"
+    echo "  $0 --keep-db           # Update code only, keep existing database"
+    echo "  $0 --backup-only       # Just create a backup"
+    echo "  $0 --restore-from ./backups/20231225_143000  # Restore from specific backup"
+}
+
+# Parse command line arguments
+KEEP_DB=false
+BACKUP_ONLY=false
+RESTORE_FROM=""
+NO_PULL=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --keep-db)
+            KEEP_DB=true
+            shift
+            ;;
+        --backup-only)
+            BACKUP_ONLY=true
+            shift
+            ;;
+        --restore-from)
+            RESTORE_FROM="$2"
+            shift 2
+            ;;
+        --no-pull)
+            NO_PULL=true
+            shift
+            ;;
+        --help|-h)
+            show_usage
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Main execution
+print_header
+
+# Handle restore-from option
+if [ -n "$RESTORE_FROM" ]; then
+    print_info "Restoring from backup: $RESTORE_FROM"
+    
+    # Stop services
+    print_info "Stopping services..."
+    docker-compose -f "$COMPOSE_FILE" down
+    
+    # Restore data
+    restore_data "$RESTORE_FROM"
+    
+    # Start services
+    print_info "Starting services..."
+    docker-compose -f "$COMPOSE_FILE" up -d
+    
+    print_success "Restore completed!"
+    exit 0
+fi
+
+# Create backup (unless keeping database)
+if [ "$BACKUP_ONLY" = true ] || [ "$KEEP_DB" = false ]; then
+    backup_data
+fi
+
+# Exit if backup-only
+if [ "$BACKUP_ONLY" = true ]; then
+    print_success "Backup completed!"
+    exit 0
+fi
+
+# Pull latest code
+if [ "$NO_PULL" = false ]; then
+    print_info "Pulling latest code from repository..."
+    if git pull origin main; then
+        print_success "Code updated successfully"
+    else
+        print_warning "Git pull failed, continuing with local changes"
     fi
 fi
 
-# Step 2: Pull latest changes
-print_status "Pulling latest changes from repository..."
-git pull origin main
-if [ $? -eq 0 ]; then
-    print_success "Successfully pulled latest changes."
+# Stop services
+print_info "Stopping services..."
+docker-compose -f "$COMPOSE_FILE" down
+
+# Rebuild containers (force rebuild to get latest changes)
+print_info "Rebuilding containers..."
+docker-compose -f "$COMPOSE_FILE" build --no-cache
+
+# Start services
+print_info "Starting updated services..."
+docker-compose -f "$COMPOSE_FILE" up -d
+
+# Wait for services to be ready
+print_info "Waiting for services to start..."
+sleep 10
+
+# Check if services are running
+print_info "Checking service status..."
+if docker-compose -f "$COMPOSE_FILE" ps | grep -q "Up"; then
+    print_success "Services are running!"
 else
-    print_error "Failed to pull changes. Please check your git configuration."
-    exit 1
+    print_error "Some services may not be running properly"
+    docker-compose -f "$COMPOSE_FILE" ps
 fi
 
-# Step 3: Check for .env updates
-print_status "Checking for environment configuration updates..."
-if [ -f .env.example ]; then
-    # Check if there are new variables in .env.example that aren't in .env
-    if [ -f .env ]; then
-        NEW_VARS=$(comm -23 <(grep -E "^[A-Z_]+=" .env.example | cut -d= -f1 | sort) <(grep -E "^[A-Z_]+=" .env | cut -d= -f1 | sort))
-        if [ ! -z "$NEW_VARS" ]; then
-            print_warning "New environment variables detected:"
-            echo "$NEW_VARS"
-            print_warning "Please add these to your .env file after the update."
-        fi
-    fi
-fi
+print_success "Update completed!"
+print_info "Backup saved to: $BACKUP_DIR"
 
-# Step 4: Backup database
-print_status "Creating database backup..."
-BACKUP_NAME="db-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-if docker run --rm -v shopify-automation_sqlite_data:/data -v $(pwd)/backups:/backup alpine tar czf /backup/$BACKUP_NAME -C /data . 2>/dev/null; then
-    print_success "Database backed up to backups/$BACKUP_NAME"
+if [ "$KEEP_DB" = false ]; then
+    print_info "Database was backed up and preserved"
 else
-    print_warning "Database backup failed. Continuing anyway..."
+    print_info "Database was kept without backup"
 fi
 
-# Step 5: Stop services
-print_status "Stopping services..."
-docker compose down
-print_success "Services stopped."
+print_info "You can now access the application at http://localhost"
+print_info "Hot reload is enabled for frontend development"
 
-# Step 6: Clear Docker cache (important for frontend changes)
-print_status "Clearing Docker build cache..."
-docker system prune -f
-print_success "Docker cache cleared."
-
-# Step 7: Rebuild images
-print_status "Rebuilding Docker images (this may take a few minutes)..."
-docker compose build --no-cache
-print_success "Docker images rebuilt."
-
-# Step 8: Start services
-print_status "Starting services..."
-docker compose up -d
-
-# Wait for services to start
-print_status "Waiting for services to initialize..."
-sleep 30
-
-# Step 9: Run database migrations if needed
-print_status "Checking for database updates..."
-docker exec shopify_api python -c "
-from database import Base, engine
-from models import *
-try:
-    # This will create any new tables/columns
-    Base.metadata.create_all(bind=engine)
-    print('Database schema updated successfully!')
-except Exception as e:
-    print(f'Database update failed: {e}')
-    exit(1)
-"
-
-if [ $? -eq 0 ]; then
-    print_success "Database schema updated!"
-else
-    print_warning "Database update failed. Manual intervention may be required."
-fi
-
-# Step 10: Health check
-print_status "Performing health check..."
-sleep 5
-
-# Check API health
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health | grep -q "200"; then
-    print_success "API is healthy!"
-else
-    print_warning "API health check failed. It may still be starting up."
-fi
-
-# Check services status
-print_status "Checking service status..."
-docker compose ps
-
-# Final summary
-echo
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}            Update completed successfully!${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo
-echo -e "${BLUE}Your application has been updated to the latest version.${NC}"
-echo
-echo -e "${YELLOW}Post-update checklist:${NC}"
-echo -e "  • Check logs for any errors: ${GREEN}docker compose logs -f${NC}"
-echo -e "  • Verify your stores are still connected"
-echo -e "  • Test your processing rules"
-echo -e "  • Review any new environment variables in .env.example"
-echo
-echo -e "${BLUE}Access your application at:${NC}"
-echo -e "  • Frontend: ${GREEN}http://localhost:3000${NC}"
-echo -e "  • API Docs: ${GREEN}http://localhost:8000/docs${NC}"
-echo
-
-# Check if there were stashed changes
-if git stash list | grep -q "Auto-stash before update"; then
-    print_warning "You have stashed changes. To restore them, run: git stash pop"
-fi
+echo ""
+print_info "Useful commands:"
+echo "  docker-compose -f $COMPOSE_FILE logs -f     # View logs"
+echo "  docker-compose -f $COMPOSE_FILE ps          # Check status"
+echo "  ./update.sh --restore-from $BACKUP_DIR      # Restore this backup"
