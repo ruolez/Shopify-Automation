@@ -372,11 +372,11 @@ if [ -f .env.example ]; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
         sed -i '' "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
-        sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" .env
+        sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP:8000|" .env
     else
         # Linux
         sed -i "s/your-secret-key-change-this-in-production-use-at-least-32-chars/$SECRET_KEY/" .env
-        sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" .env
+        sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP:8000|" .env
     fi
     
     print_success "Environment file created with secure secret key and correct API URL."
@@ -389,13 +389,25 @@ fi
 print_status "Updating docker-compose configuration..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" docker-compose.yml
+    sed -i '' "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP:8000|" docker-compose.yml
 else
     # Linux
-    sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP/api|" docker-compose.yml
+    sed -i "s|VITE_API_URL=http://localhost:8000|VITE_API_URL=http://$SERVER_IP:8000|" docker-compose.yml
 fi
 
 print_success "Docker configuration updated with correct API URL."
+
+# Update CORS settings in backend to allow requests from frontend
+print_status "Updating CORS configuration..."
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    sed -i '' "s|allow_origins=\[\"http://localhost:3000\", \"http://localhost\"\]|allow_origins=[\"http://$SERVER_IP:3000\", \"http://$SERVER_IP\", \"http://localhost:3000\", \"http://localhost\"]|" backend/main.py
+else
+    # Linux
+    sed -i "s|allow_origins=\[\"http://localhost:3000\", \"http://localhost\"\]|allow_origins=[\"http://$SERVER_IP:3000\", \"http://$SERVER_IP\", \"http://localhost:3000\", \"http://localhost\"]|" backend/main.py
+fi
+
+print_success "CORS configuration updated for server IP."
 
 # Step 4: Check port availability
 print_status "Checking port availability..."
@@ -486,8 +498,8 @@ echo -e "${GREEN}═════════════════════
 echo
 echo -e "${BLUE}🌐 Access your application at:${NC}"
 echo -e "  • ${GREEN}Frontend (Main App): http://$SERVER_IP${NC}"
-echo -e "  • ${GREEN}API Documentation: http://$SERVER_IP/api/docs${NC}"
-echo -e "  • ${GREEN}Direct API Access: http://$SERVER_IP:8000/docs${NC} (if needed)"
+echo -e "  • ${GREEN}API Documentation: http://$SERVER_IP:8000/docs${NC}"
+echo -e "  • ${GREEN}Health Check: http://$SERVER_IP/health${NC}"
 echo
 echo -e "${BLUE}📝 Next steps:${NC}"
 echo -e "  1. Open ${GREEN}http://$SERVER_IP${NC} in your browser"
