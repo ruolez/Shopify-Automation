@@ -309,14 +309,17 @@ async def _check_inventory_availability(
                     
             except Exception as item_error:
                 logger.error(f"Failed to check inventory for {product_title} (SKU: {sku}): {str(item_error)}")
-                # Assume unavailable if we can't check
-                unavailable_items.append({
+                # Don't assume unavailable on API errors - let fulfillment attempt be the source of truth
+                # API errors (timeouts, network issues) should not trigger false OOS incidents
+                logger.warning(f"Inventory check failed for {product_title} - will attempt fulfillment anyway to determine actual availability")
+                # Add to available_items to allow fulfillment attempt (conservative approach)
+                available_items.append({
                     "product_title": product_title,
                     "variant_id": variant_id,
                     "sku": sku,
                     "required_quantity": required_quantity,
-                    "available_quantity": 0,
-                    "error": str(item_error)
+                    "available_quantity": "unknown_due_to_api_error",
+                    "check_error": str(item_error)
                 })
         
         all_available = len(unavailable_items) == 0 and len(line_items) > 0
@@ -332,13 +335,16 @@ async def _check_inventory_availability(
         
     except Exception as e:
         logger.error(f"Failed to check inventory availability for order {order_name}: {str(e)}")
-        # Assume all unavailable if we can't check
+        # Don't assume unavailable on broad API failures - let fulfillment attempt proceed
+        # This prevents false OOS incidents due to temporary API issues
+        logger.warning(f"Inventory check system failed for order {order_name} - will attempt fulfillment anyway")
         return {
-            "all_available": False,
+            "all_available": True,  # Conservative: allow fulfillment attempt
             "available_items": [],
             "unavailable_items": [],
             "total_items": 0,
-            "error": str(e)
+            "check_error": str(e),
+            "note": "Inventory check failed - fulfillment will determine actual availability"
         }
 
 def resolve_location_alias(alias_name: str, store_id: int, db: Session) -> str | None:
@@ -730,17 +736,10 @@ async def _apply_rule_actions(
                                     logger.info("Waiting 1000ms for Shopify to process OOS tag...")
                                     await asyncio.sleep(1.0)
                                     
-                                    # Record OOS incidents for ONLY the products that were actually unavailable
-                                    _record_oos_incident_for_unavailable_items(
-                                        db=db,
-                                        user_id=store.user_id,
-                                        store_id=store.id,
-                                        order=order,
-                                        rule_name=rule.name,
-                                        attempted_location_id=location_id,
-                                        attempted_location_alias=location_alias,
-                                        unavailable_items=inventory_check["unavailable_items"]
-                                    )
+                                    # Don't record OOS incidents for pre-check failures
+                                    # OOS incidents should only be recorded when actual fulfillment fails
+                                    # Pre-check failures may be due to API errors, not real stock issues
+                                    logger.info(f"Skipping OOS incident recording for pre-check failure - {len(inventory_check['unavailable_items'])} items unavailable in pre-check")
                                     
                                 except Exception as tag_error:
                                     logger.error(f"Failed to add OOS tag for all-or-nothing pre-check failure: {str(tag_error)}")
