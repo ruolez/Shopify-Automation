@@ -90,7 +90,7 @@ def _record_oos_incident(
                 skip_item = False
                 for excluded_pattern in excluded_skus:
                     if excluded_pattern.lower() in sku.lower():
-                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        logger.info(f"✅ EXCLUDED: Skipping OOS incident for SKU '{sku}' (matches pattern '{excluded_pattern}') - Order {order_number}")
                         skip_item = True
                         break
                 if skip_item:
@@ -172,12 +172,25 @@ def _record_oos_incident_for_failed_items(
             product_title = failed_item.get("product_title", "Unknown Product")
             sku = failed_item.get("sku", "")
             
+            # SECURITY FIX: If SKU is missing from failed_item, get it from original order
+            if not sku and variant_id:
+                line_items = order.get("lineItems", {}).get("edges", [])
+                for item_edge in line_items:
+                    item_variant = item_edge["node"].get("variant", {})
+                    if item_variant.get("id") == variant_id:
+                        sku = item_variant.get("sku", "")
+                        logger.info(f"Retrieved missing SKU from order data: {sku} for variant {variant_id}")
+                        break
+                        
+                if not sku:
+                    logger.warning(f"Could not find SKU for variant {variant_id} in order data - exclusion check may be compromised")
+            
             # Skip excluded SKUs
             if sku and excluded_skus:
                 skip_item = False
                 for excluded_pattern in excluded_skus:
                     if excluded_pattern.lower() in sku.lower():
-                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        logger.info(f"✅ EXCLUDED: Skipping OOS incident for SKU '{sku}' (matches pattern '{excluded_pattern}') - Order {order_number}")
                         skip_item = True
                         break
                 if skip_item:
@@ -261,7 +274,7 @@ def _record_oos_incident_for_unavailable_items(
                 skip_item = False
                 for excluded_pattern in excluded_skus:
                     if excluded_pattern.lower() in sku.lower():
-                        logger.info(f"Skipping OOS incident for excluded SKU: {sku} (matches pattern '{excluded_pattern}')")
+                        logger.info(f"✅ EXCLUDED: Skipping OOS incident for SKU '{sku}' (matches pattern '{excluded_pattern}') - Order {order_number}")
                         skip_item = True
                         break
                 if skip_item:
@@ -573,7 +586,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     if excluded_sku_patterns:
         logger.info(f"Loaded {len(excluded_sku_patterns)} excluded SKU patterns for user {store.user_id}: {excluded_sku_patterns}")
     else:
-        logger.info(f"No excluded SKUs configured for user {store.user_id}")
+        logger.info(f"No excluded SKU patterns found for user {store.user_id}")
     
     # Always check orders from last 24 hours to catch any missed orders
     yesterday = datetime.utcnow() - timedelta(days=1)
