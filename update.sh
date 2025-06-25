@@ -16,6 +16,30 @@ NC='\033[0m' # No Color
 BACKUP_DIR="./backups/$(date +%Y%m%d_%H%M%S)"
 COMPOSE_FILE="docker-compose.prod.yml"
 
+# Get server IP from existing configuration
+get_server_ip() {
+    # Try to get server IP from existing frontend/.env
+    if [ -f "frontend/.env" ]; then
+        SERVER_IP=$(grep "VITE_API_URL" frontend/.env | cut -d'=' -f2 | sed 's/http:\/\/\([^:]*\):.*/\1/')
+    elif [ -f ".env" ]; then
+        SERVER_IP=$(grep "VITE_API_URL" .env | cut -d'=' -f2 | sed 's/http:\/\/\([^:]*\):.*/\1/')
+    else
+        SERVER_IP="localhost"
+    fi
+    
+    if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "localhost" ]; then
+        print_warning "Could not determine server IP from configuration files."
+        read -p "Please enter your server IP address (e.g., 192.168.1.112): " SERVER_IP
+        if [ -z "$SERVER_IP" ]; then
+            SERVER_IP="localhost"
+        fi
+    fi
+    
+    export SERVER_IP
+    export VITE_API_URL="http://$SERVER_IP:8000"
+    print_info "Using server IP: $SERVER_IP"
+}
+
 print_header() {
     echo -e "${BLUE}================================================${NC}"
     echo -e "${BLUE}     Shopify Automation - Update Script        ${NC}"
@@ -153,6 +177,9 @@ done
 # Main execution
 print_header
 
+# Get server configuration
+get_server_ip
+
 # Handle restore-from option
 if [ -n "$RESTORE_FROM" ]; then
     print_info "Restoring from backup: $RESTORE_FROM"
@@ -194,6 +221,27 @@ if [ "$NO_PULL" = false ]; then
         print_warning "Git pull failed, continuing with local changes"
     fi
 fi
+
+# Update configuration files with server IP
+print_info "Updating configuration files with server IP: $SERVER_IP"
+
+# Create/update frontend .env file
+print_info "Creating frontend .env file..."
+cat > frontend/.env << EOF
+VITE_API_URL=http://$SERVER_IP:8000
+EOF
+
+# Update CORS configuration in backend
+print_info "Updating CORS configuration..."
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    sed -i '' "s|allow_origins=\[.*\]|allow_origins=[\"http://$SERVER_IP:3000\", \"http://$SERVER_IP\", \"http://localhost:3000\", \"http://localhost\"]|" backend/main.py
+else
+    # Linux
+    sed -i "s|allow_origins=\[.*\]|allow_origins=[\"http://$SERVER_IP:3000\", \"http://$SERVER_IP\", \"http://localhost:3000\", \"http://localhost\"]|" backend/main.py
+fi
+
+print_success "Configuration updated for server IP: $SERVER_IP"
 
 # Stop services
 print_info "Stopping services..."
