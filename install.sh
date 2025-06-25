@@ -51,48 +51,198 @@ fi
 
 print_status "Starting installation process..."
 
+# Step 0: Check and install system dependencies
+print_status "Checking system dependencies..."
+
+# Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$NAME
+    VER=$VERSION_ID
+else
+    print_error "Cannot detect OS version"
+    exit 1
+fi
+
+# Install basic tools if missing
+REQUIRED_TOOLS="curl wget git openssl lsof"
+MISSING_TOOLS=""
+
+for tool in $REQUIRED_TOOLS; do
+    if ! command -v $tool &> /dev/null; then
+        MISSING_TOOLS="$MISSING_TOOLS $tool"
+    fi
+done
+
+if [ ! -z "$MISSING_TOOLS" ]; then
+    print_warning "Installing missing tools:$MISSING_TOOLS"
+    
+    # Update package manager based on OS
+    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+        sudo apt-get update
+        sudo apt-get install -y $MISSING_TOOLS
+    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+        sudo yum install -y $MISSING_TOOLS
+    elif [[ "$OS" == *"Amazon Linux"* ]]; then
+        sudo yum install -y $MISSING_TOOLS
+    else
+        print_error "Unsupported OS: $OS. Please install the following tools manually: $MISSING_TOOLS"
+        exit 1
+    fi
+fi
+
 # Step 1: Check Docker installation
 print_status "Checking Docker installation..."
 if ! command -v docker &> /dev/null; then
     print_warning "Docker is not installed. Installing Docker..."
     
-    # Update package index
-    sudo apt-get update
-    
-    # Install prerequisites
-    sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        software-properties-common
-    
-    # Add Docker's official GPG key
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    
-    # Add Docker repository
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    # Install Docker
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+        # Ubuntu/Debian installation
+        sudo apt-get update
+        sudo apt-get install -y \
+            apt-transport-https \
+            ca-certificates \
+            curl \
+            gnupg \
+            lsb-release \
+            software-properties-common
+        
+        # Add Docker's official GPG key
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+        
+        # Add Docker repository
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+          $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        
+        # Install Docker
+        sudo apt-get update
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+        
+    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+        # CentOS/RHEL/Fedora installation
+        sudo yum install -y yum-utils
+        sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        sudo yum install -y docker-ce docker-ce-cli containerd.io
+        sudo systemctl start docker
+        sudo systemctl enable docker
+        
+    elif [[ "$OS" == *"Amazon Linux"* ]]; then
+        # Amazon Linux installation
+        sudo yum update -y
+        sudo amazon-linux-extras install docker -y
+        sudo service docker start
+        sudo systemctl enable docker
+        
+    else
+        print_error "Unsupported OS for automatic Docker installation: $OS"
+        print_error "Please install Docker manually and run this script again."
+        exit 1
+    fi
     
     # Add user to docker group
     sudo usermod -aG docker $USER
     
+    # Start Docker service
+    sudo systemctl start docker
+    sudo systemctl enable docker
+    
     print_success "Docker installed successfully!"
     print_warning "You need to log out and back in for group changes to take effect."
+    
+    # Try to activate group without logout (may not work on all systems)
+    newgrp docker || true
 else
     print_success "Docker is already installed."
 fi
 
-# Check Docker Compose
+# Check Docker Compose v2
 if ! docker compose version &> /dev/null; then
-    print_error "Docker Compose v2 is not installed. Please install it manually."
-    exit 1
+    print_warning "Docker Compose v2 is not installed. Installing..."
+    
+    # Method 1: Try to install via package manager (preferred)
+    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+        # For newer Ubuntu/Debian, docker-compose-plugin should be available
+        sudo apt-get update
+        if sudo apt-get install -y docker-compose-plugin 2>/dev/null; then
+            print_success "Docker Compose v2 installed via package manager"
+        else
+            MANUAL_INSTALL=true
+        fi
+    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+        if sudo yum install -y docker-compose-plugin 2>/dev/null; then
+            print_success "Docker Compose v2 installed via package manager"
+        else
+            MANUAL_INSTALL=true
+        fi
+    else
+        MANUAL_INSTALL=true
+    fi
+    
+    # Method 2: Manual installation if package manager failed
+    if [ "$MANUAL_INSTALL" = true ]; then
+        print_status "Installing Docker Compose v2 manually..."
+        
+        # Install Docker Compose v2 plugin
+        DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+        mkdir -p $DOCKER_CONFIG/cli-plugins
+        
+        # Get the latest version
+        COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d'"' -f4)
+        
+        if [ -z "$COMPOSE_VERSION" ]; then
+            print_warning "Could not determine latest version, using v2.23.0"
+            COMPOSE_VERSION="v2.23.0"
+        fi
+        
+        # Determine architecture
+        ARCH=$(uname -m)
+        case $ARCH in
+            x86_64)
+                ARCH="x86_64"
+                ;;
+            aarch64)
+                ARCH="aarch64"
+                ;;
+            armv7l)
+                ARCH="armv7"
+                ;;
+            *)
+                print_error "Unsupported architecture: $ARCH"
+                exit 1
+                ;;
+        esac
+        
+        # Download Docker Compose v2
+        DOWNLOAD_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-${ARCH}"
+        print_status "Downloading from: $DOWNLOAD_URL"
+        
+        if ! curl -SL "$DOWNLOAD_URL" -o $DOCKER_CONFIG/cli-plugins/docker-compose; then
+            print_error "Failed to download Docker Compose v2"
+            exit 1
+        fi
+        
+        # Make it executable
+        chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
+        
+        # Also try system-wide installation
+        sudo mkdir -p /usr/local/lib/docker/cli-plugins
+        sudo cp $DOCKER_CONFIG/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/
+        sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    fi
+    
+    # Verify installation
+    if docker compose version &> /dev/null; then
+        print_success "Docker Compose v2 installed successfully!"
+        docker compose version
+    else
+        print_error "Failed to install Docker Compose v2"
+        print_error "Please visit https://docs.docker.com/compose/install/ for manual installation"
+        exit 1
+    fi
+else
+    print_success "Docker Compose v2 is already installed."
+    docker compose version
 fi
 
 # Step 2: Create necessary directories
