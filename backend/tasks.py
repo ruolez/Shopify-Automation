@@ -812,8 +812,9 @@ async def _apply_rule_actions(
                             logger.info(f"Moving fulfillment order {fo['id']} to location {location_id}")
                             
                             # Pre-check: Verify ALL products are available at target location (all-or-nothing policy)
+                            # Note: Pass None for excluded_skus to ensure ALL products are checked for fulfillment
                             inventory_check = await _check_inventory_availability(
-                                client, fo, location_id, order.get("name", "Unknown"), excluded_skus
+                                client, fo, location_id, order.get("name", "Unknown"), None
                             )
                             
                             if not inventory_check["all_available"]:
@@ -1200,7 +1201,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
         rules = db.query(ProcessingRule).filter(
             ProcessingRule.user_id == user_id,
             ProcessingRule.is_active == True
-        ).order_by(ProcessingRule.priority.desc()).all()
+        ).order_by(ProcessingRule.priority.asc()).all()
         logger.info(f"Found {len(rules)} active rules: {[r.name for r in rules]}")
     
     if not rules:

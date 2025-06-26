@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from main import app
 from database import Base, get_db
 from models import User
-from auth import create_access_token, hash_password
+from auth import create_access_token, get_password_hash
 
 # Test database
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
