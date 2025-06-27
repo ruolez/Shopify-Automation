@@ -804,13 +804,17 @@ async def _apply_rule_actions(
                     fulfillment_orders = order.get("fulfillmentOrders", {}).get("edges", [])
                     logger.info(f"Found {len(fulfillment_orders)} fulfillment orders")
                     
+                    # PHASE 1: Check inventory for ALL fulfillment orders first (true all-or-nothing)
+                    # If ANY fulfillment order fails inventory check, skip ALL moves
+                    moveable_fulfillment_orders = []
+                    all_order_inventory_available = True
+                    all_unavailable_items = []
+                    
                     for fo_edge in fulfillment_orders:
                         fo = fo_edge["node"]
                         logger.info(f"Fulfillment order {fo['id']} status: {fo['status']}")
                         
                         if fo["status"].upper() in ["OPEN", "SCHEDULED"]:
-                            logger.info(f"Moving fulfillment order {fo['id']} to location {location_id}")
-                            
                             # Pre-check: Verify ALL products are available at target location (all-or-nothing policy)
                             # Note: Pass None for excluded_skus to ensure ALL products are checked for fulfillment
                             inventory_check = await _check_inventory_availability(
@@ -818,51 +822,75 @@ async def _apply_rule_actions(
                             )
                             
                             if not inventory_check["all_available"]:
-                                # Some products not available - skip the move entirely
-                                logger.warning(f"All-or-nothing policy: Skipping fulfillment move for {fo['id']} - {len(inventory_check['unavailable_items'])} products not available at target location")
-                                
-                                # Log fulfillment failure as informational - rule still matched successfully
-                                _log_order_action(
-                                    db, store.user_id, store.id, order["id"], 
-                                    order.get("name", "Unknown"), "fulfillment_move_failed", 
-                                    "info", 
-                                    {
-                                        "rule_name": rule.name,
-                                        "target_location_id": location_id,
-                                        "fulfillment_order_id": fo["id"],
-                                        "location_alias": location_alias or "direct_id",
-                                        "policy": "all_or_nothing",
-                                        "pre_check_failed": True,
-                                        "available_items": inventory_check["available_items"],
-                                        "unavailable_items": inventory_check["unavailable_items"],
-                                        "reason": "out_of_stock"
-                                    },
-                                    error_message=f"All-or-nothing policy: {len(inventory_check['unavailable_items'])} products not available at target location, skipped fulfillment move"
-                                )
-                                
-                                # Add "OOS" tag and record incidents for ONLY unavailable products (not all products)
-                                try:
-                                    await client.add_tags_to_order(order["id"], ["OOS"])
-                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy pre-check failure")
-                                    
-                                    # Critical: Wait for Shopify to process the OOS tag before continuing
-                                    # This ensures subsequent rules can see the OOS tag in their order refresh
-                                    logger.info("Waiting 1000ms for Shopify to process OOS tag...")
-                                    await asyncio.sleep(1.0)
-                                    
-                                    # Don't record OOS incidents for pre-check failures
-                                    # OOS incidents should only be recorded when actual fulfillment fails
-                                    # Pre-check failures may be due to API errors, not real stock issues
-                                    logger.info(f"Skipping OOS incident recording for pre-check failure - {len(inventory_check['unavailable_items'])} items unavailable in pre-check")
-                                    
-                                except Exception as tag_error:
-                                    logger.error(f"Failed to add OOS tag for all-or-nothing pre-check failure: {str(tag_error)}")
-                                
-                                success = False
-                                continue  # Skip to next fulfillment order
+                                # This fulfillment order has unavailable items
+                                all_order_inventory_available = False
+                                all_unavailable_items.extend(inventory_check["unavailable_items"])
+                                logger.warning(f"Fulfillment order {fo['id']} has {len(inventory_check['unavailable_items'])} unavailable items")
+                            else:
+                                # This fulfillment order is available for moving
+                                moveable_fulfillment_orders.append(fo)
+                                logger.info(f"Fulfillment order {fo['id']} passed inventory check")
+                    
+                    # PHASE 2: Apply true all-or-nothing policy across entire order
+                    if not all_order_inventory_available:
+                        # Some products across ANY fulfillment order not available - skip ALL moves
+                        logger.warning(f"All-or-nothing policy: Skipping ALL fulfillment moves for order {order.get('name', 'Unknown')} - {len(all_unavailable_items)} products not available across {len(fulfillment_orders)} fulfillment orders")
+                        
+                        # Log fulfillment failure as informational - rule still matched successfully
+                        _log_order_action(
+                            db, store.user_id, store.id, order["id"], 
+                            order.get("name", "Unknown"), "fulfillment_move_failed", 
+                            "info", 
+                            {
+                                "rule_name": rule.name,
+                                "target_location_id": location_id,
+                                "location_alias": location_alias or "direct_id",
+                                "policy": "all_or_nothing_across_entire_order",
+                                "pre_check_failed": True,
+                                "total_fulfillment_orders": len(fulfillment_orders),
+                                "unavailable_items": all_unavailable_items,
+                                "reason": "out_of_stock"
+                            },
+                            error_message=f"All-or-nothing policy: {len(all_unavailable_items)} products not available across order, skipped ALL fulfillment moves"
+                        )
+                        
+                        # Add "OOS" tag and record incidents for ONLY unavailable products (not all products)
+                        try:
+                            await client.add_tags_to_order(order["id"], ["OOS"])
+                            logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy pre-check failure")
                             
-                            # All products available - proceed with fulfillment move
-                            logger.info(f"All-or-nothing pre-check passed: All {len(inventory_check['available_items'])} products available at target location")
+                            # Critical: Wait for Shopify to process the OOS tag before continuing
+                            # This ensures subsequent rules can see the OOS tag in their order refresh
+                            logger.info("Waiting 1000ms for Shopify to process OOS tag...")
+                            await asyncio.sleep(1.0)
+                            
+                            # Record OOS incidents for items that failed inventory pre-check
+                            # Since inventory checks are now reliable, these represent real stock issues
+                            _record_oos_incident_for_unavailable_items(
+                                db=db,
+                                user_id=store.user_id,
+                                store_id=store.id,
+                                order=order,
+                                rule_name=rule.name,
+                                attempted_location_id=location_id,
+                                attempted_location_alias=location_alias,
+                                unavailable_items=all_unavailable_items,
+                                excluded_skus=excluded_skus
+                            )
+                            logger.info(f"Recorded OOS incidents for {len(all_unavailable_items)} items that failed pre-check across entire order")
+                            
+                        except Exception as tag_error:
+                            logger.error(f"Failed to add OOS tag for all-or-nothing pre-check failure: {str(tag_error)}")
+                        
+                        success = False
+                        # Skip ALL fulfillment orders due to all-or-nothing policy
+                        
+                    else:
+                        # PHASE 3: All fulfillment orders passed inventory checks - proceed with moves
+                        logger.info(f"All-or-nothing pre-check passed: All {len(moveable_fulfillment_orders)} fulfillment orders can be moved")
+                        
+                        for fo in moveable_fulfillment_orders:
+                            logger.info(f"Moving fulfillment order {fo['id']} to location {location_id}")
                             result = await client.move_fulfillment_order(
                                 fo["id"], location_id
                             )
