@@ -214,3 +214,47 @@ class ExcludedSKU(Base):
     __table_args__ = (
         UniqueConstraint('user_id', 'sku_pattern', name='unique_user_excluded_sku'),
     )
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    full_name = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, default="admin", nullable=False)  # admin, super_admin, support, read_only
+    is_active = Column(Boolean, default=True)
+    last_login = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    audit_logs = relationship("AdminAuditLog", back_populates="admin_user", cascade="all, delete-orphan")
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    admin_user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=False)
+    action = Column(String, nullable=False)  # login, user_create, user_delete, etc.
+    target_type = Column(String)  # user, store, rule, system
+    target_id = Column(String)  # ID of the affected entity
+    details = Column(JSON)  # Additional action details
+    ip_address = Column(String)
+    user_agent = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    admin_user = relationship("AdminUser", back_populates="audit_logs")
+
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, nullable=False, index=True)
+    value = Column(JSON, nullable=False)
+    description = Column(Text)
+    is_public = Column(Boolean, default=False)  # Whether regular users can see this setting
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

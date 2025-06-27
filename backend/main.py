@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -13,12 +13,15 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 from database import engine, get_db, create_tables
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
+from admin_auth import get_current_admin_user, create_admin_access_token, verify_admin_password, get_admin_password_hash, log_admin_action, require_admin_role
 from schemas import (
     UserCreate, UserLogin, TokenResponse, ShopifyStoreCreate, RuleCreate, SettingsUpdate, SettingsResponse, OrderLogQuery,
     LocationAliasCreate, LocationAliasUpdate, LocationAliasResponse, LocationMappingCreate, LocationMappingUpdate, 
-    LocationMappingResponse, StoreLocationResponse, ExcludedSKUCreate, ExcludedSKUUpdate, ExcludedSKUResponse
+    LocationMappingResponse, StoreLocationResponse, ExcludedSKUCreate, ExcludedSKUUpdate, ExcludedSKUResponse,
+    AdminUserCreate, AdminUserLogin, AdminUserUpdate, AdminUserChangePassword, AdminUserResponse, AdminTokenResponse,
+    AdminAuditLogResponse, SystemStatsResponse, UserManagementResponse
 )
 from shopify_client import ShopifyClient
 from tasks import test_celery_connection, process_store_orders, process_all_orders
@@ -1982,6 +1985,331 @@ async def delete_excluded_sku(
         logger.error(f"Error deleting excluded SKU: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete excluded SKU")
+
+# ==================== ADMIN ENDPOINTS ====================
+
+@app.post("/admin/auth/login", response_model=AdminTokenResponse)
+async def admin_login(
+    admin_data: AdminUserLogin,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    admin_user = db.query(AdminUser).filter(
+        AdminUser.username == admin_data.username,
+        AdminUser.is_active == True
+    ).first()
+    
+    if not admin_user or not verify_admin_password(admin_data.password, admin_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password"
+        )
+    
+    # Update last login
+    admin_user.last_login = datetime.utcnow()
+    db.commit()
+    
+    # Log the login
+    log_admin_action(
+        db=db,
+        admin_user=admin_user,
+        action="login",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent")
+    )
+    
+    access_token = create_admin_access_token(data={"sub": admin_user.username})
+    return AdminTokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=8 * 60 * 60  # 8 hours in seconds
+    )
+
+@app.get("/admin/auth/me", response_model=AdminUserResponse)
+async def get_current_admin_info(admin_user: AdminUser = Depends(get_current_admin_user)):
+    return admin_user
+
+@app.put("/admin/auth/change-password")
+async def admin_change_password(
+    password_data: AdminUserChangePassword,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    if not verify_admin_password(password_data.current_password, admin_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    
+    admin_user.hashed_password = get_admin_password_hash(password_data.new_password)
+    db.commit()
+    
+    log_admin_action(
+        db=db,
+        admin_user=admin_user,
+        action="password_change",
+        target_type="admin_user",
+        target_id=str(admin_user.id)
+    )
+    
+    return {"message": "Password changed successfully"}
+
+@app.get("/admin/stats", response_model=SystemStatsResponse)
+async def get_system_stats(
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    
+    stats = SystemStatsResponse(
+        total_users=db.query(User).count(),
+        active_users=db.query(User).filter(User.is_active == True).count(),
+        total_stores=db.query(ShopifyStore).count(),
+        active_stores=db.query(ShopifyStore).filter(ShopifyStore.is_active == True).count(),
+        total_rules=db.query(ProcessingRule).count(),
+        active_rules=db.query(ProcessingRule).filter(ProcessingRule.is_active == True).count(),
+        total_processed_orders=db.query(ProcessedOrder).count(),
+        total_order_logs=db.query(OrderLog).count(),
+        recent_registrations=db.query(User).filter(User.created_at >= seven_days_ago).count()
+    )
+    
+    return stats
+
+@app.get("/admin/users", response_model=List[UserManagementResponse])
+async def get_all_users(
+    skip: int = 0,
+    limit: int = 100,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    users = db.query(User).offset(skip).limit(limit).all()
+    
+    user_list = []
+    for user in users:
+        stores_count = db.query(ShopifyStore).filter(ShopifyStore.user_id == user.id).count()
+        rules_count = db.query(ProcessingRule).filter(ProcessingRule.user_id == user.id).count()
+        
+        # Get last activity from order logs
+        last_log = db.query(OrderLog).filter(OrderLog.user_id == user.id).order_by(OrderLog.created_at.desc()).first()
+        last_activity = last_log.created_at if last_log else None
+        
+        user_list.append(UserManagementResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            is_active=user.is_active,
+            created_at=user.created_at,
+            stores_count=stores_count,
+            rules_count=rules_count,
+            last_activity=last_activity
+        ))
+    
+    return user_list
+
+@app.put("/admin/users/{user_id}/toggle-active")
+async def toggle_user_active(
+    user_id: int,
+    admin_user: AdminUser = Depends(require_admin_role(["admin", "super_admin"])),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    old_status = user.is_active
+    user.is_active = not user.is_active
+    db.commit()
+    
+    log_admin_action(
+        db=db,
+        admin_user=admin_user,
+        action="user_status_change",
+        target_type="user",
+        target_id=str(user_id),
+        details={"old_status": old_status, "new_status": user.is_active}
+    )
+    
+    return {
+        "message": f"User {'activated' if user.is_active else 'deactivated'} successfully",
+        "is_active": user.is_active
+    }
+
+@app.delete("/admin/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    admin_user: AdminUser = Depends(require_admin_role(["super_admin"])),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user_email = user.email
+    db.delete(user)
+    db.commit()
+    
+    log_admin_action(
+        db=db,
+        admin_user=admin_user,
+        action="user_delete",
+        target_type="user",
+        target_id=str(user_id),
+        details={"deleted_user_email": user_email}
+    )
+    
+    return {"message": "User deleted successfully"}
+
+@app.get("/admin/stores")
+async def get_all_stores(
+    skip: int = 0,
+    limit: int = 100,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    stores = db.query(ShopifyStore).join(User).offset(skip).limit(limit).all()
+    
+    store_list = []
+    for store in stores:
+        store_list.append({
+            "id": store.id,
+            "shop_domain": store.shop_domain,
+            "shop_name": store.shop_name,
+            "is_active": store.is_active,
+            "created_at": store.created_at,
+            "last_sync": store.last_sync,
+            "user": {
+                "id": store.user.id,
+                "email": store.user.email,
+                "full_name": store.user.full_name
+            }
+        })
+    
+    return store_list
+
+@app.get("/admin/rules")
+async def get_all_rules(
+    skip: int = 0,
+    limit: int = 100,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    rules = db.query(ProcessingRule).join(User).offset(skip).limit(limit).all()
+    
+    rule_list = []
+    for rule in rules:
+        rule_list.append({
+            "id": rule.id,
+            "name": rule.name,
+            "description": rule.description,
+            "is_active": rule.is_active,
+            "priority": rule.priority,
+            "created_at": rule.created_at,
+            "user": {
+                "id": rule.user.id,
+                "email": rule.user.email,
+                "full_name": rule.user.full_name
+            }
+        })
+    
+    return rule_list
+
+@app.get("/admin/audit-logs", response_model=List[AdminAuditLogResponse])
+async def get_audit_logs(
+    skip: int = 0,
+    limit: int = 50,
+    action: Optional[str] = None,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(AdminAuditLog).join(AdminUser)
+    
+    if action:
+        query = query.filter(AdminAuditLog.action == action)
+    
+    logs = query.order_by(AdminAuditLog.created_at.desc()).offset(skip).limit(limit).all()
+    return logs
+
+@app.post("/admin/users", response_model=AdminUserResponse)
+async def create_admin_user(
+    admin_data: AdminUserCreate,
+    admin_user: AdminUser = Depends(require_admin_role(["super_admin"])),
+    db: Session = Depends(get_db)
+):
+    # Check if username or email already exists
+    existing_user = db.query(AdminUser).filter(
+        (AdminUser.username == admin_data.username) | (AdminUser.email == admin_data.email)
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username or email already exists"
+        )
+    
+    # Create new admin user
+    hashed_password = get_admin_password_hash(admin_data.password)
+    new_admin = AdminUser(
+        username=admin_data.username,
+        email=admin_data.email,
+        full_name=admin_data.full_name,
+        hashed_password=hashed_password,
+        role=admin_data.role
+    )
+    
+    db.add(new_admin)
+    db.commit()
+    db.refresh(new_admin)
+    
+    log_admin_action(
+        db=db,
+        admin_user=admin_user,
+        action="admin_user_create",
+        target_type="admin_user",
+        target_id=str(new_admin.id),
+        details={"username": admin_data.username, "role": admin_data.role}
+    )
+    
+    return new_admin
+
+@app.get("/admin/order-logs")
+async def get_all_order_logs(
+    skip: int = 0,
+    limit: int = 100,
+    status_filter: Optional[str] = None,
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(OrderLog).join(User).join(ShopifyStore)
+    
+    if status_filter:
+        query = query.filter(OrderLog.status == status_filter)
+    
+    logs = query.order_by(OrderLog.created_at.desc()).offset(skip).limit(limit).all()
+    
+    log_list = []
+    for log in logs:
+        log_list.append({
+            "id": log.id,
+            "order_id": log.order_id,
+            "order_number": log.order_number,
+            "action": log.action,
+            "status": log.status,
+            "details": log.details,
+            "error_message": log.error_message,
+            "created_at": log.created_at,
+            "user": {
+                "id": log.user.id,
+                "email": log.user.email,
+                "full_name": log.user.full_name
+            },
+            "store": {
+                "id": log.store.id,
+                "shop_domain": log.store.shop_domain,
+                "shop_name": log.store.shop_name
+            }
+        })
+    
+    return log_list
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

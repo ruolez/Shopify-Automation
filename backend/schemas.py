@@ -259,3 +259,113 @@ class ExcludedSKUResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# Admin schemas
+class AdminUserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    full_name: str
+    password: str
+    role: str = "admin"
+    
+    @validator('username')
+    def validate_username(cls, v):
+        if len(v.strip()) < 3:
+            raise ValueError('Username must be at least 3 characters long')
+        return v.strip()
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        return v
+    
+    @validator('role')
+    def validate_role(cls, v):
+        allowed_roles = ["admin", "super_admin", "support", "read_only"]
+        if v not in allowed_roles:
+            raise ValueError(f'Role must be one of: {", ".join(allowed_roles)}')
+        return v
+
+class AdminUserLogin(BaseModel):
+    username: str
+    password: str
+
+class AdminUserUpdate(BaseModel):
+    email: Optional[EmailStr] = None
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    
+    @validator('role')
+    def validate_role(cls, v):
+        if v is not None:
+            allowed_roles = ["admin", "super_admin", "support", "read_only"]
+            if v not in allowed_roles:
+                raise ValueError(f'Role must be one of: {", ".join(allowed_roles)}')
+        return v
+
+class AdminUserChangePassword(BaseModel):
+    current_password: str
+    new_password: str
+    
+    @validator('new_password')
+    def validate_new_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        return v
+
+class AdminUserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+    last_login: Optional[datetime]
+    created_at: datetime
+    updated_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+class AdminTokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+
+class AdminAuditLogResponse(BaseModel):
+    id: int
+    admin_user_id: int
+    action: str
+    target_type: Optional[str]
+    target_id: Optional[str]
+    details: Optional[Dict[str, Any]]
+    ip_address: Optional[str]
+    user_agent: Optional[str]
+    created_at: datetime
+    admin_user: AdminUserResponse
+    
+    class Config:
+        from_attributes = True
+
+class SystemStatsResponse(BaseModel):
+    total_users: int
+    active_users: int
+    total_stores: int
+    active_stores: int
+    total_rules: int
+    active_rules: int
+    total_processed_orders: int
+    total_order_logs: int
+    recent_registrations: int  # Last 7 days
+
+class UserManagementResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    is_active: bool
+    created_at: datetime
+    stores_count: int
+    rules_count: int
+    last_activity: Optional[datetime]

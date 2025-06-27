@@ -12,6 +12,9 @@ import Settings from './pages/Settings';
 import LocationManagement from './pages/LocationManagement';
 import Reports from './pages/Reports';
 import LoadingSpinner from './components/LoadingSpinner';
+import AdminLogin from './pages/AdminLogin';
+import AdminDashboard from './pages/AdminDashboard';
+import AdminUsers from './pages/AdminUsers';
 
 function App() {
   const { user, loading } = useAuth();
@@ -21,6 +24,20 @@ function App() {
       <div className="min-h-screen flex items-center justify-center">
         <LoadingSpinner size="lg" />
       </div>
+    );
+  }
+
+  // Admin routes (separate from user authentication)
+  const isAdminRoute = window.location.pathname.startsWith('/admin');
+  
+  if (isAdminRoute) {
+    return (
+      <Routes>
+        <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        <Route path="/admin/users" element={<AdminUsers />} />
+        <Route path="/admin/*" element={<Navigate to="/admin/login" replace />} />
+      </Routes>
     );
   }
 
