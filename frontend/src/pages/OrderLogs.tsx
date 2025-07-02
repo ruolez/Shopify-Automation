@@ -516,7 +516,7 @@ const OrderLogs: React.FC = () => {
                             {format(new Date(log.created_at), 'MMM d, yyyy HH:mm')}
                           </td>
                           <td className="px-6 py-2">
-                            <div className="text-xs text-gray-500 max-w-xs truncate">
+                            <div className="text-xs text-gray-500 break-words">
                               {log.error_message ? (
                                 <span className="text-red-600">{log.error_message}</span>
                               ) : log.details?.rule_name ? (

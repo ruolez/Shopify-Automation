@@ -941,7 +941,17 @@ async def _apply_rule_actions(
                                 logger.error(f"Failed to move fulfillment order {fo['id']}: {result.get('errors', [])}")
                                 success = False
                                 
-                                # Log fulfillment failure as informational - rule still matched successfully  
+                                # Log fulfillment failure as informational - rule still matched successfully
+                                # Extract actual error messages from Shopify API response
+                                shopify_errors = result.get("errors", [])
+                                error_messages = []
+                                for error in shopify_errors:
+                                    if isinstance(error, dict) and "message" in error:
+                                        error_messages.append(error["message"])
+                                
+                                # Use actual Shopify error messages or indicate unknown failure
+                                error_msg = " | ".join(error_messages) if error_messages else "Fulfillment move failed but Shopify provided no error details"
+                                
                                 _log_order_action(
                                     db, store.user_id, store.id, order["id"], 
                                     order.get("name", "Unknown"), "fulfillment_move_failed", 
@@ -954,7 +964,7 @@ async def _apply_rule_actions(
                                         "errors": result.get("errors", []),
                                         "reason": "out_of_stock"
                                     },
-                                    error_message="Failed to move fulfillment order - likely out of stock at target location"
+                                    error_message=error_msg
                                 )
                                 
                                 # Record OOS incident for out-of-stock fulfillment issues
