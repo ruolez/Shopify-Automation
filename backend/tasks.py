@@ -854,6 +854,13 @@ async def _apply_rule_actions(
                             error_message=f"All-or-nothing policy: {len(all_unavailable_items)} products not available across order, skipped ALL fulfillment moves"
                         )
                         
+                        # Add OOS tag to order due to all-or-nothing policy trigger
+                        try:
+                            await client.add_tags_to_order(order["id"], ["OOS"])
+                            logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy (pre-check failure)")
+                        except Exception as tag_error:
+                            logger.error(f"Failed to add OOS tag to order: {str(tag_error)}")
+                        
                         # Record incidents for ONLY unavailable products (not all products)
                         try:
                             # Record OOS incidents for items that failed inventory pre-check
@@ -915,6 +922,13 @@ async def _apply_rule_actions(
                                     error_message=f"All-or-nothing policy violation: {len(failed_items)} products failed after {len(moved_items)} were already moved. Manual intervention may be required."
                                 )
                                 
+                                # Add OOS tag to order due to all-or-nothing policy violation
+                                try:
+                                    await client.add_tags_to_order(order["id"], ["OOS"])
+                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to all-or-nothing policy violation (partial success)")
+                                except Exception as tag_error:
+                                    logger.error(f"Failed to add OOS tag to order: {str(tag_error)}")
+                                
                                 # Record incidents for ONLY the failed products (not moved ones)
                                 try:
                                     # Record OOS incidents for ONLY the products that actually failed to move
@@ -966,6 +980,13 @@ async def _apply_rule_actions(
                                     },
                                     error_message=error_msg
                                 )
+                                
+                                # Add OOS tag to order due to complete fulfillment failure
+                                try:
+                                    await client.add_tags_to_order(order["id"], ["OOS"])
+                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to complete fulfillment failure")
+                                except Exception as tag_error:
+                                    logger.error(f"Failed to add OOS tag to order: {str(tag_error)}")
                                 
                                 # Record OOS incident for out-of-stock fulfillment issues
                                 try:
