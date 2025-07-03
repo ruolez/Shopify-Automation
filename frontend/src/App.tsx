@@ -15,6 +15,7 @@ import LoadingSpinner from './components/LoadingSpinner';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminUsers from './pages/AdminUsers';
+import AdminDatabase from './pages/AdminDatabase';
 
 function App() {
   const { user, loading } = useAuth();
@@ -36,6 +37,7 @@ function App() {
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin/dashboard" element={<AdminDashboard />} />
         <Route path="/admin/users" element={<AdminUsers />} />
+        <Route path="/admin/database" element={<AdminDatabase />} />
         <Route path="/admin/*" element={<Navigate to="/admin/login" replace />} />
       </Routes>
     );

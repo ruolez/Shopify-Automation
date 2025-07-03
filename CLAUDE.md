@@ -505,6 +505,144 @@ Comprehensive configuration via `.env.example`:
 - **Redis**: Persistent volume for task queue state
 - **Logs**: Mounted directory for centralized logging
 
+## Admin Panel System (2025-07-03)
+
+**Purpose**: Comprehensive admin panel for managing the entire platform, users, and system monitoring.
+
+### Admin Panel Architecture
+
+**Admin Database Models** (`backend/models.py`)
+- `AdminUser`: Admin accounts with role-based access control
+  - Roles: `super_admin`, `admin`, `support`, `read_only`
+  - Separate from user accounts for security isolation
+  - BCrypt password hashing with 8-hour JWT tokens
+- `AdminAuditLog`: Complete audit trail of all admin actions
+  - Tracks who did what, when, where (IP/user agent)
+  - Links to affected resources with detailed JSON metadata
+- `SystemSettings`: Global system configuration management
+
+**Admin Authentication** (`backend/admin_auth.py`)
+- Separate JWT authentication system from user auth
+- 8-hour token expiration for admin sessions
+- Role-based permissions with dependency injection
+- Secure password change functionality with current password verification
+
+**Admin API Endpoints** (`backend/main.py` - 13 new endpoints)
+```python
+# Authentication
+POST /admin/auth/login              # Admin login with audit logging
+GET  /admin/auth/me                 # Get current admin user
+PUT  /admin/auth/change-password    # Change admin password
+
+# Dashboard & Statistics  
+GET  /admin/stats                   # System overview statistics
+
+# User Management
+GET  /admin/users                   # List all users with activity metrics
+PUT  /admin/users/{id}/toggle-active  # Activate/deactivate users
+DELETE /admin/users/{id}            # Delete users (with cascade)
+
+# Resource Monitoring
+GET  /admin/stores                  # All connected stores across users
+GET  /admin/rules                   # All processing rules across users
+GET  /admin/order-logs              # System-wide order processing logs
+
+# Audit & Compliance
+GET  /admin/audit-logs              # Admin action audit trail
+POST /admin/users                   # Create additional admin users
+```
+
+**Admin Frontend Components**
+- `AdminLogin.tsx` - Dedicated admin authentication page
+- `AdminDashboard.tsx` - System metrics and quick actions with password change
+- `AdminUsers.tsx` - User management interface with activate/deactivate/delete
+- `adminApi.ts` - Admin API client with token management
+
+**Admin Routes** (`frontend/src/App.tsx`)
+```
+/admin/login      # Admin authentication
+/admin/dashboard  # Main admin dashboard  
+/admin/users      # User management
+```
+
+### Key Admin Features
+
+**System Statistics Dashboard**
+- Total users (active/inactive breakdown)
+- Connected stores (active/inactive breakdown)  
+- Processing rules (active/inactive breakdown)
+- Processed orders and log entries
+- Recent registrations (7-day window)
+
+**User Management**
+- View all user accounts with activity metrics
+- See stores and rules count per user
+- Activate/deactivate user accounts
+- Delete users with full cascade deletion
+- Last activity tracking
+
+**Security & Audit**
+- Complete audit trail of all admin actions
+- IP address and user agent logging
+- Role-based access control for admin functions
+- Secure password management with current password verification
+- Separate admin authentication from user authentication
+
+**Quick Actions Dashboard**
+- Direct links to user management
+- System monitoring shortcuts
+- Recent activity overview
+- Password change functionality
+
+### Admin Setup & Usage
+
+**Initial Setup**
+```bash
+# Create default admin user (run once)
+docker exec shopify_api python init_admin.py
+
+# Default credentials created:
+# Username: admin
+# Password: admin
+```
+
+**Admin Panel Access**
+- **URL**: http://localhost:3000/admin/login
+- **Default Credentials**: admin/admin
+- **Security**: Change default password immediately after first login
+
+**Database Integration**
+- Admin tables created automatically with existing database
+- No migration required - seamlessly integrates with current schema
+- Audit logging starts immediately upon admin system activation
+
+**Production Considerations**
+- Change `ADMIN_SECRET_KEY` environment variable for production
+- Consider shorter token expiration for high-security environments
+- Admin audit logs provide complete compliance trail
+- Role-based permissions allow delegation of admin tasks
+
+### Security Features
+
+**Authentication Isolation**
+- Completely separate authentication system from user accounts
+- Admin tokens stored separately with different expiration
+- No cross-contamination between user and admin sessions
+
+**Audit Compliance**
+- Every admin action logged with full context
+- IP address and user agent tracking
+- JSON metadata for detailed action parameters
+- Immutable audit trail for compliance requirements
+
+**Role-Based Access**
+- `super_admin`: Full system access
+- `admin`: Standard admin operations
+- `support`: Read-only with limited actions
+- `read_only`: View-only access to system data
+
+This admin panel provides complete platform management capabilities while maintaining security isolation and comprehensive audit trails for production use.
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

@@ -163,6 +163,58 @@ export const adminApi = {
     const response = await adminApiClient.post('/users', userData);
     return response.data;
   },
+
+  // Database Management
+  getDatabaseInfo: async () => {
+    const response = await adminApiClient.get('/database/info');
+    return response.data;
+  },
+
+  backupDatabase: async () => {
+    const response = await adminApiClient.get('/database/backup', {
+      responseType: 'blob'
+    });
+    
+    // Create download link
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    
+    // Extract filename from content-disposition header or use default
+    const contentDisposition = response.headers['content-disposition'];
+    let filename = 'shopify_automation_backup.db';
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (filenameMatch && filenameMatch[1]) {
+        filename = filenameMatch[1].replace(/['"]/g, '');
+      }
+    }
+    
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  restoreDatabase: async (file: File, onProgress?: (progress: number) => void) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await adminApiClient.post('/database/restore', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(progress);
+        }
+      }
+    });
+    
+    return response.data;
+  },
 };
 
 export default adminApi;

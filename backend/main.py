@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, date
@@ -8,6 +9,7 @@ import uvicorn
 import os
 import logging
 import asyncio
+import tempfile
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ from schemas import (
 )
 from shopify_client import ShopifyClient
 from tasks import test_celery_connection, process_store_orders, process_all_orders
+import database_utils
 
 security = HTTPBearer()
 
@@ -2310,6 +2313,207 @@ async def get_all_order_logs(
         })
     
     return log_list
+
+# Database backup/restore endpoints
+@app.get("/admin/database/backup")
+async def backup_database(
+    request: Request,
+    admin_user: AdminUser = Depends(require_admin_role(["super_admin"])),
+    db: Session = Depends(get_db)
+):
+    """Download a backup of the database"""
+    try:
+        # Get the database path from environment or default
+        db_url = os.getenv("DATABASE_URL", "sqlite:///app/app.db")
+        db_path = db_url.replace("sqlite:///", "")
+        # Make path absolute if it's relative
+        if not db_path.startswith('/'):
+            db_path = os.path.join("/app", db_path)
+        
+        # Check if database exists
+        if not os.path.exists(db_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Database file not found"
+            )
+        
+        # Get database info
+        db_info = database_utils.get_database_info(db_path)
+        
+        # Log the backup action
+        log_admin_action(
+            db=db,
+            admin_user=admin_user,
+            action="database_backup",
+            details={
+                "file_size_mb": db_info["size_mb"],
+                "user_count": db_info["user_count"],
+                "store_count": db_info["store_count"]
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent")
+        )
+        
+        # Generate filename with timestamp
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        filename = f"shopify_automation_backup_{timestamp}.db"
+        
+        # Return the file
+        return FileResponse(
+            path=db_path,
+            filename=filename,
+            media_type="application/x-sqlite3",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Database backup failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Backup failed: {str(e)}"
+        )
+
+@app.post("/admin/database/restore")
+async def restore_database(
+    file: UploadFile = File(...),
+    request: Request = None,
+    admin_user: AdminUser = Depends(require_admin_role(["super_admin"])),
+    db: Session = Depends(get_db)
+):
+    """Restore database from uploaded file"""
+    temp_file_path = None
+    try:
+        # Check file extension
+        if not file.filename.endswith('.db'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file type. Only .db files are allowed"
+            )
+        
+        # Save uploaded file to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as temp_file:
+            temp_file_path = temp_file.name
+            content = await file.read()
+            temp_file.write(content)
+        
+        # Validate the uploaded file
+        is_valid, error_msg = database_utils.validate_sqlite_file(temp_file_path)
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
+        
+        # Get info about uploaded database
+        upload_info = database_utils.get_database_info(temp_file_path)
+        
+        # Target database path
+        db_url = os.getenv("DATABASE_URL", "sqlite:///app/app.db")
+        target_path = db_url.replace("sqlite:///", "")
+        if not target_path.startswith('/'):
+            target_path = os.path.join("/app", target_path)
+        
+        # Get current database info for logging
+        current_info = database_utils.get_database_info(target_path)
+        
+        # Close all database connections
+        db.close()
+        engine.dispose()
+        
+        # Perform the restore
+        success, error_msg = database_utils.restore_database(
+            source_path=temp_file_path,
+            target_path=target_path,
+            create_pre_restore_backup=True
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=error_msg
+            )
+        
+        # Re-create database connection
+        create_tables()
+        new_db = next(get_db())
+        
+        # Log the restore action in the new database
+        try:
+            log_admin_action(
+                db=new_db,
+                admin_user=admin_user,
+                action="database_restore",
+                details={
+                    "uploaded_file": file.filename,
+                    "uploaded_size_mb": upload_info["size_mb"],
+                    "uploaded_user_count": upload_info["user_count"],
+                    "uploaded_store_count": upload_info["store_count"],
+                    "previous_size_mb": current_info["size_mb"],
+                    "previous_user_count": current_info["user_count"],
+                    "previous_store_count": current_info["store_count"]
+                },
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent") if request else None
+            )
+        finally:
+            new_db.close()
+        
+        return {
+            "message": "Database restored successfully",
+            "details": {
+                "users_restored": upload_info["user_count"],
+                "stores_restored": upload_info["store_count"],
+                "rules_restored": upload_info["rule_count"]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database restore failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Restore failed: {str(e)}"
+        )
+    finally:
+        # Clean up temp file
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+@app.get("/admin/database/info")
+async def get_database_info(
+    admin_user: AdminUser = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get information about the current database"""
+    try:
+        db_url = os.getenv("DATABASE_URL", "sqlite:///app/app.db")
+        db_path = db_url.replace("sqlite:///", "")
+        if not db_path.startswith('/'):
+            db_path = os.path.join("/app", db_path)
+        info = database_utils.get_database_info(db_path)
+        
+        # Get last backup info from audit logs
+        last_backup = db.query(AdminAuditLog).filter(
+            AdminAuditLog.action == "database_backup"
+        ).order_by(AdminAuditLog.created_at.desc()).first()
+        
+        if last_backup:
+            info["last_backup"] = {
+                "timestamp": last_backup.created_at.isoformat(),
+                "by": last_backup.admin_user.username
+            }
+        else:
+            info["last_backup"] = None
+        
+        return info
+    except Exception as e:
+        logger.error(f"Failed to get database info: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get database info: {str(e)}"
+        )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

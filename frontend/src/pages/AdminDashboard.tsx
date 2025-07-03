@@ -232,7 +232,7 @@ const AdminDashboard: React.FC = () => {
           <div className="bg-white shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Quick Actions</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 <Link
                   to="/admin/users"
                   className="block p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all"
@@ -274,6 +274,17 @@ const AdminDashboard: React.FC = () => {
                     <div className="text-2xl mb-2">📋</div>
                     <div className="text-sm font-medium text-gray-900">System Logs</div>
                     <div className="text-xs text-gray-500">Monitor system activity</div>
+                  </div>
+                </Link>
+
+                <Link
+                  to="/admin/database"
+                  className="block p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all"
+                >
+                  <div className="text-center">
+                    <div className="text-2xl mb-2">💾</div>
+                    <div className="text-sm font-medium text-gray-900">Database Management</div>
+                    <div className="text-xs text-gray-500">Backup and restore system data</div>
                   </div>
                 </Link>
               </div>
