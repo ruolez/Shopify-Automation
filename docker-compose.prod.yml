@@ -21,6 +21,12 @@ services:
       - DATABASE_URL=sqlite:///app/data/app.db
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this-in-production}
+      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY:-your-admin-secret-key-change-this}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2025-04}
       - ENVIRONMENT=production
     volumes:
       - ./backend:/app

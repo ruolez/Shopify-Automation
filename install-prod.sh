@@ -333,7 +333,7 @@ SERVER_IP=$SERVER_IP
 VITE_API_URL=http://$SERVER_IP:8000
 
 # CORS Configuration
-CORS_ORIGINS=http://$SERVER_IP:3000,http://$SERVER_IP,http://localhost:3000,http://localhost
+CORS_ORIGINS=http://$SERVER_IP,http://$SERVER_IP:3000,http://localhost,http://localhost:3000
 
 # Security
 SECRET_KEY=$(openssl rand -hex 32)
