@@ -64,5 +64,9 @@ def create_default_admin():
     finally:
         db.close()
 
+def create_initial_admin():
+    """Alias for create_default_admin for backward compatibility"""
+    create_default_admin()
+
 if __name__ == "__main__":
     create_default_admin()
