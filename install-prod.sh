@@ -332,6 +332,9 @@ if [ ! -f .env ]; then
 SERVER_IP=$SERVER_IP
 VITE_API_URL=http://$SERVER_IP:8000
 
+# CORS Configuration
+CORS_ORIGINS=http://$SERVER_IP:3000,http://$SERVER_IP,http://localhost:3000,http://localhost
+
 # Security
 SECRET_KEY=$(openssl rand -hex 32)
 ADMIN_SECRET_KEY=$(openssl rand -hex 32)
@@ -356,21 +359,42 @@ EOF
     print_success "Environment configuration created!"
 fi
 
-# Step 4: Create frontend environment file
+# Step 4: Configure CORS origins for server IP
+print_status "Configuring CORS origins for server IP..."
+# CORS will be configured via environment variable in .env file
+print_success "CORS will be configured via CORS_ORIGINS environment variable."
+
+# Step 5: Create frontend environment file
 print_status "Creating frontend environment configuration..."
 cat > frontend/.env <<EOF
 VITE_API_URL=http://$SERVER_IP:8000
 EOF
 print_success "Frontend environment configuration created!"
 
-# Step 5: Build and start services
+# Step 6: Verify configuration
+print_status "Verifying configuration..."
+if grep -q "CORS_ORIGINS=.*$SERVER_IP" .env; then
+    print_success "✓ CORS configuration includes server IP"
+else
+    print_error "✗ CORS configuration missing server IP"
+    exit 1
+fi
+
+if [ -f frontend/.env ] && grep -q "VITE_API_URL=http://$SERVER_IP:8000" frontend/.env; then
+    print_success "✓ Frontend .env file has correct API URL"
+else
+    print_error "✗ Frontend .env file missing or incorrect"
+    exit 1
+fi
+
+# Step 7: Build and start services
 print_status "Building Docker images ($DEPLOYMENT_MODE mode)..."
 
 # Build with no cache to ensure fresh build
 docker compose -f $COMPOSE_FILE build --no-cache
 print_success "Docker images built successfully!"
 
-# Step 6: Start services
+# Step 8: Start services
 print_status "Starting all services..."
 docker compose -f $COMPOSE_FILE up -d
 
@@ -387,7 +411,7 @@ fi
 
 print_success "All services started successfully!"
 
-# Step 7: Initialize or restore database
+# Step 9: Initialize or restore database
 if [ -n "$RESTORE_DB_PATH" ]; then
     print_status "Restoring database from backup..."
     restore_database "$RESTORE_DB_PATH"
@@ -413,7 +437,7 @@ except Exception as e:
     fi
 fi
 
-# Step 8: Health check
+# Step 10: Health check
 print_status "Performing health check..."
 sleep 5
 
@@ -457,7 +481,7 @@ except Exception as e:
     print(f'Admin user might already exist or error occurred: {e}')
 "
 
-# Step 9: Display success message
+# Step 11: Display success message
 echo
 echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║          Installation completed successfully!             ║${NC}"
