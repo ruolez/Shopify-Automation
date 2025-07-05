@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { PlusIcon, TrashIcon, ArrowLeftIcon, AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
-import { RuleForm, RuleSchema, Rule, RuleCondition, RuleConditionGroup } from '../types';
+import { RuleForm, RuleSchema, Rule, RuleConditionGroup } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const ruleSchema = z.object({

@@ -47,9 +47,7 @@ const AdminUsers: React.FC = () => {
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString() + ' ' + new Date(dateString).toLocaleTimeString();
-  };
+  // Removed unused formatDate function - using inline date formatting instead
 
   if (loading) {
     return (

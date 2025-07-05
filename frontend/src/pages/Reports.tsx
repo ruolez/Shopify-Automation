@@ -238,8 +238,8 @@ const Reports: React.FC = () => {
       let bValue = b[sortField];
       
       if (sortField === 'created_at') {
-        aValue = new Date(aValue).getTime();
-        bValue = new Date(bValue).getTime();
+        aValue = new Date(aValue as string).getTime();
+        bValue = new Date(bValue as string).getTime();
       }
       
       if (sortOrder === 'asc') {
