@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, validator
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 
 # User schemas
@@ -58,10 +58,20 @@ class RuleAction(BaseModel):
     type: str  # add_tag, set_fulfillment_location
     parameters: Dict[str, Any]
 
+class RuleConditionGroup(BaseModel):
+    operator: str = "AND"  # AND or OR
+    conditions: List[RuleCondition]
+    
+    @validator('operator')
+    def validate_operator(cls, v):
+        if v.upper() not in ["AND", "OR"]:
+            raise ValueError('Operator must be AND or OR')
+        return v.upper()
+
 class RuleCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    conditions: List[RuleCondition]
+    conditions: Union[List[RuleCondition], RuleConditionGroup]  # Support both formats
     actions: List[RuleAction]
     priority: int = 0
     delay_ms: int = 10  # Delay in milliseconds after rule execution
@@ -80,12 +90,38 @@ class RuleCreate(BaseModel):
         if v > 60000:  # Max 60 seconds
             raise ValueError('Delay must be no more than 60 seconds (60000ms)')
         return v
+    
+    @validator('conditions')
+    def normalize_conditions(cls, v):
+        # If conditions is already a list (legacy format), convert to new format
+        if isinstance(v, list):
+            # Convert RuleCondition objects to dicts if needed
+            conditions_list = []
+            for condition in v:
+                if hasattr(condition, 'dict'):
+                    conditions_list.append(condition.dict())
+                else:
+                    conditions_list.append(condition)
+            return {"operator": "AND", "conditions": conditions_list}
+        # If it's already in the new format, ensure operator is uppercase
+        elif isinstance(v, dict) and "conditions" in v:
+            v["operator"] = v.get("operator", "AND").upper()
+            # Convert nested RuleCondition objects to dicts if needed
+            conditions_list = []
+            for condition in v["conditions"]:
+                if hasattr(condition, 'dict'):
+                    conditions_list.append(condition.dict())
+                else:
+                    conditions_list.append(condition)
+            v["conditions"] = conditions_list
+            return v
+        return v
 
 class RuleResponse(BaseModel):
     id: int
     name: str
     description: Optional[str]
-    conditions: List[RuleCondition]
+    conditions: Union[List[RuleCondition], RuleConditionGroup]
     actions: List[RuleAction]
     priority: int
     delay_ms: int

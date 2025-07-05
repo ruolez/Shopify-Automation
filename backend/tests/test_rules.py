@@ -107,3 +107,55 @@ def test_delete_nonexistent_rule(client, auth_headers):
     """Test deleting a non-existent rule"""
     response = client.delete("/rules/999", headers=auth_headers)
     assert response.status_code == 404
+
+def test_create_rule_legacy_format(client, auth_headers, test_rule_data_legacy):
+    """Test creating a rule with legacy format (backward compatibility)"""
+    response = client.post("/rules", json=test_rule_data_legacy, headers=auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    
+    # Should be converted to new format
+    assert "conditions" in data
+    assert isinstance(data["conditions"], dict)
+    assert "operator" in data["conditions"]
+    assert data["conditions"]["operator"] == "AND"
+    assert "conditions" in data["conditions"]
+    assert isinstance(data["conditions"]["conditions"], list)
+
+def test_create_rule_or_logic(client, auth_headers, test_rule_data_or):
+    """Test creating a rule with OR logic"""
+    response = client.post("/rules", json=test_rule_data_or, headers=auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    
+    assert data["name"] == test_rule_data_or["name"]
+    assert data["conditions"]["operator"] == "OR"
+    assert len(data["conditions"]["conditions"]) == 2
+
+def test_rule_format_validation(client, auth_headers):
+    """Test validation of rule condition formats"""
+    # Test invalid operator
+    invalid_rule = {
+        "name": "Invalid Rule",
+        "conditions": {
+            "operator": "INVALID",
+            "conditions": [
+                {
+                    "field": "order_total",
+                    "operator": "greater_than",
+                    "value": "100"
+                }
+            ]
+        },
+        "actions": [
+            {
+                "type": "add_tags",
+                "parameters": {"tags": "test"}
+            }
+        ],
+        "priority": 1,
+        "is_active": True
+    }
+    
+    response = client.post("/rules", json=invalid_rule, headers=auth_headers)
+    assert response.status_code == 422

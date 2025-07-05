@@ -47,11 +47,11 @@ def test_user():
 def auth_headers(client, test_user):
     # Create user
     response = client.post("/auth/register", json=test_user)
-    assert response.status_code == 201
+    assert response.status_code == 200
     
     # Login to get token
-    login_data = {"username": test_user["email"], "password": test_user["password"]}
-    response = client.post("/auth/login", data=login_data)
+    login_data = {"email": test_user["email"], "password": test_user["password"]}
+    response = client.post("/auth/login", json=login_data)
     assert response.status_code == 200
     
     token = response.json()["access_token"]
@@ -70,6 +70,32 @@ def test_rule_data():
     return {
         "name": "Test Rule",
         "description": "Test rule description",
+        "conditions": {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field": "order_total",
+                    "operator": "greater_than",
+                    "value": "100"
+                }
+            ]
+        },
+        "actions": [
+            {
+                "type": "add_tags",
+                "parameters": {"tags": "high-value"}
+            }
+        ],
+        "priority": 1,
+        "is_active": True
+    }
+
+@pytest.fixture
+def test_rule_data_legacy():
+    """Legacy format for testing backward compatibility"""
+    return {
+        "name": "Legacy Test Rule",
+        "description": "Legacy test rule description",
         "conditions": [
             {
                 "field": "order_total",
@@ -80,7 +106,38 @@ def test_rule_data():
         "actions": [
             {
                 "type": "add_tags",
-                "parameters": {"tags": "high-value"}
+                "parameters": {"tags": "legacy-rule"}
+            }
+        ],
+        "priority": 1,
+        "is_active": True
+    }
+
+@pytest.fixture
+def test_rule_data_or():
+    """OR logic rule for testing"""
+    return {
+        "name": "OR Test Rule",
+        "description": "OR logic test rule",
+        "conditions": {
+            "operator": "OR",
+            "conditions": [
+                {
+                    "field": "order_total",
+                    "operator": "greater_than",
+                    "value": "100"
+                },
+                {
+                    "field": "shipping_province",
+                    "operator": "equals",
+                    "value": "CA"
+                }
+            ]
+        },
+        "actions": [
+            {
+                "type": "add_tags",
+                "parameters": {"tags": "or-rule"}
             }
         ],
         "priority": 1,

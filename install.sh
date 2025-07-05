@@ -569,13 +569,20 @@ else
     exit 1
 fi
 
+# Determine which compose file to use
+COMPOSE_FILE="docker-compose.yml"
+if [ "$1" = "--production" ] || [ "$DEPLOYMENT_MODE" = "production" ]; then
+    COMPOSE_FILE="docker-compose.prod.yml"
+    print_warning "Using production configuration: $COMPOSE_FILE"
+fi
+
 # Build with no cache to ensure fresh build
-docker compose build --no-cache
+docker compose -f $COMPOSE_FILE build --no-cache
 print_success "Docker images built successfully!"
 
 # Step 6: Start services
 print_status "Starting all services..."
-docker compose up -d
+docker compose -f $COMPOSE_FILE up -d
 
 # Wait for services to start
 print_status "Waiting for services to initialize..."

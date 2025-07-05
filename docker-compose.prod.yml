@@ -74,16 +74,13 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     container_name: shopify_frontend
     ports:
       - "3000:3000"
     environment:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
       - NODE_ENV=production
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     restart: unless-stopped
 
   nginx:

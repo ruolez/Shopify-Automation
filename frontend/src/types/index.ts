@@ -20,6 +20,11 @@ export interface RuleCondition {
   value: any;
 }
 
+export interface RuleConditionGroup {
+  operator: 'AND' | 'OR';
+  conditions: RuleCondition[];
+}
+
 export interface RuleAction {
   type: string;
   parameters: Record<string, any>;
@@ -29,7 +34,7 @@ export interface Rule {
   id: number;
   name: string;
   description?: string;
-  conditions: RuleCondition[];
+  conditions: RuleCondition[] | RuleConditionGroup;
   actions: RuleAction[];
   priority: number;
   delay_ms: number;
@@ -114,7 +119,7 @@ export interface StoreForm {
 export interface RuleForm {
   name: string;
   description?: string;
-  conditions: RuleCondition[];
+  conditions: RuleCondition[] | RuleConditionGroup;
   actions: RuleAction[];
   priority: number;
   delay_ms: number;

@@ -5,20 +5,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { PlusIcon, TrashIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, TrashIcon, ArrowLeftIcon, AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
-import { RuleForm, RuleSchema, Rule } from '../types';
+import { RuleForm, RuleSchema, Rule, RuleCondition, RuleConditionGroup } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const ruleSchema = z.object({
   name: z.string().min(3, 'Rule name must be at least 3 characters'),
   description: z.string().optional(),
-  conditions: z.array(z.object({
-    field: z.string().min(1, 'Field is required'),
-    operator: z.string().min(1, 'Operator is required'),
-    value: z.any(),
-  })).min(1, 'At least one condition is required'),
+  conditions: z.union([
+    z.array(z.object({
+      field: z.string().min(1, 'Field is required'),
+      operator: z.string().min(1, 'Operator is required'),
+      value: z.any(),
+    })).min(1, 'At least one condition is required'),
+    z.object({
+      operator: z.enum(['AND', 'OR']),
+      conditions: z.array(z.object({
+        field: z.string().min(1, 'Field is required'),
+        operator: z.string().min(1, 'Operator is required'),
+        value: z.any(),
+      })).min(1, 'At least one condition is required'),
+    })
+  ]),
   actions: z.array(z.object({
     type: z.string().min(1, 'Action type is required'),
     parameters: z.record(z.any()),
@@ -33,6 +43,9 @@ const RuleBuilder: React.FC = () => {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const isEditing = Boolean(id);
+  
+  // State for managing logical operator
+  const [logicalOperator, setLogicalOperator] = React.useState<'AND' | 'OR'>('AND');
 
 
   // Fetch rule schema
@@ -75,7 +88,10 @@ const RuleBuilder: React.FC = () => {
     defaultValues: {
       name: '',
       description: '',
-      conditions: [{ field: '', operator: '', value: '' }],
+      conditions: {
+        operator: 'AND' as const,
+        conditions: [{ field: '', operator: '', value: '' }]
+      },
       actions: [{ type: '', parameters: {} }],
       priority: 0,
       delay_ms: 10,
@@ -87,9 +103,10 @@ const RuleBuilder: React.FC = () => {
     fields: conditionFields,
     append: appendCondition,
     remove: removeCondition,
+    replace: replaceConditions,
   } = useFieldArray({
     control,
-    name: 'conditions',
+    name: 'conditions.conditions',
   });
 
   const {
@@ -107,15 +124,46 @@ const RuleBuilder: React.FC = () => {
       setValue('name', existingRule.name);
       setValue('description', existingRule.description || '');
       
-      // Convert arrays back to comma-separated strings for list operators
-      const processedConditions = existingRule.conditions.map(condition => {
-        if ((condition.operator === 'in_list' || condition.operator === 'not_in_list') && Array.isArray(condition.value)) {
-          return { ...condition, value: condition.value.join(', ') };
-        }
-        return condition;
-      });
+      // Handle both legacy (array) and new (object) condition formats
+      let conditionsToSet: RuleConditionGroup;
       
-      setValue('conditions', processedConditions);
+      if (Array.isArray(existingRule.conditions)) {
+        // Legacy format: convert to new format
+        const processedConditions = existingRule.conditions.map(condition => {
+          if ((condition.operator === 'in_list' || condition.operator === 'not_in_list') && Array.isArray(condition.value)) {
+            return { ...condition, value: condition.value.join(', ') };
+          }
+          return condition;
+        });
+        
+        conditionsToSet = {
+          operator: 'AND',
+          conditions: processedConditions
+        };
+        setLogicalOperator('AND');
+      } else {
+        // New format: use as-is
+        const processedConditions = existingRule.conditions.conditions.map(condition => {
+          if ((condition.operator === 'in_list' || condition.operator === 'not_in_list') && Array.isArray(condition.value)) {
+            return { ...condition, value: condition.value.join(', ') };
+          }
+          return condition;
+        });
+        
+        conditionsToSet = {
+          operator: existingRule.conditions.operator,
+          conditions: processedConditions
+        };
+        setLogicalOperator(existingRule.conditions.operator);
+      }
+      
+      // Clear existing conditions and set new ones
+      setValue('conditions', conditionsToSet);
+      
+      // Force re-render of condition fields by replacing the entire conditions array
+      // This ensures all conditions from the existing rule are displayed
+      replaceConditions(conditionsToSet.conditions);
+      
       setValue('actions', existingRule.actions);
       setValue('priority', existingRule.priority);
       setValue('delay_ms', existingRule.delay_ms || 10);
@@ -158,18 +206,27 @@ const RuleBuilder: React.FC = () => {
 
   const onSubmit = (data: RuleForm) => {
     // Process conditions to convert comma-separated strings to arrays for list operators
+    const processedConditions = Array.isArray(data.conditions) 
+      ? data.conditions 
+      : data.conditions.conditions;
+      
+    const processedConditionList = processedConditions.map(condition => {
+      if (condition.operator === 'in_list' || condition.operator === 'not_in_list') {
+        // Convert comma-separated string to array
+        if (typeof condition.value === 'string') {
+          const trimmedValues = condition.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
+          return { ...condition, value: trimmedValues };
+        }
+      }
+      return condition;
+    });
+
     const processedData = {
       ...data,
-      conditions: data.conditions.map(condition => {
-        if (condition.operator === 'in_list' || condition.operator === 'not_in_list') {
-          // Convert comma-separated string to array
-          if (typeof condition.value === 'string') {
-            const trimmedValues = condition.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
-            return { ...condition, value: trimmedValues };
-          }
-        }
-        return condition;
-      })
+      conditions: {
+        operator: logicalOperator,
+        conditions: processedConditionList
+      }
     };
 
     if (isEditing) {
@@ -310,9 +367,24 @@ const RuleBuilder: React.FC = () => {
           className="card"
         >
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold text-gray-900">
-              Conditions
-            </h2>
+            <div className="flex items-center space-x-4">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Conditions
+              </h2>
+              {conditionFields.length > 1 && (
+                <div className="flex items-center space-x-2">
+                  <AdjustmentsHorizontalIcon className="h-5 w-5 text-gray-400" />
+                  <select
+                    value={logicalOperator}
+                    onChange={(e) => setLogicalOperator(e.target.value as 'AND' | 'OR')}
+                    className="text-sm border border-gray-300 rounded-lg px-3 py-1 focus:ring-2 focus:ring-shopify-500 focus:border-shopify-500"
+                  >
+                    <option value="AND">All conditions must be true (AND)</option>
+                    <option value="OR">Any condition can be true (OR)</option>
+                  </select>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => appendCondition({ field: '', operator: '', value: '' })}
@@ -322,6 +394,15 @@ const RuleBuilder: React.FC = () => {
               Add Condition
             </button>
           </div>
+          
+          {conditionFields.length > 1 && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800">
+                <strong>{logicalOperator === 'AND' ? 'All' : 'Any'}</strong> of the conditions below must be met for this rule to apply.
+                {logicalOperator === 'AND' ? ' Every condition must be true.' : ' At least one condition must be true.'}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-4">
             {conditionFields.map((field, index) => (
@@ -330,7 +411,7 @@ const RuleBuilder: React.FC = () => {
                   <div>
                     <label className="label">Field</label>
                     <select
-                      {...register(`conditions.${index}.field`)}
+                      {...register(`conditions.conditions.${index}.field`)}
                       className="input"
                     >
                       <option value="">Select field</option>
@@ -345,12 +426,12 @@ const RuleBuilder: React.FC = () => {
                   <div>
                     <label className="label">Operator</label>
                     <select
-                      {...register(`conditions.${index}.operator`)}
+                      {...register(`conditions.conditions.${index}.operator`)}
                       className="input"
                     >
                       <option value="">Select operator</option>
                       {getOperatorsForField(
-                        getFieldType(watch(`conditions.${index}.field`))
+                        getFieldType(watch(`conditions.conditions.${index}.field`))
                       ).map(op => (
                         <option key={op.operator} value={op.operator}>
                           {op.label}
@@ -362,14 +443,14 @@ const RuleBuilder: React.FC = () => {
                   <div>
                     <label className="label">Value</label>
                     {(() => {
-                      const selectedOperator = watch(`conditions.${index}.operator`);
+                      const selectedOperator = watch(`conditions.conditions.${index}.operator`);
                       const isListOperator = selectedOperator === 'in_list' || selectedOperator === 'not_in_list';
                       
                       if (isListOperator) {
                         return (
                           <div>
                             <input
-                              {...register(`conditions.${index}.value`)}
+                              {...register(`conditions.conditions.${index}.value`)}
                               type="text"
                               className="input"
                               placeholder="PA,NY,CA,TX (comma-separated)"
@@ -383,7 +464,7 @@ const RuleBuilder: React.FC = () => {
                       
                       return (
                         <input
-                          {...register(`conditions.${index}.value`)}
+                          {...register(`conditions.conditions.${index}.value`)}
                           type="text"
                           className="input"
                           placeholder="Enter value"

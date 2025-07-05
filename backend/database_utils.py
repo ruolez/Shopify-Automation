@@ -4,6 +4,10 @@ import sqlite3
 from datetime import datetime
 from typing import Optional, Tuple
 import logging
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import ProcessingRule
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -195,3 +199,42 @@ def cleanup_old_backups(backup_dir: str, keep_count: int = 10):
             
     except Exception as e:
         logger.error(f"Error cleaning up backups: {str(e)}")
+
+
+def migrate_rules_to_new_format():
+    """
+    Migrate existing rules from legacy array format to new object format with logical operator.
+    Legacy format: [condition1, condition2, ...]
+    New format: {"operator": "AND", "conditions": [condition1, condition2, ...]}
+    """
+    db: Session = SessionLocal()
+    try:
+        rules = db.query(ProcessingRule).all()
+        migrated_count = 0
+        
+        for rule in rules:
+            # Check if conditions need migration
+            if isinstance(rule.conditions, list):
+                # Legacy format detected - migrate to new format
+                logger.info(f"Migrating rule '{rule.name}' (ID: {rule.id}) to new format")
+                
+                # Convert to new format (default to AND for backward compatibility)
+                new_conditions = {
+                    "operator": "AND",
+                    "conditions": rule.conditions
+                }
+                
+                rule.conditions = new_conditions
+                migrated_count += 1
+                
+        if migrated_count > 0:
+            db.commit()
+            logger.info(f"Successfully migrated {migrated_count} rules to new format")
+        else:
+            logger.info("No rules needed migration - all rules are already in the new format")
+            
+    except Exception as e:
+        logger.error(f"Error during rule migration: {str(e)}")
+        db.rollback()
+    finally:
+        db.close()

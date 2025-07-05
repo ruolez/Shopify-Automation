@@ -220,3 +220,125 @@ class TestRuleEngine:
         }
         result = self.rule_engine.evaluate_condition(condition, self.sample_order)
         assert result is False
+
+    def test_rule_and_logic_all_true(self):
+        """Test AND logic with all conditions true"""
+        from models import ProcessingRule
+        rule = ProcessingRule(
+            id=1,
+            name="Test AND Rule",
+            conditions={
+                "operator": "AND",
+                "conditions": [
+                    {
+                        "field": "order_total",
+                        "operator": "greater_than",
+                        "value": "100"
+                    },
+                    {
+                        "field": "shipping_province",
+                        "operator": "equals",
+                        "value": "CA"
+                    }
+                ]
+            }
+        )
+        result = self.rule_engine.evaluate_rule(rule, self.sample_order)
+        assert result is True
+
+    def test_rule_and_logic_some_false(self):
+        """Test AND logic with some conditions false"""
+        from models import ProcessingRule
+        rule = ProcessingRule(
+            id=1,
+            name="Test AND Rule",
+            conditions={
+                "operator": "AND",
+                "conditions": [
+                    {
+                        "field": "order_total",
+                        "operator": "greater_than",
+                        "value": "100"
+                    },
+                    {
+                        "field": "shipping_province",
+                        "operator": "equals",
+                        "value": "NY"  # This should be false
+                    }
+                ]
+            }
+        )
+        result = self.rule_engine.evaluate_rule(rule, self.sample_order)
+        assert result is False
+
+    def test_rule_or_logic_some_true(self):
+        """Test OR logic with some conditions true"""
+        from models import ProcessingRule
+        rule = ProcessingRule(
+            id=1,
+            name="Test OR Rule",
+            conditions={
+                "operator": "OR",
+                "conditions": [
+                    {
+                        "field": "order_total",
+                        "operator": "greater_than",
+                        "value": "200"  # This should be false
+                    },
+                    {
+                        "field": "shipping_province",
+                        "operator": "equals",
+                        "value": "CA"  # This should be true
+                    }
+                ]
+            }
+        )
+        result = self.rule_engine.evaluate_rule(rule, self.sample_order)
+        assert result is True
+
+    def test_rule_or_logic_all_false(self):
+        """Test OR logic with all conditions false"""
+        from models import ProcessingRule
+        rule = ProcessingRule(
+            id=1,
+            name="Test OR Rule",
+            conditions={
+                "operator": "OR",
+                "conditions": [
+                    {
+                        "field": "order_total",
+                        "operator": "greater_than",
+                        "value": "200"  # This should be false
+                    },
+                    {
+                        "field": "shipping_province",
+                        "operator": "equals",
+                        "value": "NY"  # This should be false
+                    }
+                ]
+            }
+        )
+        result = self.rule_engine.evaluate_rule(rule, self.sample_order)
+        assert result is False
+
+    def test_rule_legacy_format_compatibility(self):
+        """Test backward compatibility with legacy format (array of conditions)"""
+        from models import ProcessingRule
+        rule = ProcessingRule(
+            id=1,
+            name="Test Legacy Rule",
+            conditions=[
+                {
+                    "field": "order_total",
+                    "operator": "greater_than",
+                    "value": "100"
+                },
+                {
+                    "field": "shipping_province",
+                    "operator": "equals",
+                    "value": "CA"
+                }
+            ]
+        )
+        result = self.rule_engine.evaluate_rule(rule, self.sample_order)
+        assert result is True  # Should default to AND logic

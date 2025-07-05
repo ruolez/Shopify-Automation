@@ -34,38 +34,56 @@ class RuleEngine:
             order_name = order.get("name", "unknown")
             logger.info(f"Evaluating rule '{rule.name}' for order {order_name}")
             
-            conditions = rule.conditions
-            if not conditions:
+            conditions_data = rule.conditions
+            if not conditions_data:
                 return False
             
-            # Get the logical operator (default to AND)
+            # Handle both legacy array format and new object format
             logical_operator = "AND"
-            if isinstance(conditions, dict) and "operator" in conditions:
-                logical_operator = conditions.get("operator", "AND").upper()
-                conditions = conditions.get("conditions", [])
+            conditions_list = []
             
-            if not isinstance(conditions, list):
-                logger.error(f"Invalid conditions format for rule {rule.id}")
+            if isinstance(conditions_data, list):
+                # Legacy format: direct list of conditions (default to AND)
+                conditions_list = conditions_data
+                logical_operator = "AND"
+                logger.info(f"  Using legacy format with implicit AND operator")
+            elif isinstance(conditions_data, dict):
+                # New format: object with operator and conditions
+                logical_operator = conditions_data.get("operator", "AND").upper()
+                conditions_list = conditions_data.get("conditions", [])
+                logger.info(f"  Using new format with {logical_operator} operator")
+            else:
+                logger.error(f"Invalid conditions format for rule {rule.id}: {type(conditions_data)}")
                 return False
             
+            if not isinstance(conditions_list, list):
+                logger.error(f"Conditions must be a list, got {type(conditions_list)} for rule {rule.id}")
+                return False
+            
+            if not conditions_list:
+                logger.warning(f"No conditions found for rule {rule.id}")
+                return False
+            
+            # Evaluate each condition
             results = []
-            for condition in conditions:
+            for i, condition in enumerate(conditions_list):
                 result = self._evaluate_condition(condition, order, excluded_skus)
                 results.append(result)
-                logger.info(f"  Condition {condition}: {result}")
+                logger.info(f"  Condition {i+1} ({condition.get('field', 'unknown')} {condition.get('operator', 'unknown')} {condition.get('value', 'unknown')}): {result}")
             
             # Apply logical operator
-            final_result = False
             if logical_operator == "OR":
                 final_result = any(results)
+                logger.info(f"  Applying OR logic: any({results}) = {final_result}")
             else:  # AND
                 final_result = all(results)
+                logger.info(f"  Applying AND logic: all({results}) = {final_result}")
                 
-            logger.info(f"Rule '{rule.name}' for order {order_name}: {final_result}")
+            logger.info(f"Rule '{rule.name}' evaluation for order {order_name}: {final_result}")
             return final_result
                 
         except Exception as e:
-            logger.error(f"Error evaluating rule {rule.id}: {str(e)}")
+            logger.error(f"Error evaluating rule {rule.id}: {str(e)}", exc_info=True)
             return False
     
     def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:

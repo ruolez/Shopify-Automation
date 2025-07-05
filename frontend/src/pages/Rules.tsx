@@ -65,17 +65,41 @@ const Rules: React.FC = () => {
     toggleRuleMutation.mutate({ ruleId: rule.id, rule });
   };
 
-  const formatConditions = (conditions: any[]) => {
-    if (!conditions || conditions.length === 0) return 'No conditions';
+  const formatConditions = (conditions: any) => {
+    if (!conditions) return 'No conditions';
     
-    const conditionStrings = conditions.map(condition => {
+    // Handle both legacy (array) and new (object) formats
+    let conditionsList: any[] = [];
+    let logicalOperator = 'AND';
+    
+    if (Array.isArray(conditions)) {
+      // Legacy format
+      conditionsList = conditions;
+    } else if (conditions.conditions && Array.isArray(conditions.conditions)) {
+      // New format
+      conditionsList = conditions.conditions;
+      logicalOperator = conditions.operator || 'AND';
+    }
+    
+    if (conditionsList.length === 0) return 'No conditions';
+    
+    // Simple format for the rules list
+    const conditionStrings = conditionsList.map(condition => {
       const field = condition.field?.replace(/_/g, ' ') || '';
       const operator = condition.operator?.replace(/_/g, ' ') || '';
       const value = condition.value || '';
       return `${field} ${operator} ${value}`;
     });
     
-    return conditionStrings.join(', ');
+    const joinWord = logicalOperator === 'OR' ? ' OR ' : ' AND ';
+    const result = conditionStrings.join(joinWord);
+    
+    // Add prefix to indicate the logic when there are multiple conditions
+    if (conditionsList.length > 1) {
+      return `(${logicalOperator}) ${result}`;
+    }
+    
+    return result;
   };
 
   const formatActions = (actions: any[]) => {

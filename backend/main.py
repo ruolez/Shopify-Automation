@@ -28,6 +28,7 @@ from schemas import (
 from shopify_client import ShopifyClient
 from tasks import test_celery_connection, process_store_orders, process_all_orders
 import database_utils
+from database_utils import migrate_rules_to_new_format
 
 security = HTTPBearer()
 
@@ -37,6 +38,11 @@ async def lifespan(app: FastAPI):
     print("Creating database tables...")
     create_tables()
     print("Database tables created successfully")
+    
+    # Migrate existing rules to new format
+    print("Checking for rule migrations...")
+    migrate_rules_to_new_format()
+    
     test_celery_connection.delay()
     yield
     # Shutdown
@@ -203,17 +209,24 @@ async def remove_store(
     return {"message": "Store removed successfully"}
 
 # Rules management endpoints
-@app.post("/rules")
+@app.post("/rules", status_code=status.HTTP_201_CREATED)
 async def create_rule(
     rule_data: RuleCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Normalize conditions through the schema validator and convert to dict
+    # rule_data.conditions is already normalized to dict format by the validator
+    if hasattr(rule_data.conditions, 'dict'):
+        conditions_to_save = rule_data.conditions.dict()
+    else:
+        conditions_to_save = rule_data.conditions
+    
     db_rule = ProcessingRule(
         user_id=current_user.id,
         name=rule_data.name,
         description=rule_data.description,
-        conditions=[condition.dict() for condition in rule_data.conditions],
+        conditions=conditions_to_save,
         actions=[action.dict() for action in rule_data.actions],
         priority=rule_data.priority,
         delay_ms=rule_data.delay_ms,
@@ -321,7 +334,11 @@ async def update_rule(
     
     rule.name = rule_data.name
     rule.description = rule_data.description
-    rule.conditions = [condition.dict() for condition in rule_data.conditions]
+    # Normalize conditions through the schema validator and convert to dict
+    if hasattr(rule_data.conditions, 'dict'):
+        rule.conditions = rule_data.conditions.dict()
+    else:
+        rule.conditions = rule_data.conditions
     rule.actions = [action.dict() for action in rule_data.actions]
     rule.priority = rule_data.priority
     rule.delay_ms = rule_data.delay_ms
