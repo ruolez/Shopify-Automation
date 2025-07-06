@@ -951,60 +951,87 @@ async def _apply_rule_actions(
                                 success = False
                                     
                             elif not result["success"]:
-                                # Complete failure
+                                # Complete failure - but check if it's because already at location
                                 logger.error(f"Failed to move fulfillment order {fo['id']}: {result.get('errors', [])}")
-                                success = False
                                 
-                                # Log fulfillment failure as informational - rule still matched successfully
                                 # Extract actual error messages from Shopify API response
                                 shopify_errors = result.get("errors", [])
                                 error_messages = []
+                                is_already_at_location = False
+                                
                                 for error in shopify_errors:
                                     if isinstance(error, dict) and "message" in error:
-                                        error_messages.append(error["message"])
+                                        error_msg = error["message"]
+                                        error_messages.append(error_msg)
+                                        # Check if error is because already at target location
+                                        if "Cannot move to the current origin location" in error_msg:
+                                            is_already_at_location = True
                                 
-                                # Use actual Shopify error messages or indicate unknown failure
-                                error_msg = " | ".join(error_messages) if error_messages else "Fulfillment move failed but Shopify provided no error details"
-                                
-                                _log_order_action(
-                                    db, store.user_id, store.id, order["id"], 
-                                    order.get("name", "Unknown"), "fulfillment_move_failed", 
-                                    "info", 
-                                    {
-                                        "rule_name": rule.name,
-                                        "target_location_id": location_id,
-                                        "fulfillment_order_id": fo["id"],
-                                        "location_alias": location_alias or "direct_id",
-                                        "errors": result.get("errors", []),
-                                        "reason": "out_of_stock"
-                                    },
-                                    error_message=error_msg
-                                )
-                                
-                                # Add OOS tag to order due to complete fulfillment failure
-                                try:
-                                    await client.add_tags_to_order(order["id"], ["OOS"])
-                                    logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to complete fulfillment failure")
-                                except Exception as tag_error:
-                                    logger.error(f"Failed to add OOS tag to order: {str(tag_error)}")
-                                
-                                # Record OOS incident for out-of-stock fulfillment issues
-                                try:
-                                    # Record OOS incident for all products since the entire fulfillment failed
-                                    # (we don't have specific info about which products caused the failure)
-                                    _record_oos_incident(
-                                        db=db,
-                                        user_id=store.user_id,
-                                        store_id=store.id,
-                                        order=order,
-                                        rule_name=rule.name,
-                                        attempted_location_id=location_id,
-                                        attempted_location_alias=location_alias,
-                                        excluded_skus=excluded_skus
+                                # If already at location, treat as success!
+                                if is_already_at_location:
+                                    logger.info(f"Fulfillment order {fo['id']} is already at the target location - treating as successful")
+                                    
+                                    # Log as successful since items are already where they need to be
+                                    _log_order_action(
+                                        db, store.user_id, store.id, order["id"], 
+                                        order.get("name", "Unknown"), "fulfillment_already_at_location", 
+                                        "success", 
+                                        {
+                                            "rule_name": rule.name,
+                                            "target_location_id": location_id,
+                                            "fulfillment_order_id": fo["id"],
+                                            "location_alias": location_alias or "direct_id",
+                                            "message": "Fulfillment order already at target location"
+                                        }
+                                    )
+                                    # Don't set success = False, let it continue as if successful
+                                    
+                                else:
+                                    # Real failure - not because of already being at location
+                                    success = False
+                                    
+                                    # Use actual Shopify error messages or indicate unknown failure
+                                    error_msg = " | ".join(error_messages) if error_messages else "Fulfillment move failed but Shopify provided no error details"
+                                    
+                                    _log_order_action(
+                                        db, store.user_id, store.id, order["id"], 
+                                        order.get("name", "Unknown"), "fulfillment_move_failed", 
+                                        "info", 
+                                        {
+                                            "rule_name": rule.name,
+                                            "target_location_id": location_id,
+                                            "fulfillment_order_id": fo["id"],
+                                            "location_alias": location_alias or "direct_id",
+                                            "errors": result.get("errors", []),
+                                            "reason": "out_of_stock"
+                                        },
+                                        error_message=error_msg
                                     )
                                     
-                                except Exception as record_error:
-                                    logger.error(f"Failed to record OOS incident: {str(record_error)}")
+                                    # Add OOS tag to order due to complete fulfillment failure
+                                    try:
+                                        await client.add_tags_to_order(order["id"], ["OOS"])
+                                        logger.info(f"Added OOS tag to order {order.get('name', order['id'])} due to complete fulfillment failure")
+                                    except Exception as tag_error:
+                                        logger.error(f"Failed to add OOS tag to order: {str(tag_error)}")
+                                    
+                                    # Record OOS incident for out-of-stock fulfillment issues
+                                    try:
+                                        # Record OOS incident for all products since the entire fulfillment failed
+                                        # (we don't have specific info about which products caused the failure)
+                                        _record_oos_incident(
+                                            db=db,
+                                            user_id=store.user_id,
+                                            store_id=store.id,
+                                            order=order,
+                                            rule_name=rule.name,
+                                            attempted_location_id=location_id,
+                                            attempted_location_alias=location_alias,
+                                            excluded_skus=excluded_skus
+                                        )
+                                        
+                                    except Exception as record_error:
+                                        logger.error(f"Failed to record OOS incident: {str(record_error)}")
                                     
                             else:
                                 # Complete success
