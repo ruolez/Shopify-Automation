@@ -22,8 +22,13 @@ This is a Shopify Multi-Store Order Management System - a comprehensive automate
 **Frontend (React + TypeScript + Tailwind)**
 - `frontend/src/pages/` - Main application pages (Dashboard, Stores, Rules, RuleBuilder, Settings, OrderLogs, Reports)
 - `frontend/src/components/` - Reusable UI components
-- `frontend/src/contexts/AuthContext.tsx` - Authentication state management
-- `frontend/src/utils/api.ts` - Axios API client with interceptors
+- `frontend/src/contexts/` - React Context providers for global state management
+  - `AuthContext.tsx` - Authentication state management
+  - `TimezoneContext.tsx` - Centralized timezone and date formatting state
+  - `SettingsContext.tsx` - User settings management (legacy, superseded by TimezoneContext)
+- `frontend/src/utils/` - Utility functions and API clients
+  - `api.ts` - Axios API client with interceptors
+  - `dateFormat.ts` - Centralized date formatting with timezone support
 
 **Infrastructure**
 - 6 Docker services: redis, api, worker, scheduler, frontend, nginx
@@ -222,7 +227,8 @@ For schema changes, use `update-with-migration.sh`:
 - User-scoped data isolation (all major tables have `user_id` foreign key)
 - JSON columns for flexible rule conditions/actions storage
 - Cascade delete relationships prevent orphaned data
-- Settings table for per-user sync preferences
+- Settings table for per-user sync preferences and timezone configuration
+- Timezone-aware datetime storage (UTC) with proper timezone handling in API responses
 
 ### Authentication Flow
 - JWT tokens with configurable expiration
@@ -233,6 +239,43 @@ For schema changes, use `update-with-migration.sh`:
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
 
 ### Recent Feature Additions
+
+#### Comprehensive Timezone Management System (2025-07-06)
+**Purpose**: Provides global timezone management with real-time updates across the entire application.
+- **Key Features**:
+  - User-configurable timezone and date format settings in Settings page
+  - Centralized `TimezoneContext` for global state management across all components
+  - Proper UTC timestamp storage with client-side timezone conversion
+  - Real-time timezone updates without page refresh using custom events
+  - Grouped timezone selector with current time preview
+- **Database Changes**:
+  - Added `timezone` and `date_format` columns to Settings model
+  - Fixed OrderLog timestamp storage to use actual Shopify order creation times instead of processing times
+  - Proper timezone-aware datetime handling with UTC storage
+- **API Enhancements**:
+  - `GET /settings/timezones` - Returns grouped timezone list with pytz integration
+  - `GET /settings/date-formats` - Returns available date format options with examples
+  - Updated OrderLog API responses to include proper UTC timezone markers (`Z` suffix)
+- **Frontend Architecture**:
+  - `TimezoneContext.tsx` - Centralized timezone state management with custom event handling
+  - `dateFormat.ts` - Unified date formatting utilities using date-fns-tz
+  - All components updated to use centralized date formatting (`useTimezone()` hook)
+  - Cross-window timezone sync using localStorage and custom events
+- **UI Improvements**:
+  - Removed timezone search field (simplified to dropdown only)
+  - Added current time preview in selected timezone
+  - Removed non-functional "Generate" button from Reports page
+- **Technical Implementation**:
+  - Uses `date-fns-tz` for proper timezone conversion
+  - Backend stores all timestamps in UTC with timezone-aware handling
+  - API serializes timestamps with 'Z' suffix to indicate UTC
+  - Frontend converts UTC times to user's selected timezone for display
+- **Fixes Critical Issue**: Resolved 5-hour timezone discrepancy where OrderLog entries showed processing time instead of actual order creation time
+
+**Migration Notes**: 
+- Added `pytz==2024.1` and `date-fns-tz` dependencies
+- Existing timestamps are treated as UTC for proper conversion
+- Hot reload enabled for frontend development workflow
 
 #### SKU Exclusion System (2025-06-25)
 **Purpose**: Allows users to exclude specific SKU patterns from weight calculations and OOS reporting while preserving fulfillment functionality.
@@ -248,6 +291,7 @@ This system handles complex real-time order processing with proper error handlin
   - `POST /settings/excluded-skus` - Create new pattern
   - `PUT /settings/excluded-skus/{id}` - Update pattern
   - `DELETE /settings/excluded-skus/{id}` - Delete pattern
+- **Frontend Integration**: Uses centralized date formatting with timezone support for creation dates
 - **Behavior**:
   - Excluded SKUs are filtered from weight calculations in rule conditions
   - Excluded SKUs don't generate OOS incidents when unavailable
@@ -301,6 +345,7 @@ This system handles complex real-time order processing with proper error handlin
 - **Space Efficiency**: One line per order by default, expandable to show all log entries
 - **Status Indicators**: Visual badges showing Match, Error, Skipped status for each order (updated in 2025-06-25)
 - **Action Count**: Badge showing number of events per order
+- **Timezone Integration**: All timestamps display in user's selected timezone with proper conversion
 
 #### Data Reset Feature
 **Purpose**: Allows users to purge operational data while preserving configuration.
@@ -438,6 +483,19 @@ frontend:
 - CSS/React changes instantly visible without rebuilds
 - No more Docker cache purging required for UI updates
 - Consistent development experience across all environments
+
+### Timezone Display Issues (Fixed 2025-07-06)
+**Issue**: 5-hour timezone discrepancy where OrderLog entries showed processing time instead of actual order creation time.
+- **Root Cause**: OrderLog was storing Celery task execution time instead of Shopify order creation timestamp
+- **Symptoms**: Order created at 10:53 AM displayed as 15:53 in system (5-hour difference)
+- **Fix**: Updated `_log_order_action()` to accept and use actual Shopify `createdAt` timestamp
+- **Technical Solution**:
+  - Parse Shopify ISO timestamps with proper timezone awareness
+  - Store as UTC in database with timezone information preserved
+  - API returns timestamps with 'Z' suffix for proper frontend interpretation
+  - Frontend uses TimezoneContext for proper local timezone conversion
+- **Implementation**: `backend/tasks.py` - Added `order_created_at` parameter to logging functions
+- **Result**: All timestamps now accurately reflect actual order creation times in user's selected timezone
 
 ### Critical Frontend Cache Issues (Legacy - Now Fixed)
 **Previous Problem**: Docker aggressively cached builds, preventing new React changes from appearing.
