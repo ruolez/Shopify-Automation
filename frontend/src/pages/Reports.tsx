@@ -139,7 +139,6 @@ const Reports: React.FC = () => {
       return response.data;
     },
     onSuccess: (data) => {
-      toast.success(`Analysis completed: ${data.unique_products} unique products found`);
       setProductAnalysisData(data);
       setShowProductAnalysis(true);
     },
@@ -152,6 +151,10 @@ const Reports: React.FC = () => {
     const dateRange = preset.getValue();
     setStartDate(dateRange.start);
     setEndDate(dateRange.end);
+    // Trigger report refresh after setting dates
+    setTimeout(() => {
+      refetchOOS();
+    }, 100);
   };
 
   const handleClearFilters = () => {
@@ -161,12 +164,7 @@ const Reports: React.FC = () => {
   };
 
   const handleRefresh = () => {
-    toast.loading('Generating report...', { id: 'report-loading' });
-    
-    refetchOOS().finally(() => {
-      toast.dismiss('report-loading');
-      toast.success('OOS orders report updated');
-    });
+    refetchOOS();
   };
 
   const handleSort = (field: SortField) => {
