@@ -331,154 +331,168 @@ const Reports: React.FC = () => {
         </p>
       </motion.div>
 
-      {/* Unified Control Panel */}
+      {/* Compact Control Bar */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="bg-white rounded-lg shadow-sm border border-gray-200"
+        className="bg-white rounded-lg shadow-sm border border-gray-200 p-3"
       >
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-gray-900 flex items-center">
-              <CalendarIcon className="h-5 w-5 mr-2 text-gray-500" />
-              Report Configuration
-            </h2>
-            <div className="flex items-center space-x-2">
-              {(startDate || endDate || ruleFilter || locationFilter) && (
-                <button
-                  onClick={handleClearFilters}
-                  className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
-                >
-                  <XMarkIcon className="h-4 w-4 mr-1" />
-                  Clear Filters
-                </button>
-              )}
-              <button
-                onClick={handleRefresh}
-                disabled={oosLoading}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
-              >
-                {oosLoading ? (
-                  <LoadingSpinner size="sm" className="mr-2" />
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Date Range with Dropdown */}
+          <div className="relative group">
+            <button
+              className="inline-flex items-center px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-shopify-500"
+            >
+              <CalendarIcon className="h-4 w-4 mr-1.5 text-gray-500" />
+              <span className="text-gray-700">
+                {startDate || endDate ? (
+                  <>
+                    {startDate ? new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Start'}
+                    {' - '}
+                    {endDate ? new Date(endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'End'}
+                  </>
                 ) : (
-                  <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
+                  'Date Range'
                 )}
-                Generate Report
+              </span>
+              <ChevronDownIcon className="h-4 w-4 ml-1 text-gray-400" />
+            </button>
+            
+            {/* Dropdown Menu */}
+            <div className="absolute left-0 top-full mt-1 w-72 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+              <div className="p-3 space-y-3">
+                {/* Quick Presets */}
+                <div className="grid grid-cols-2 gap-1">
+                  {datePresets.map((preset, index) => (
+                    <button
+                      key={index}
+                      onClick={() => handleDatePreset(preset)}
+                      className="px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="border-t pt-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      placeholder="Start"
+                      className="px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-shopify-500"
+                    />
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      placeholder="End"
+                      className="px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-shopify-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Inline Filters */}
+          <div className="flex items-center gap-2">
+            <FunnelIcon className="h-4 w-4 text-gray-400" />
+            <select
+              value={ruleFilter}
+              onChange={(e) => setRuleFilter(e.target.value)}
+              className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-shopify-500"
+            >
+              <option value="">All Rules</option>
+              {uniqueRules.map((rule) => (
+                <option key={rule} value={rule}>
+                  {rule}
+                </option>
+              ))}
+            </select>
+            
+            <select
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-shopify-500"
+            >
+              <option value="">All Locations</option>
+              {uniqueLocations.map((location) => (
+                <option key={location} value={location}>
+                  {location}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Active Filters Pills */}
+          {(startDate || endDate || ruleFilter || locationFilter) && (
+            <div className="flex items-center gap-2 flex-1">
+              <div className="flex flex-wrap gap-1">
+                {(startDate || endDate) && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">
+                    {startDate && new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {startDate && endDate && ' - '}
+                    {endDate && new Date(endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    <button
+                      onClick={() => { setStartDate(''); setEndDate(''); }}
+                      className="ml-1 hover:text-gray-900"
+                    >
+                      <XMarkIcon className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+                {ruleFilter && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-800">
+                    {ruleFilter}
+                    <button
+                      onClick={() => setRuleFilter('')}
+                      className="ml-1 hover:text-blue-900"
+                    >
+                      <XMarkIcon className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+                {locationFilter && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800">
+                    {locationFilter}
+                    <button
+                      onClick={() => setLocationFilter('')}
+                      className="ml-1 hover:text-green-900"
+                    >
+                      <XMarkIcon className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2 ml-auto">
+            {(startDate || endDate || ruleFilter || locationFilter) && (
+              <button
+                onClick={handleClearFilters}
+                className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                title="Clear all filters"
+              >
+                <XMarkIcon className="h-4 w-4" />
               </button>
-            </div>
-          </div>
-
-          {/* Date Range Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            {/* Date Inputs */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-gray-900">Date Range</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-shopify-500 focus:border-shopify-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-shopify-500 focus:border-shopify-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Date Presets */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-gray-900">Quick Select</h3>
-              <div className="grid grid-cols-2 gap-2">
-                {datePresets.map((preset, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleDatePreset(preset)}
-                    className="px-3 py-2 text-xs font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Filters Section */}
-          <div className="border-t border-gray-200 pt-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-medium text-gray-900 flex items-center">
-                <FunnelIcon className="h-4 w-4 mr-2 text-gray-500" />
-                Data Filters
-              </h3>
-              {(ruleFilter || locationFilter) && (
-                <div className="flex items-center space-x-2">
-                  {ruleFilter && (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      Rule: {ruleFilter}
-                      <button
-                        onClick={() => setRuleFilter('')}
-                        className="ml-1.5 h-3 w-3 rounded-full inline-flex items-center justify-center text-blue-400 hover:bg-blue-200 hover:text-blue-500"
-                      >
-                        <XMarkIcon className="h-2 w-2" />
-                      </button>
-                    </span>
-                  )}
-                  {locationFilter && (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Location: {locationFilter}
-                      <button
-                        onClick={() => setLocationFilter('')}
-                        className="ml-1.5 h-3 w-3 rounded-full inline-flex items-center justify-center text-green-400 hover:bg-green-200 hover:text-green-500"
-                      >
-                        <XMarkIcon className="h-2 w-2" />
-                      </button>
-                    </span>
-                  )}
-                </div>
+            )}
+            <button
+              onClick={handleRefresh}
+              disabled={oosLoading}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-shopify-500 disabled:opacity-50"
+            >
+              {oosLoading ? (
+                <LoadingSpinner size="sm" className="mr-1.5" />
+              ) : (
+                <DocumentArrowDownIcon className="h-4 w-4 mr-1.5" />
               )}
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Filter by Rule</label>
-                <select
-                  value={ruleFilter}
-                  onChange={(e) => setRuleFilter(e.target.value)}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-shopify-500 focus:border-shopify-500"
-                >
-                  <option value="">All Rules</option>
-                  {uniqueRules.map((rule) => (
-                    <option key={rule} value={rule}>
-                      {rule}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Filter by Location</label>
-                <select
-                  value={locationFilter}
-                  onChange={(e) => setLocationFilter(e.target.value)}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-shopify-500 focus:border-shopify-500"
-                >
-                  <option value="">All Locations</option>
-                  {uniqueLocations.map((location) => (
-                    <option key={location} value={location}>
-                      {location}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+              Generate
+            </button>
           </div>
         </div>
       </motion.div>
