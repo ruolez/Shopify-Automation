@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
+import { SettingsProvider } from './contexts/SettingsContext';
+import { TimezoneProvider } from './contexts/TimezoneContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -54,20 +56,24 @@ function App() {
   }
 
   return (
-    <Layout>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/stores" element={<Stores />} />
-        <Route path="/rules" element={<Rules />} />
-        <Route path="/rules/new" element={<RuleBuilder />} />
-        <Route path="/rules/:id/edit" element={<RuleBuilder />} />
-        <Route path="/order-logs" element={<OrderLogs />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/locations" element={<LocationManagement />} />
-        <Route path="/reports" element={<Reports />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Layout>
+    <SettingsProvider>
+      <TimezoneProvider>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/stores" element={<Stores />} />
+            <Route path="/rules" element={<Rules />} />
+            <Route path="/rules/new" element={<RuleBuilder />} />
+            <Route path="/rules/:id/edit" element={<RuleBuilder />} />
+            <Route path="/order-logs" element={<OrderLogs />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/locations" element={<LocationManagement />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </TimezoneProvider>
+    </SettingsProvider>
   );
 }
 

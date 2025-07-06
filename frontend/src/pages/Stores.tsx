@@ -10,6 +10,8 @@ import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { Store, StoreForm } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { formatShortDate } from '../utils/dateFormat';
+import { useTimezone } from '../contexts/TimezoneContext';
 
 const storeSchema = z.object({
   shop_domain: z.string().min(1, 'Shop domain is required'),
@@ -19,6 +21,7 @@ const storeSchema = z.object({
 const Stores: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const queryClient = useQueryClient();
+  const { timezone } = useTimezone();
 
   const { data: stores, isLoading } = useQuery<Store[]>({
     queryKey: ['stores'],
@@ -146,7 +149,7 @@ const Stores: React.FC = () => {
                   </div>
                   {store.last_sync && (
                     <p className="text-xs text-gray-400 mt-2">
-                      Last sync: {new Date(store.last_sync).toLocaleDateString()}
+                      Last sync: {formatShortDate(store.last_sync, timezone)}
                     </p>
                   )}
                 </div>

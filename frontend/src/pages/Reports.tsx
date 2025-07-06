@@ -5,6 +5,8 @@ import { DocumentArrowDownIcon, ExclamationTriangleIcon, ChevronUpIcon, ChevronD
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { formatShortDate, formatFullDateTime } from '../utils/dateFormat';
+import { useTimezone } from '../contexts/TimezoneContext';
 
 interface OOSOrder {
   order_number: string;
@@ -37,6 +39,7 @@ const Reports: React.FC = () => {
   const [productAnalysisData, setProductAnalysisData] = useState<any>(null);
   const [productSortField, setProductSortField] = useState<string>('total_incidents');
   const [productSortOrder, setProductSortOrder] = useState<'asc' | 'desc'>('desc');
+  const { timezone, dateFormat } = useTimezone();
 
   // Preset date ranges
   const datePresets = [
@@ -283,15 +286,7 @@ const Reports: React.FC = () => {
     });
   }, [productAnalysisData?.products, productSortField, productSortOrder]);
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  // Use centralized date formatting utility
 
   const exportToCSV = (data: any[], filename: string) => {
     if (!data.length) return;
@@ -346,9 +341,9 @@ const Reports: React.FC = () => {
               <span className="text-gray-700">
                 {startDate || endDate ? (
                   <>
-                    {startDate ? new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Start'}
+                    {startDate ? formatShortDate(startDate, timezone) : 'Start'}
                     {' - '}
-                    {endDate ? new Date(endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'End'}
+                    {endDate ? formatShortDate(endDate, timezone) : 'End'}
                   </>
                 ) : (
                   'Date Range'
@@ -431,9 +426,9 @@ const Reports: React.FC = () => {
               <div className="flex flex-wrap gap-1">
                 {(startDate || endDate) && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">
-                    {startDate && new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {startDate && formatShortDate(startDate, timezone)}
                     {startDate && endDate && ' - '}
-                    {endDate && new Date(endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {endDate && formatShortDate(endDate, timezone)}
                     <button
                       onClick={() => { setStartDate(''); setEndDate(''); }}
                       className="ml-1 hover:text-gray-900"
@@ -479,18 +474,6 @@ const Reports: React.FC = () => {
                 <XMarkIcon className="h-4 w-4" />
               </button>
             )}
-            <button
-              onClick={handleRefresh}
-              disabled={oosLoading}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-shopify-500 disabled:opacity-50"
-            >
-              {oosLoading ? (
-                <LoadingSpinner size="sm" className="mr-1.5" />
-              ) : (
-                <DocumentArrowDownIcon className="h-4 w-4 mr-1.5" />
-              )}
-              Generate
-            </button>
           </div>
         </div>
       </motion.div>
@@ -637,7 +620,7 @@ const Reports: React.FC = () => {
                             <div className="text-sm font-medium text-gray-900">{order.order_number}</div>
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-500">{formatDate(order.created_at)}</div>
+                            <div className="text-sm text-gray-500">{formatFullDateTime(order.created_at, timezone, dateFormat)}</div>
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">

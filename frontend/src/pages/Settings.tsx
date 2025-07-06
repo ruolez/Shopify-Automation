@@ -7,6 +7,7 @@ import { ExclamationTriangleIcon, TrashIcon, PlusIcon, PencilIcon } from '@heroi
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { formatDate, getCurrentTimeInTimezone, formatShortDate } from '../utils/dateFormat';
 
 interface Settings {
   id: number;
@@ -14,6 +15,8 @@ interface Settings {
   sync_frequency_minutes: number;
   auto_sync_enabled: boolean;
   log_retention_days: number;
+  timezone: string;
+  date_format: string;
   created_at: string;
   updated_at: string | null;
 }
@@ -42,7 +45,130 @@ interface ExcludedSKU {
   updated_at?: string;
 }
 
-const ExcludedSKUsSection: React.FC = () => {
+interface TimezoneGroup {
+  [groupName: string]: string[];
+}
+
+interface TimezoneData {
+  groups: TimezoneGroup;
+  all: string[];
+}
+
+interface DateFormat {
+  format: string;
+  description: string;
+  example: string;
+}
+
+const TimezoneSelector: React.FC<{
+  value: string;
+  onChange: (timezone: string) => void;
+}> = ({ value, onChange }) => {
+  const { data: timezoneData } = useQuery<TimezoneData>({
+    queryKey: ['timezones'],
+    queryFn: async () => {
+      const response = await api.get('/settings/timezones');
+      return response.data;
+    },
+  });
+
+  const currentTime = React.useMemo(() => {
+    try {
+      return getCurrentTimeInTimezone(value);
+    } catch {
+      return new Date();
+    }
+  }, [value]);
+
+  return (
+    <div>
+      <label htmlFor="timezone" className="block text-sm font-medium text-gray-700">
+        Timezone
+      </label>
+      <p className="text-sm text-gray-500 mb-2">
+        Select your preferred timezone for displaying dates and times
+      </p>
+      
+      <div className="space-y-3">
+        <select
+          id="timezone"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+        >
+          {timezoneData && Object.entries(timezoneData.groups).map(([groupName, timezones]) => (
+            <optgroup key={groupName} label={groupName}>
+              {timezones.map((timezone) => (
+                <option key={timezone} value={timezone}>
+                  {timezone.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        
+        <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
+          <div className="font-medium text-gray-700">Current time in {value}:</div>
+          <div className="text-lg font-mono">
+            {formatDate(currentTime, { timezone: value, dateFormat: 'EEEE, MMMM d, yyyy HH:mm:ss' })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DateFormatSelector: React.FC<{
+  value: string;
+  onChange: (format: string) => void;
+  timezone: string;
+}> = ({ value, onChange, timezone }) => {
+  const { data: dateFormats } = useQuery<DateFormat[]>({
+    queryKey: ['date-formats'],
+    queryFn: async () => {
+      const response = await api.get('/settings/date-formats');
+      return response.data;
+    },
+  });
+
+  const previewTime = React.useMemo(() => {
+    const now = new Date();
+    return formatDate(now, { timezone, dateFormat: value });
+  }, [timezone, value]);
+
+  return (
+    <div>
+      <label htmlFor="date-format" className="block text-sm font-medium text-gray-700">
+        Date Format
+      </label>
+      <p className="text-sm text-gray-500 mb-2">
+        Choose how dates and times should be displayed throughout the application
+      </p>
+      
+      <div className="space-y-3">
+        <select
+          id="date-format"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+        >
+          {dateFormats?.map((format) => (
+            <option key={format.format} value={format.format}>
+              {format.description} - {format.example}
+            </option>
+          ))}
+        </select>
+        
+        <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
+          <div className="font-medium text-gray-700">Preview with current format:</div>
+          <div className="text-lg font-mono">{previewTime}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC' }) => {
   const queryClient = useQueryClient();
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSku, setEditingSku] = useState<ExcludedSKU | null>(null);
@@ -200,7 +326,7 @@ const ExcludedSKUsSection: React.FC = () => {
                       <p className="mt-1 text-sm text-gray-600">{sku.description}</p>
                     )}
                     <p className="mt-1 text-xs text-gray-400">
-                      Created: {new Date(sku.created_at).toLocaleDateString()}
+                      Created: {formatShortDate(sku.created_at, timezone)}
                     </p>
                   </div>
                   <div className="flex items-center space-x-2">
@@ -367,9 +493,26 @@ const Settings: React.FC = () => {
       const response = await api.put('/settings', data);
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
+      
+      // Trigger localStorage event for cross-window updates
+      localStorage.setItem('user-settings-updated', Date.now().toString());
+      
+      // Trigger custom event for same-window updates (storage events don't fire in same window)
+      window.dispatchEvent(new CustomEvent('settings-updated', { 
+        detail: { timezone: variables.timezone, dateFormat: variables.date_format }
+      }));
+      
       toast.success('Settings updated successfully');
+      
+      // Debug logging
+      if (variables.timezone) {
+        console.log('Timezone updated to:', variables.timezone);
+      }
+      if (variables.date_format) {
+        console.log('Date format updated to:', variables.date_format);
+      }
     },
     onError: () => {
       toast.error('Failed to update settings');
@@ -515,6 +658,33 @@ const Settings: React.FC = () => {
         </div>
       </div>
 
+      {/* Timezone & Date Format Settings */}
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <h3 className="text-lg font-medium leading-6 text-gray-900">
+            Timezone & Date Format
+          </h3>
+          <p className="mt-1 text-sm text-gray-500">
+            Configure your preferred timezone and date format for displaying timestamps.
+          </p>
+
+          <div className="mt-6 space-y-6">
+            {/* Timezone Selection */}
+            <TimezoneSelector
+              value={settings?.timezone || 'UTC'}
+              onChange={(timezone) => updateSettings.mutate({ timezone })}
+            />
+
+            {/* Date Format Selection */}
+            <DateFormatSelector
+              value={settings?.date_format || 'MMM d, yyyy HH:mm'}
+              onChange={(date_format) => updateSettings.mutate({ date_format })}
+              timezone={settings?.timezone || 'UTC'}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Manual sync section */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -545,7 +715,7 @@ const Settings: React.FC = () => {
       </div>
 
       {/* Excluded SKUs section */}
-      <ExcludedSKUsSection />
+      <ExcludedSKUsSection timezone={settings?.timezone} />
 
       {/* Data Management section */}
       <div className="bg-white shadow rounded-lg">

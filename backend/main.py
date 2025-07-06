@@ -520,6 +520,7 @@ async def get_settings(
         db.commit()
         db.refresh(settings)
     
+    print(f"DEBUG: GET settings for user {current_user.id} - timezone: {settings.timezone}, date_format: {settings.date_format}")
     return settings
 
 @app.put("/settings", response_model=SettingsResponse)
@@ -534,11 +535,18 @@ async def update_settings(
         settings = Settings(user_id=current_user.id)
         db.add(settings)
     
-    for field, value in settings_data.dict().items():
-        setattr(settings, field, value)
+    # Update only provided fields
+    update_data = settings_data.dict(exclude_unset=True)
+    print(f"DEBUG: Updating settings for user {current_user.id}: {update_data}")
+    
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(settings, field, value)
+            print(f"DEBUG: Set {field} = {value}")
     
     db.commit()
     db.refresh(settings)
+    print(f"DEBUG: Settings after update - timezone: {settings.timezone}, date_format: {settings.date_format}")
     return settings
 
 @app.post("/settings/reset-data")
@@ -681,6 +689,122 @@ async def get_data_statistics(
     
     return stats
 
+@app.get("/settings/timezones")
+async def get_timezones(
+    current_user: User = Depends(get_current_user)
+):
+    """Get list of available timezones"""
+    import pytz
+    
+    # Group timezones by region for better UX
+    timezone_groups = {
+        "Common": [
+            "UTC",
+            "US/Eastern",
+            "US/Central",
+            "US/Mountain",
+            "US/Pacific",
+            "Europe/London",
+            "Europe/Paris",
+            "Asia/Tokyo",
+            "Asia/Shanghai",
+            "Australia/Sydney"
+        ],
+        "Americas": [],
+        "Europe": [],
+        "Asia": [],
+        "Africa": [],
+        "Australia": [],
+        "Pacific": [],
+        "Other": []
+    }
+    
+    # Categorize all timezones
+    for tz in pytz.all_timezones:
+        if tz in timezone_groups["Common"]:
+            continue
+            
+        if tz.startswith("US/") or tz.startswith("America/") or tz.startswith("Canada/"):
+            timezone_groups["Americas"].append(tz)
+        elif tz.startswith("Europe/"):
+            timezone_groups["Europe"].append(tz)
+        elif tz.startswith("Asia/"):
+            timezone_groups["Asia"].append(tz)
+        elif tz.startswith("Africa/"):
+            timezone_groups["Africa"].append(tz)
+        elif tz.startswith("Australia/"):
+            timezone_groups["Australia"].append(tz)
+        elif tz.startswith("Pacific/"):
+            timezone_groups["Pacific"].append(tz)
+        else:
+            timezone_groups["Other"].append(tz)
+    
+    # Sort timezones within each group
+    for group in timezone_groups:
+        if group != "Common":  # Keep Common in predefined order
+            timezone_groups[group].sort()
+    
+    return {
+        "groups": timezone_groups,
+        "all": pytz.all_timezones
+    }
+
+@app.get("/settings/date-formats")
+async def get_date_formats(
+    current_user: User = Depends(get_current_user)
+):
+    """Get list of available date formats with examples"""
+    from datetime import datetime
+    import pytz
+    
+    # Sample date for examples
+    sample_date = datetime(2024, 3, 15, 14, 30, 45)
+    
+    formats = [
+        {
+            "format": "MMM d, yyyy HH:mm",
+            "description": "Default format",
+            "example": "Mar 15, 2024 14:30"
+        },
+        {
+            "format": "MM/dd/yyyy HH:mm:ss",
+            "description": "US format with seconds",
+            "example": "03/15/2024 14:30:45"
+        },
+        {
+            "format": "dd/MM/yyyy HH:mm",
+            "description": "European format",
+            "example": "15/03/2024 14:30"
+        },
+        {
+            "format": "yyyy-MM-dd HH:mm:ss",
+            "description": "ISO format",
+            "example": "2024-03-15 14:30:45"
+        },
+        {
+            "format": "d MMM yyyy, h:mm a",
+            "description": "12-hour format",
+            "example": "15 Mar 2024, 2:30 PM"
+        },
+        {
+            "format": "EEEE, MMMM d, yyyy",
+            "description": "Full date only",
+            "example": "Friday, March 15, 2024"
+        },
+        {
+            "format": "MMM d, h:mm a",
+            "description": "Short format with 12-hour time",
+            "example": "Mar 15, 2:30 PM"
+        },
+        {
+            "format": "yyyy-MM-dd'T'HH:mm:ss",
+            "description": "ISO 8601 format",
+            "example": "2024-03-15T14:30:45"
+        }
+    ]
+    
+    return formats
+
 # Order logs endpoints
 @app.get("/order-logs")
 async def get_order_logs(
@@ -725,7 +849,7 @@ async def get_order_logs(
                 "status": log.status,
                 "details": log.details,
                 "error_message": log.error_message,
-                "created_at": log.created_at
+                "created_at": log.created_at.isoformat() + 'Z' if log.created_at else None
             }
             for log in logs
         ],

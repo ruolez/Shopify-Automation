@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { adminApi } from '../utils/adminApi';
+import { formatFullDateTime } from '../utils/dateFormat';
 
 interface DatabaseInfo {
   exists: boolean;
@@ -137,7 +138,7 @@ const AdminDatabase: React.FC = () => {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
+    return formatFullDateTime(dateString, 'UTC', 'MMM d, yyyy HH:mm:ss');
   };
 
   if (loading) {

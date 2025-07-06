@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { adminApi, UserManagement } from '../utils/adminApi';
+import { formatShortDate } from '../utils/dateFormat';
 
 const AdminUsers: React.FC = () => {
   const [users, setUsers] = useState<UserManagement[]>([]);
@@ -140,7 +141,7 @@ const AdminUsers: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {user.last_activity 
-                          ? new Date(user.last_activity).toLocaleDateString()
+                          ? formatShortDate(user.last_activity, 'UTC')
                           : 'Never'
                         }
                       </td>
@@ -151,7 +152,7 @@ const AdminUsers: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(user.created_at).toLocaleDateString()}
+                        {formatShortDate(user.created_at, 'UTC')}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex space-x-2">

@@ -13,9 +13,12 @@ import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { Rule } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { formatShortDate } from '../utils/dateFormat';
+import { useTimezone } from '../contexts/TimezoneContext';
 
 const Rules: React.FC = () => {
   const queryClient = useQueryClient();
+  const { timezone } = useTimezone();
 
   const { data: rules, isLoading } = useQuery<Rule[]>({
     queryKey: ['rules'],
@@ -189,7 +192,7 @@ const Rules: React.FC = () => {
                   </div>
                   
                   <p className="text-xs text-gray-400 mt-3">
-                    Created: {new Date(rule.created_at).toLocaleDateString()}
+                    Created: {formatShortDate(rule.created_at, timezone)}
                   </p>
                 </div>
                 

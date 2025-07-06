@@ -675,7 +675,8 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             _log_order_action(
                                 db, store.user_id, store.id, order_id, 
                                 order_number, f"applied_rule_{rule.id}", 
-                                "match", {"rule_name": rule.name, "actions_successful": success}
+                                "match", {"rule_name": rule.name, "actions_successful": success},
+                                order_created_at=order_created_at
                             )
                             
                             # ALWAYS re-fetch order after a rule matches and executes (regardless of success/failure)
@@ -710,7 +711,8 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                         _log_order_action(
                             db, store.user_id, store.id, order_id,
                             order_number, "no_rules_matched", "skipped",
-                            {"message": "No rules matched this order"}
+                            {"message": "No rules matched this order"},
+                            order_created_at=order_created_at
                         )
                     
                     processed_orders += 1
@@ -720,7 +722,8 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     _log_order_action(
                         db, store.user_id, store.id, order_id, 
                         order_number, "processing_error", "error", 
-                        error_message=str(e)
+                        error_message=str(e),
+                        order_created_at=order_created_at
                     )
             
             # Check for next page
@@ -1070,20 +1073,56 @@ def _log_order_action(
     action: str, 
     status: str, 
     details: Dict = None, 
-    error_message: str = None
+    error_message: str = None,
+    order_created_at: str = None
 ):
     """Log order processing action"""
     try:
-        log_entry = OrderLog(
-            user_id=user_id,
-            store_id=store_id,
-            order_id=order_id,
-            order_number=order_number,
-            action=action,
-            status=status,
-            details=details,
-            error_message=error_message
-        )
+        # Use actual order creation time if provided, otherwise use current time
+        created_at = None
+        if order_created_at:
+            try:
+                from datetime import datetime, timezone
+                # Parse Shopify ISO timestamp and ensure it stays timezone-aware in UTC
+                created_at = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
+                # Explicitly convert to UTC timezone to ensure it's timezone-aware
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                else:
+                    created_at = created_at.astimezone(timezone.utc)
+                print(f"DEBUG: Using order creation time: {created_at} (timezone: {created_at.tzinfo}) for order {order_number}")
+            except Exception as parse_error:
+                print(f"DEBUG: Failed to parse order_created_at '{order_created_at}': {parse_error}")
+                # Fall back to timezone-aware current time
+                created_at = datetime.now(timezone.utc)
+        
+        if created_at:
+            log_entry = OrderLog(
+                user_id=user_id,
+                store_id=store_id,
+                order_id=order_id,
+                order_number=order_number,
+                action=action,
+                status=status,
+                details=details,
+                error_message=error_message,
+                created_at=created_at
+            )
+        else:
+            # Use timezone-aware current time as fallback
+            from datetime import datetime, timezone
+            created_at = datetime.now(timezone.utc)
+            log_entry = OrderLog(
+                user_id=user_id,
+                store_id=store_id,
+                order_id=order_id,
+                order_number=order_number,
+                action=action,
+                status=status,
+                details=details,
+                error_message=error_message,
+                created_at=created_at
+            )
         db.add(log_entry)
         db.commit()
     except Exception as e:

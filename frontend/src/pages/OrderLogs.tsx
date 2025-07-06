@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { formatDate } from '../utils/dateFormat';
+import { useTimezone } from '../contexts/TimezoneContext';
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -64,6 +65,7 @@ const OrderLogs: React.FC = () => {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   
   const queryClient = useQueryClient();
+  const { timezone, dateFormat } = useTimezone();
 
   const { data: stores } = useQuery({
     queryKey: ['stores'],
@@ -475,7 +477,7 @@ const OrderLogs: React.FC = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {format(new Date(group.latest_date), 'MMM d, yyyy HH:mm')}
+                          {formatDate(group.latest_date, { timezone, dateFormat })}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <button
@@ -513,7 +515,7 @@ const OrderLogs: React.FC = () => {
                             </div>
                           </td>
                           <td className="px-6 py-2 text-xs text-gray-500">
-                            {format(new Date(log.created_at), 'MMM d, yyyy HH:mm')}
+                            {formatDate(log.created_at, { timezone, dateFormat })}
                           </td>
                           <td className="px-6 py-2">
                             <div className="text-xs text-gray-500 break-words">

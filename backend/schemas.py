@@ -168,9 +168,15 @@ class SettingsBase(BaseModel):
     sync_frequency_minutes: int = 10
     auto_sync_enabled: bool = True
     log_retention_days: int = 30
+    timezone: str = "UTC"
+    date_format: str = "MMM d, yyyy HH:mm"
 
-class SettingsUpdate(SettingsBase):
-    pass
+class SettingsUpdate(BaseModel):
+    sync_frequency_minutes: Optional[int] = None
+    auto_sync_enabled: Optional[bool] = None
+    log_retention_days: Optional[int] = None
+    timezone: Optional[str] = None
+    date_format: Optional[str] = None
 
 class SettingsResponse(SettingsBase):
     id: int
