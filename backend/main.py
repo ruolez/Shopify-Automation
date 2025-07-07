@@ -387,6 +387,44 @@ async def delete_rule(
     db.commit()
     return {"message": "Rule deleted successfully"}
 
+@app.put("/rules/bulk/activate")
+async def activate_all_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Activate all rules for the current user"""
+    rules = db.query(ProcessingRule).filter(
+        ProcessingRule.user_id == current_user.id
+    ).all()
+    
+    activated_count = 0
+    for rule in rules:
+        if not rule.is_active:
+            rule.is_active = True
+            activated_count += 1
+    
+    db.commit()
+    return {"message": f"Activated {activated_count} rules", "total_rules": len(rules)}
+
+@app.put("/rules/bulk/deactivate")
+async def deactivate_all_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Deactivate all rules for the current user"""
+    rules = db.query(ProcessingRule).filter(
+        ProcessingRule.user_id == current_user.id
+    ).all()
+    
+    deactivated_count = 0
+    for rule in rules:
+        if rule.is_active:
+            rule.is_active = False
+            deactivated_count += 1
+    
+    db.commit()
+    return {"message": f"Deactivated {deactivated_count} rules", "total_rules": len(rules)}
+
 @app.get("/stores/{store_id}/locations")
 async def get_store_locations(
     store_id: int,

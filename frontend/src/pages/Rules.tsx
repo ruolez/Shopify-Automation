@@ -58,6 +58,36 @@ const Rules: React.FC = () => {
     },
   });
 
+  const activateAllRulesMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.put('/rules/bulk/activate');
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success(data.message);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to activate all rules');
+    },
+  });
+
+  const deactivateAllRulesMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.put('/rules/bulk/deactivate');
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success(data.message);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to deactivate all rules');
+    },
+  });
+
   const handleDeleteRule = (ruleId: number) => {
     if (window.confirm('Are you sure you want to delete this rule?')) {
       deleteRuleMutation.mutate(ruleId);
@@ -66,6 +96,18 @@ const Rules: React.FC = () => {
 
   const handleToggleRule = (rule: Rule) => {
     toggleRuleMutation.mutate({ ruleId: rule.id, rule });
+  };
+
+  const handleActivateAll = () => {
+    if (window.confirm('Are you sure you want to activate all rules?')) {
+      activateAllRulesMutation.mutate();
+    }
+  };
+
+  const handleDeactivateAll = () => {
+    if (window.confirm('Are you sure you want to deactivate all rules?')) {
+      deactivateAllRulesMutation.mutate();
+    }
   };
 
   const formatConditions = (conditions: any) => {
@@ -133,10 +175,32 @@ const Rules: React.FC = () => {
             Manage your order processing rules
           </p>
         </div>
-        <Link to="/rules/new" className="btn-primary flex items-center">
-          <PlusIcon className="h-5 w-5 mr-2" />
-          Create Rule
-        </Link>
+        <div className="flex items-center space-x-3">
+          {rules && rules.length > 0 && (
+            <>
+              <button
+                onClick={handleActivateAll}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                disabled={activateAllRulesMutation.isPending}
+              >
+                <PlayIcon className="h-5 w-5 mr-2" />
+                Start All
+              </button>
+              <button
+                onClick={handleDeactivateAll}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                disabled={deactivateAllRulesMutation.isPending}
+              >
+                <PauseIcon className="h-5 w-5 mr-2" />
+                Pause All
+              </button>
+            </>
+          )}
+          <Link to="/rules/new" className="btn-primary flex items-center">
+            <PlusIcon className="h-5 w-5 mr-2" />
+            Create Rule
+          </Link>
+        </div>
       </div>
 
       {rules && rules.length > 0 ? (
