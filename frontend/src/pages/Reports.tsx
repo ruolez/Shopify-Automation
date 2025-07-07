@@ -166,10 +166,6 @@ const Reports: React.FC = () => {
     setSelectedOrders(new Set());
   };
 
-  const handleRefresh = () => {
-    refetchOOS();
-  };
-
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
