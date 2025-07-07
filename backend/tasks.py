@@ -662,7 +662,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     
                     for rule in rules:
                         # Evaluate rule against current order state
-                        if rule_engine.evaluate_rule(rule, current_order, excluded_sku_patterns):
+                        if rule_engine.evaluate_rule(rule, current_order, excluded_sku_patterns, store):
                             rules_applied = True
                             logger.info(f"Rule '{rule.name}' (priority {rule.priority}) matched for order {order_number}")
                             
@@ -1369,7 +1369,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
             logger.info(f"Found {len(rules)} active rules for retry processing")
             for rule in rules:
                 logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
-                if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns):
+                if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns, store):
                     rules_applied = True
                     logger.info(f"Rule '{rule.name}' matched! Applying actions...")
                     success = await _apply_rule_actions(client, rule, order_data, store, db, excluded_sku_patterns)

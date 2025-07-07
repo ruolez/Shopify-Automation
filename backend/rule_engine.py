@@ -28,7 +28,7 @@ class RuleEngine:
             "is_not_empty": self._is_not_empty
         }
     
-    def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:
+    def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> bool:
         """Evaluate if a rule applies to an order"""
         try:
             order_name = order.get("name", "unknown")
@@ -67,7 +67,7 @@ class RuleEngine:
             # Evaluate each condition
             results = []
             for i, condition in enumerate(conditions_list):
-                result = self._evaluate_condition(condition, order, excluded_skus)
+                result = self._evaluate_condition(condition, order, excluded_skus, store_context)
                 results.append(result)
                 logger.info(f"  Condition {i+1} ({condition.get('field', 'unknown')} {condition.get('operator', 'unknown')} {condition.get('value', 'unknown')}): {result}")
             
@@ -86,7 +86,7 @@ class RuleEngine:
             logger.error(f"Error evaluating rule {rule.id}: {str(e)}", exc_info=True)
             return False
     
-    def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:
+    def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> bool:
         """Evaluate a single condition"""
         try:
             field = condition.get("field")
@@ -98,7 +98,7 @@ class RuleEngine:
                 return False
             
             # Get the actual value from the order
-            actual_value = self._get_order_field_value(field, order, excluded_skus)
+            actual_value = self._get_order_field_value(field, order, excluded_skus, store_context)
             
             # Convert expected value to uppercase for province/state/country fields to make comparison case-insensitive
             if field in ["shipping_province", "shipping_country", "billing_province", "billing_country"]:
@@ -119,7 +119,7 @@ class RuleEngine:
             logger.error(f"Error evaluating condition: {str(e)}")
             return False
     
-    def _get_order_field_value(self, field: str, order: Dict[str, Any], excluded_skus: List[str] = None) -> Any:
+    def _get_order_field_value(self, field: str, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> Any:
         """Extract field value from order data"""
         try:
             # Handle nested field access with dot notation
@@ -272,6 +272,68 @@ class RuleEngine:
                         skus.append(variant["sku"])
                 return skus
             
+            elif field == "fulfillment_location":
+                locations = []
+                fulfillment_orders = order.get("fulfillmentOrders", {}).get("edges", [])
+                
+                for fo_edge in fulfillment_orders:
+                    fo = fo_edge["node"]
+                    assigned_location = fo.get("assignedLocation", {}).get("location", {})
+                    
+                    if assigned_location:
+                        location_id = assigned_location.get("id", "")
+                        location_name = assigned_location.get("name", "")
+                        
+                        # Add both location ID and name to support different matching styles
+                        if location_id:
+                            locations.append(location_id)
+                        if location_name:
+                            locations.append(location_name)
+                
+                # If we have store context, try to resolve any location aliases
+                # that might map to these actual locations
+                if store_context and hasattr(store_context, 'id'):
+                    try:
+                        # Import here to avoid circular imports
+                        from tasks import resolve_location_alias
+                        from sqlalchemy.orm import Session
+                        from database import get_db
+                        
+                        # Get database session to query aliases
+                        db_gen = get_db()
+                        db = next(db_gen)
+                        try:
+                            # Find aliases that resolve to any of our location IDs
+                            from models import LocationAlias, LocationMapping
+                            location_ids = [loc for loc in locations if loc.startswith("gid://")]
+                            if location_ids:  # Only query if we have location IDs to match
+                                aliases = db.query(LocationAlias).join(LocationMapping).filter(
+                                    LocationMapping.store_id == store_context.id,
+                                    LocationMapping.shopify_location_id.in_(location_ids),
+                                    LocationMapping.is_active == True,
+                                    LocationAlias.is_active == True
+                                ).all()
+                                
+                                # Add alias names to the list for matching
+                                for alias in aliases:
+                                    if alias.alias_name not in locations:
+                                        locations.append(alias.alias_name)
+                                        
+                        finally:
+                            db.close()
+                            
+                    except Exception as e:
+                        logger.warning(f"Could not resolve location aliases: {e}")
+                
+                # Remove duplicates while preserving order
+                unique_locations = []
+                for loc in locations:
+                    if loc not in unique_locations:
+                        unique_locations.append(loc)
+                
+                logger.info(f"Order {order.get('name', 'unknown')}: Fulfillment locations = {unique_locations}")
+                return unique_locations
+            
             elif field == "order_created_at":
                 created_at = order.get("createdAt")
                 if created_at:
@@ -391,6 +453,7 @@ class RuleEngine:
             {"field": "product_types", "label": "Product Types", "type": "array"},
             {"field": "product_vendors", "label": "Product Vendors", "type": "array"},
             {"field": "product_skus", "label": "Product SKUs", "type": "array"},
+            {"field": "fulfillment_location", "label": "Fulfillment Location", "type": "array"},
             {"field": "order_created_at", "label": "Order Created Date", "type": "datetime"},
             {"field": "line_item_count", "label": "Number of Line Items", "type": "number"},
             {"field": "total_quantity", "label": "Total Quantity", "type": "number"},

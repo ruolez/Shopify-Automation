@@ -443,8 +443,40 @@ const RuleBuilder: React.FC = () => {
                   <div>
                     <label className="label">Value</label>
                     {(() => {
+                      const selectedField = watch(`conditions.conditions.${index}.field`);
                       const selectedOperator = watch(`conditions.conditions.${index}.operator`);
                       const isListOperator = selectedOperator === 'in_list' || selectedOperator === 'not_in_list';
+                      const isFulfillmentLocation = selectedField === 'fulfillment_location';
+                      
+                      if (isFulfillmentLocation) {
+                        return (
+                          <div>
+                            <select
+                              {...register(`conditions.conditions.${index}.value`)}
+                              className="input"
+                            >
+                              <option value="">Select location</option>
+                              {locationAliases?.filter((alias: any) => alias.is_active).map((alias: any) => (
+                                <option key={alias.id} value={alias.alias_name}>
+                                  {alias.alias_name}
+                                  {alias.mappings.length > 0 && (
+                                    <span> ({alias.mappings.length} store{alias.mappings.length !== 1 ? 's' : ''})</span>
+                                  )}
+                                </option>
+                              ))}
+                            </select>
+                            {locationAliases?.length === 0 && (
+                              <p className="text-sm text-amber-600 mt-1">
+                                No location aliases configured. 
+                                <Link to="/locations" className="underline ml-1">Create one here</Link>.
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Select a location alias to match against order fulfillment locations
+                            </p>
+                          </div>
+                        );
+                      }
                       
                       if (isListOperator) {
                         return (
