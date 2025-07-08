@@ -96,11 +96,13 @@ const OrderLogs: React.FC = () => {
   });
 
   const { data, isLoading, refetch } = useQuery<LogsResponse>({
-    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter],
+    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter, sortField, sortDirection],
     queryFn: async () => {
       const params = new URLSearchParams({
         page: page.toString(),
         per_page: '50',
+        sort_field: sortField,
+        sort_direction: sortDirection,
       });
       
       if (searchQuery) params.append('search', searchQuery);
@@ -112,11 +114,11 @@ const OrderLogs: React.FC = () => {
     },
   });
 
-  // Group and sort logs
+  // Group logs (sorting is now handled by backend)
   const groupedLogs = useMemo(() => {
     if (!data?.logs) return [];
 
-    // Group logs by order number
+    // Group logs by order number - logs are returned in backend sort order
     const grouped = new Map<string, GroupedOrderLog>();
     
     data.logs.forEach(log => {
@@ -147,42 +149,11 @@ const OrderLogs: React.FC = () => {
       // Note: 'info' and 'skipped' are neutral and don't affect group status
     });
     
-    // Convert to array and sort
+    // Convert to array - maintain backend sort order
     const groupedArray = Array.from(grouped.values());
     
-    groupedArray.sort((a, b) => {
-      let comparison = 0;
-      
-      switch (sortField) {
-        case 'order_number':
-          comparison = a.order_number.localeCompare(b.order_number);
-          break;
-        case 'store_name':
-          comparison = a.store_name.localeCompare(b.store_name);
-          break;
-        case 'latest_date':
-          comparison = new Date(a.latest_date).getTime() - new Date(b.latest_date).getTime();
-          break;
-        case 'status':
-          const getStatusPriority = (group: GroupedOrderLog) => {
-            if (group.has_failed) return 0;
-            if (group.has_success) return 1;
-            return 2;
-          };
-          comparison = getStatusPriority(a) - getStatusPriority(b);
-          break;
-        case 'action_count':
-          comparison = a.logs.length - b.logs.length;
-          break;
-        default:
-          comparison = 0;
-      }
-      
-      return sortDirection === 'asc' ? comparison : -comparison;
-    });
-    
     return groupedArray;
-  }, [data?.logs, sortField, sortDirection]);
+  }, [data?.logs]);
 
   const retryOrders = useMutation({
     mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
@@ -249,6 +220,8 @@ const OrderLogs: React.FC = () => {
       setSortField(field);
       setSortDirection('asc');
     }
+    // Reset to page 1 when sorting changes
+    setPage(1);
   };
 
   const getSortIcon = (field: SortField) => {

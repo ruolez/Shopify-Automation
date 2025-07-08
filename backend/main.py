@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, case
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, date
 import uvicorn
@@ -851,6 +851,8 @@ async def get_order_logs(
     status: Optional[str] = None,
     action: Optional[str] = None,
     search: Optional[str] = None,
+    sort_field: Optional[str] = "latest_date",
+    sort_direction: Optional[str] = "desc",
     page: int = 1,
     per_page: int = 50,
     current_user: User = Depends(get_current_user),
@@ -867,36 +869,127 @@ async def get_order_logs(
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
     
-    # Get unique order numbers with their latest created_at for proper pagination
-    # Group by order_number and get the max(created_at) for ordering
-    unique_orders_query = db.query(
-        OrderLog.order_number,
-        func.max(OrderLog.created_at).label('latest_created_at')
-    ).filter(OrderLog.user_id == current_user.id)
+    # Validate sort parameters
+    valid_sort_fields = ['order_number', 'store_name', 'latest_date', 'status', 'action_count']
+    if sort_field not in valid_sort_fields:
+        sort_field = 'latest_date'
+    if sort_direction.lower() not in ['asc', 'desc']:
+        sort_direction = 'desc'
     
-    if store_id:
-        unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
-    if status:
-        unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
-    if action:
-        unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
-    if search:
-        unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
-    
-    unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
+    # Build different queries based on sort field
+    if sort_field == 'store_name':
+        # For store name sorting, we need to join with ShopifyStore table
+        unique_orders_query = db.query(
+            OrderLog.order_number,
+            func.max(OrderLog.created_at).label('latest_created_at'),
+            func.min(ShopifyStore.shop_name).label('store_name')  # Use min to get any store name for the order
+        ).join(ShopifyStore, OrderLog.store_id == ShopifyStore.id).filter(OrderLog.user_id == current_user.id)
+        
+        if store_id:
+            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
+        if status:
+            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
+        if action:
+            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
+        if search:
+            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
+        
+        unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
+        
+    elif sort_field == 'status':
+        # For status sorting, we need to calculate order status priority
+        unique_orders_query = db.query(
+            OrderLog.order_number,
+            func.max(OrderLog.created_at).label('latest_created_at'),
+            func.max(
+                func.case(
+                    (OrderLog.status.in_(['error', 'failed']), 0),
+                    (OrderLog.status.in_(['match', 'success']), 1),
+                    else_=2
+                )
+            ).label('status_priority')
+        ).filter(OrderLog.user_id == current_user.id)
+        
+        if store_id:
+            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
+        if status:
+            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
+        if action:
+            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
+        if search:
+            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
+        
+        unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
+        
+    elif sort_field == 'action_count':
+        # For action count sorting, we need to count logs per order
+        unique_orders_query = db.query(
+            OrderLog.order_number,
+            func.max(OrderLog.created_at).label('latest_created_at'),
+            func.count(OrderLog.id).label('action_count')
+        ).filter(OrderLog.user_id == current_user.id)
+        
+        if store_id:
+            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
+        if status:
+            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
+        if action:
+            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
+        if search:
+            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
+        
+        unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
+        
+    else:
+        # For order_number and latest_date (and default), use simple query
+        unique_orders_query = db.query(
+            OrderLog.order_number,
+            func.max(OrderLog.created_at).label('latest_created_at')
+        ).filter(OrderLog.user_id == current_user.id)
+        
+        if store_id:
+            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
+        if status:
+            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
+        if action:
+            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
+        if search:
+            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
+        
+        unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
     
     # Get total unique orders count
     total_unique_orders = unique_orders_query.count()
     
-    # Get paginated order numbers ordered by latest activity
+    # Apply sorting based on sort_field and sort_direction
+    if sort_field == 'order_number':
+        sort_column = 'order_number'
+    elif sort_field == 'store_name':
+        sort_column = 'store_name'
+    elif sort_field == 'latest_date':
+        sort_column = 'latest_created_at'
+    elif sort_field == 'status':
+        sort_column = 'status_priority'
+    elif sort_field == 'action_count':
+        sort_column = 'action_count'
+    else:
+        sort_column = 'latest_created_at'
+    
+    order_clause = f"{sort_column} {'ASC' if sort_direction.lower() == 'asc' else 'DESC'}"
+    
+    # Get paginated order numbers with proper sorting
     offset = (page - 1) * per_page
-    paginated_orders = unique_orders_query.order_by(text('latest_created_at DESC')).offset(offset).limit(per_page).all()
+    paginated_orders = unique_orders_query.order_by(text(order_clause)).offset(offset).limit(per_page).all()
     order_numbers = [row[0] for row in paginated_orders]
     
-    # Get all logs for these order numbers
+    # Get all logs for these order numbers, maintaining the order of order_numbers
     logs = []
     if order_numbers:
-        logs = query.filter(OrderLog.order_number.in_(order_numbers)).order_by(OrderLog.created_at.desc()).all()
+        # Create a CASE statement to preserve the sort order from paginated_orders
+        order_case = case(
+            *[(OrderLog.order_number == order_num, index) for index, order_num in enumerate(order_numbers)]
+        )
+        logs = query.filter(OrderLog.order_number.in_(order_numbers)).order_by(order_case, OrderLog.created_at.desc()).all()
     
     # Get store names
     store_ids = list(set(log.store_id for log in logs))
