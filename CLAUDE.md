@@ -337,6 +337,34 @@ This system handles complex real-time order processing with proper error handlin
   - Out-of-stock fulfillment failures don't mask successful rule application
   - Better user understanding of order processing outcomes
 
+#### Order Logs Search Enhancement (2025-07-08)
+**Purpose**: Adds search functionality to the Order Logs page for easier order lookup.
+- **Key Features**:
+  - Search input field for order number filtering
+  - Debounced search with 500ms delay to reduce API calls
+  - Search state preserved during pagination
+  - Automatic page reset to 1 when search changes
+- **Implementation**:
+  - `backend/main.py`: Added `search` parameter to `/order-logs` endpoint
+  - `frontend/src/pages/OrderLogs.tsx`: Added search input with debouncing logic
+- **API**: `GET /order-logs?search=PW110446` filters logs by order number substring match
+
+#### Configurable Order Sync Window (2025-07-08)  
+**Purpose**: Allows users to configure how many days back to fetch orders during sync operations.
+- **Key Features**:
+  - New `sync_window_days` setting (default: 7 days)
+  - Configurable from 1-365 days in Settings page
+  - Replaces hardcoded 24-hour sync window
+  - Helps recover older missed orders when needed
+- **Implementation**:
+  - `backend/models.py`: Added `sync_window_days` column to Settings model
+  - `backend/tasks.py`: Updated order sync logic to use configurable window
+  - `frontend/src/pages/Settings.tsx`: Added UI control for sync window configuration
+- **Use Cases**:
+  - Set to 1 day for normal operations (recent orders only)
+  - Set to 7-30 days for recovering missed orders after system downtime
+  - Adjust based on order volume and processing needs
+
 #### Previous Features (2025-06-24)
 
 #### Enhanced Order Logs Page
@@ -446,6 +474,21 @@ docker-compose up -d
 - `fulfillmentOrders`: 10 → 5
 - `lineItems`: 100 → 20
 **Note**: Pagination may be needed for orders with many items
+
+### Fulfillment Location Conditional Logic (Fixed 2025-07-08)
+**Issue**: Rules with fulfillment location conditions would never match orders.
+- **Root Cause**: The rule engine was comparing the entire location array against a single string value using exact equality
+- **Example**: Order had `['gid://shopify/Location/104204796206', 'SC Warehouse', 'SC']` but rule checked if this entire array equals `"SC"`
+- **Fix**: 
+  - Added special handling for `fulfillment_location` field with `equals`/`not_equals` operators
+  - Now checks if the expected value exists anywhere in the location list (ANY match)
+  - Backend validation restricts fulfillment_location to only `equals`/`not_equals` operators
+  - Frontend UI updated to show only valid operators for fulfillment_location fields
+- **Implementation**: 
+  - `backend/rule_engine.py`: Added special case handling in `_evaluate_condition()` method
+  - `backend/schemas.py`: Added Pydantic validator to restrict operators
+  - `frontend/src/pages/RuleBuilder.tsx`: Updated `getOperatorsForField()` to filter operators
+- **Result**: Fulfillment location conditions now work correctly, matching when ANY location in the order matches the rule condition
 
 ### Critical CSS Classes
 **Issue**: `btn-primary` and `btn-secondary` classes don't exist in Tailwind
