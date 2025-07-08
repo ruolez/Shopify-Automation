@@ -851,6 +851,8 @@ async def get_order_logs(
     status: Optional[str] = None,
     action: Optional[str] = None,
     search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     sort_field: Optional[str] = "latest_date",
     sort_direction: Optional[str] = "desc",
     page: int = 1,
@@ -869,6 +871,55 @@ async def get_order_logs(
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
     
+    # Apply date filtering
+    if date_from:
+        try:
+            from_date = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            query = query.filter(OrderLog.created_at >= from_date)
+        except ValueError:
+            pass  # Ignore invalid date format
+    
+    if date_to:
+        try:
+            to_date = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            # Don't modify the to_date since frontend now sends the correct end-of-day time
+            query = query.filter(OrderLog.created_at <= to_date)
+        except ValueError:
+            pass  # Ignore invalid date format
+    
+    # Parse date filters for reuse
+    parsed_date_from = None
+    parsed_date_to = None
+    
+    if date_from:
+        try:
+            parsed_date_from = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+    
+    if date_to:
+        try:
+            parsed_date_to = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            # Don't modify the parsed_date_to since frontend now sends the correct end-of-day time
+        except ValueError:
+            pass
+    
+    # Helper function to apply common filters
+    def apply_filters(query):
+        if store_id:
+            query = query.filter(OrderLog.store_id == store_id)
+        if status:
+            query = query.filter(OrderLog.status == status)
+        if action:
+            query = query.filter(OrderLog.action.contains(action))
+        if search:
+            query = query.filter(OrderLog.order_number.contains(search))
+        if parsed_date_from:
+            query = query.filter(OrderLog.created_at >= parsed_date_from)
+        if parsed_date_to:
+            query = query.filter(OrderLog.created_at <= parsed_date_to)
+        return query
+    
     # Validate sort parameters
     valid_sort_fields = ['order_number', 'store_name', 'latest_date', 'status', 'action_count']
     if sort_field not in valid_sort_fields:
@@ -885,15 +936,7 @@ async def get_order_logs(
             func.min(ShopifyStore.shop_name).label('store_name')  # Use min to get any store name for the order
         ).join(ShopifyStore, OrderLog.store_id == ShopifyStore.id).filter(OrderLog.user_id == current_user.id)
         
-        if store_id:
-            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
-        if status:
-            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
-        if action:
-            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
-        if search:
-            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
-        
+        unique_orders_query = apply_filters(unique_orders_query)
         unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
         
     elif sort_field == 'status':
@@ -910,15 +953,7 @@ async def get_order_logs(
             ).label('status_priority')
         ).filter(OrderLog.user_id == current_user.id)
         
-        if store_id:
-            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
-        if status:
-            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
-        if action:
-            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
-        if search:
-            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
-        
+        unique_orders_query = apply_filters(unique_orders_query)
         unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
         
     elif sort_field == 'action_count':
@@ -929,15 +964,7 @@ async def get_order_logs(
             func.count(OrderLog.id).label('action_count')
         ).filter(OrderLog.user_id == current_user.id)
         
-        if store_id:
-            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
-        if status:
-            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
-        if action:
-            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
-        if search:
-            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
-        
+        unique_orders_query = apply_filters(unique_orders_query)
         unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
         
     else:
@@ -947,15 +974,7 @@ async def get_order_logs(
             func.max(OrderLog.created_at).label('latest_created_at')
         ).filter(OrderLog.user_id == current_user.id)
         
-        if store_id:
-            unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
-        if status:
-            unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
-        if action:
-            unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
-        if search:
-            unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
-        
+        unique_orders_query = apply_filters(unique_orders_query)
         unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
     
     # Get total unique orders count

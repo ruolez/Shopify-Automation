@@ -117,11 +117,19 @@ const Reports: React.FC = () => {
     }
   ];
 
-  // Build query params for date filtering
+  // Build query params for date filtering with proper timezone handling
   const getDateParams = () => {
     const params = new URLSearchParams();
-    if (startDate) params.append('start_date', startDate + 'T00:00:00Z');
-    if (endDate) params.append('end_date', endDate + 'T23:59:59Z');
+    if (startDate) {
+      // Create date in user's local timezone, then convert to UTC
+      const fromDate = new Date(startDate + 'T00:00:00');
+      params.append('start_date', fromDate.toISOString());
+    }
+    if (endDate) {
+      // Create date in user's local timezone, then convert to UTC
+      const toDate = new Date(endDate + 'T23:59:59');
+      params.append('end_date', toDate.toISOString());
+    }
     return params.toString();
   };
 

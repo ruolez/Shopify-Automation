@@ -42,26 +42,13 @@ export function formatDate(
     // Get the format string for date-fns
     const formatStr = formatMap[dateFormat] || dateFormat;
     
-    // Debug logging
-    console.log('formatDate called with:', {
-      date: date,
-      timezone: timezone,
-      dateFormat: dateFormat,
-      dateObj: dateObj,
-      formatStr: formatStr
-    });
-    
     // Format the date in the specified timezone
     if (timezone && timezone !== 'UTC') {
-      const result = formatInTimeZone(dateObj, timezone, formatStr);
-      console.log('Formatted result (with timezone):', result);
-      return result;
+      return formatInTimeZone(dateObj, timezone, formatStr);
     }
     
     // For UTC or no timezone specified, use regular format
-    const result = format(dateObj, formatStr);
-    console.log('Formatted result (UTC):', result);
-    return result;
+    return format(dateObj, formatStr);
   } catch (error) {
     console.error('Error formatting date:', error, { date, timezone, dateFormat });
     // Fallback to native date formatting

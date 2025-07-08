@@ -60,6 +60,9 @@ const OrderLogs: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [storeFilter, setStoreFilter] = useState<string>('');
+  const [dateFilter, setDateFilter] = useState<string>('');
+  const [customDateFrom, setCustomDateFrom] = useState<string>('');
+  const [customDateTo, setCustomDateTo] = useState<string>('');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedRule, setSelectedRule] = useState<string>('');
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
@@ -68,6 +71,61 @@ const OrderLogs: React.FC = () => {
   
   const queryClient = useQueryClient();
   const { timezone, dateFormat } = useTimezone();
+
+  // Calculate date range based on filter with proper timezone handling
+  const getDateRange = (filter: string) => {
+    const now = new Date();
+    
+    switch (filter) {
+      case 'today':
+        // Get start and end of today in user's timezone, then convert to UTC
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        return {
+          from: todayStart.toISOString(),
+          to: todayEnd.toISOString()
+        };
+      case 'week':
+        // Calculate week start (Sunday) in user's timezone
+        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+        return {
+          from: weekStart.toISOString(),
+          to: now.toISOString()
+        };
+      case 'month':
+        // Start of current month in user's timezone
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        return {
+          from: monthStart.toISOString(),
+          to: now.toISOString()
+        };
+      case 'year':
+        // Start of current year in user's timezone
+        const yearStart = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        return {
+          from: yearStart.toISOString(),
+          to: now.toISOString()
+        };
+      case 'custom':
+        if (!customDateFrom || !customDateTo) {
+          return { from: null, to: null };
+        }
+        
+        // Parse dates in user's local timezone and convert to UTC
+        // This ensures the date boundaries represent the actual day in user's timezone
+        const fromDate = new Date(customDateFrom + 'T00:00:00');
+        const toDate = new Date(customDateTo + 'T23:59:59');
+        
+        return {
+          from: fromDate.toISOString(),
+          to: toDate.toISOString()
+        };
+      default:
+        return { from: null, to: null };
+    }
+  };
 
   // Debounce search input
   useEffect(() => {
@@ -96,7 +154,7 @@ const OrderLogs: React.FC = () => {
   });
 
   const { data, isLoading, refetch } = useQuery<LogsResponse>({
-    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter, sortField, sortDirection],
+    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter, dateFilter, customDateFrom, customDateTo, sortField, sortDirection],
     queryFn: async () => {
       const params = new URLSearchParams({
         page: page.toString(),
@@ -108,6 +166,11 @@ const OrderLogs: React.FC = () => {
       if (searchQuery) params.append('search', searchQuery);
       if (statusFilter) params.append('status', statusFilter);
       if (storeFilter) params.append('store_id', storeFilter);
+      
+      // Add date filtering
+      const dateRange = getDateRange(dateFilter);
+      if (dateRange.from) params.append('date_from', dateRange.from);
+      if (dateRange.to) params.append('date_to', dateRange.to);
       
       const response = await api.get(`/order-logs?${params}`);
       return response.data;
@@ -312,9 +375,66 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div>
-              <label htmlFor="search-filter" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="date-filter" className="block text-sm font-semibold text-gray-900 mb-2">
+                Date Range
+              </label>
+              <div className="space-y-1">
+                <select
+                  id="date-filter"
+                  value={dateFilter}
+                  onChange={(e) => {
+                    setDateFilter(e.target.value);
+                    if (e.target.value !== 'custom') {
+                      setCustomDateFrom('');
+                      setCustomDateTo('');
+                    }
+                    setPage(1);
+                  }}
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                >
+                  <option value="">All Time</option>
+                  <option value="today">Today</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="year">This Year</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+                
+                {dateFilter === 'custom' && (
+                  <div className="flex space-x-2">
+                    <div className="flex-1">
+                      <input
+                        type="date"
+                        value={customDateFrom}
+                        onChange={(e) => {
+                          setCustomDateFrom(e.target.value);
+                          setPage(1);
+                        }}
+                        className="block w-full text-xs rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                        placeholder="From"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="date"
+                        value={customDateTo}
+                        onChange={(e) => {
+                          setCustomDateTo(e.target.value);
+                          setPage(1);
+                        }}
+                        className="block w-full text-xs rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                        placeholder="To"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="search-filter" className="block text-sm font-semibold text-gray-900 mb-2">
                 Search Order Number
               </label>
               <input
@@ -328,7 +448,7 @@ const OrderLogs: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="status-filter" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="status-filter" className="block text-sm font-semibold text-gray-900 mb-2">
                 Status
               </label>
               <select
@@ -348,7 +468,7 @@ const OrderLogs: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="store-filter" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="store-filter" className="block text-sm font-semibold text-gray-900 mb-2">
                 Store
               </label>
               <select
