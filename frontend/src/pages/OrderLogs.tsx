@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatDate } from '../utils/dateFormat';
@@ -56,6 +56,8 @@ type SortDirection = 'asc' | 'desc';
 
 const OrderLogs: React.FC = () => {
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [storeFilter, setStoreFilter] = useState<string>('');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -66,6 +68,16 @@ const OrderLogs: React.FC = () => {
   
   const queryClient = useQueryClient();
   const { timezone, dateFormat } = useTimezone();
+
+  // Debounce search input
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setSearchQuery(searchInput);
+      setPage(1); // Reset to first page when search changes
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timeoutId);
+  }, [searchInput]);
 
   const { data: stores } = useQuery({
     queryKey: ['stores'],
@@ -84,13 +96,14 @@ const OrderLogs: React.FC = () => {
   });
 
   const { data, isLoading, refetch } = useQuery<LogsResponse>({
-    queryKey: ['order-logs', page, statusFilter, storeFilter],
+    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter],
     queryFn: async () => {
       const params = new URLSearchParams({
         page: page.toString(),
         per_page: '50',
       });
       
+      if (searchQuery) params.append('search', searchQuery);
       if (statusFilter) params.append('status', statusFilter);
       if (storeFilter) params.append('store_id', storeFilter);
       
@@ -328,25 +341,17 @@ const OrderLogs: React.FC = () => {
           {/* Filters */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div>
-              <label htmlFor="store-filter" className="block text-sm font-medium text-gray-700">
-                Store
+              <label htmlFor="search-filter" className="block text-sm font-medium text-gray-700">
+                Search Order Number
               </label>
-              <select
-                id="store-filter"
-                value={storeFilter}
-                onChange={(e) => {
-                  setStoreFilter(e.target.value);
-                  setPage(1);
-                }}
+              <input
+                id="search-filter"
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Enter order number..."
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
-              >
-                <option value="">All Stores</option>
-                {stores?.map((store: any) => (
-                  <option key={store.id} value={store.id}>
-                    {store.shop_name}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
 
             <div>
@@ -366,10 +371,28 @@ const OrderLogs: React.FC = () => {
                 <option value="match">Match</option>
                 <option value="skipped">Skipped</option>
                 <option value="error">Error</option>
-                {/* Legacy status support */}
-                <option value="success">Success (Legacy)</option>
-                <option value="failed">Failed (Legacy)</option>
-                <option value="info">Info (Legacy)</option>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="store-filter" className="block text-sm font-medium text-gray-700">
+                Store
+              </label>
+              <select
+                id="store-filter"
+                value={storeFilter}
+                onChange={(e) => {
+                  setStoreFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+              >
+                <option value="">All Stores</option>
+                {stores?.map((store: any) => (
+                  <option key={store.id} value={store.id}>
+                    {store.shop_name}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

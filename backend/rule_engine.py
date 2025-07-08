@@ -108,7 +108,18 @@ class RuleEngine:
                     # Convert all list items to uppercase for case-insensitive comparison
                     expected_value = [str(item).upper() for item in expected_value]
             
-            # Apply the operator
+            # Special handling for fulfillment_location field with equals/not_equals
+            # For fulfillment_location, check if ANY location in the list matches (not exact list equality)
+            if field == "fulfillment_location" and operator in ["equals", "not_equals"]:
+                if isinstance(actual_value, list):
+                    is_match = expected_value in actual_value
+                    return is_match if operator == "equals" else not is_match
+                else:
+                    # Fallback to normal comparison if not a list
+                    is_match = actual_value == expected_value
+                    return is_match if operator == "equals" else not is_match
+            
+            # Apply the operator normally for all other cases
             if operator not in self.operators:
                 logger.error(f"Unknown operator: {operator}")
                 return False
@@ -294,6 +305,7 @@ class RuleEngine:
                 # that might map to these actual locations
                 if store_context and hasattr(store_context, 'id'):
                     try:
+                        logger.info(f"Starting alias resolution for store {store_context.id}")
                         # Import here to avoid circular imports
                         from tasks import resolve_location_alias
                         from sqlalchemy.orm import Session
@@ -306,6 +318,8 @@ class RuleEngine:
                             # Find aliases that resolve to any of our location IDs
                             from models import LocationAlias, LocationMapping
                             location_ids = [loc for loc in locations if loc.startswith("gid://")]
+                            logger.info(f"Location IDs to resolve: {location_ids}")
+                            
                             if location_ids:  # Only query if we have location IDs to match
                                 aliases = db.query(LocationAlias).join(LocationMapping).filter(
                                     LocationMapping.store_id == store_context.id,
@@ -314,16 +328,25 @@ class RuleEngine:
                                     LocationAlias.is_active == True
                                 ).all()
                                 
+                                logger.info(f"Found {len(aliases)} aliases: {[a.alias_name for a in aliases]}")
+                                
                                 # Add alias names to the list for matching
                                 for alias in aliases:
                                     if alias.alias_name not in locations:
                                         locations.append(alias.alias_name)
+                                        logger.info(f"Added alias: {alias.alias_name}")
+                                    else:
+                                        logger.info(f"Alias already in list: {alias.alias_name}")
+                            else:
+                                logger.info("No location IDs found to resolve aliases for")
                                         
                         finally:
                             db.close()
                             
                     except Exception as e:
-                        logger.warning(f"Could not resolve location aliases: {e}")
+                        logger.warning(f"Could not resolve location aliases: {e}", exc_info=True)
+                else:
+                    logger.info(f"No store context for alias resolution (context: {store_context})")
                 
                 # Remove duplicates while preserving order
                 unique_locations = []

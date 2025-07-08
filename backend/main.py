@@ -849,6 +849,7 @@ async def get_order_logs(
     store_id: Optional[int] = None,
     status: Optional[str] = None,
     action: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
     per_page: int = 50,
     current_user: User = Depends(get_current_user),
@@ -862,6 +863,8 @@ async def get_order_logs(
         query = query.filter(OrderLog.status == status)
     if action:
         query = query.filter(OrderLog.action.contains(action))
+    if search:
+        query = query.filter(OrderLog.order_number.contains(search))
     
     # Get total count
     total = query.count()

@@ -97,6 +97,7 @@ class Settings(Base):
     sync_frequency_minutes = Column(Integer, default=10)  # How often to sync orders
     auto_sync_enabled = Column(Boolean, default=True)
     log_retention_days = Column(Integer, default=30)
+    sync_window_days = Column(Integer, default=7)  # How many days back to fetch orders during sync
     timezone = Column(String, default="UTC")  # User's preferred timezone
     date_format = Column(String, default="MMM d, yyyy HH:mm")  # User's preferred date format
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -588,32 +588,38 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     else:
         logger.info(f"No excluded SKU patterns found for user {store.user_id}")
     
-    # Always check orders from last 24 hours to catch any missed orders
-    yesterday = datetime.utcnow() - timedelta(days=1)
-    min_24h_date = yesterday.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Get user's sync window setting (default to 7 days if not set)
+    settings = db.query(Settings).filter(Settings.user_id == store.user_id).first()
+    sync_window_days = settings.sync_window_days if settings and settings.sync_window_days else 7
+    
+    # Use configurable sync window instead of hardcoded 24 hours
+    sync_cutoff = datetime.utcnow() - timedelta(days=sync_window_days)
+    sync_cutoff_date = sync_cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     
     # Also use last sync for efficiency (if available)
     if store.last_sync:
         last_sync_date = store.last_sync.strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
-        last_sync_date = min_24h_date
+        last_sync_date = sync_cutoff_date
+    
+    # Use the earlier date for API filtering to ensure we get all relevant orders
+    api_cutoff_date = min(sync_cutoff_date, last_sync_date)
     
     processed_orders = 0
     cursor = None
     
     logger.info(f"Processing orders for store {store.shop_domain}")
-    logger.info(f"  - 24h cutoff: {min_24h_date}")
+    logger.info(f"  - Sync window: {sync_window_days} days (cutoff: {sync_cutoff_date})")
     logger.info(f"  - Last sync: {last_sync_date}")
-    logger.info(f"  - Will process orders that are: (newer than 24h cutoff OR newer than last sync) AND unfulfilled AND not already processed")
+    logger.info(f"  - API filter date: {api_cutoff_date}")
+    logger.info(f"  - Will process orders that are: (newer than {sync_window_days}d cutoff OR newer than last sync) AND unfulfilled AND not already processed")
     
     try:
         while True:
-            # Fetch orders
-            # Note: Shopify GraphQL doesn't support date filtering in query parameter properly
-            # So we fetch all orders and filter by date in our code
+            # Fetch orders using the earlier cutoff date to ensure we get all relevant orders
             orders_data = await client.get_orders(
                 limit=50,
-                created_at_min=None,
+                created_at_min=api_cutoff_date,
                 cursor=cursor
             )
             
@@ -643,14 +649,14 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     logger.debug(f"Order {order_number} already processed, skipping")
                     continue
                 
-                # Third check: Date filtering - process if within 24h OR newer than last sync
+                # Third check: Date filtering - process if within sync window OR newer than last sync
                 order_date = datetime.fromisoformat(order_created_at.replace('Z', '+00:00'))
-                min_24h_date_obj = datetime.fromisoformat(min_24h_date.replace('Z', '+00:00'))
+                sync_cutoff_date_obj = datetime.fromisoformat(sync_cutoff_date.replace('Z', '+00:00'))
                 last_sync_date_obj = datetime.fromisoformat(last_sync_date.replace('Z', '+00:00'))
                 
-                # Skip orders older than 24 hours AND older than last sync
-                if order_date < min_24h_date_obj and order_date < last_sync_date_obj:
-                    logger.debug(f"Order {order_number} created before both 24h cutoff ({min_24h_date}) and last sync ({last_sync_date}), skipping")
+                # Skip orders older than sync window AND older than last sync
+                if order_date < sync_cutoff_date_obj and order_date < last_sync_date_obj:
+                    logger.debug(f"Order {order_number} created before both {sync_window_days}d cutoff ({sync_cutoff_date}) and last sync ({last_sync_date}), skipping")
                     continue
                 
                 logger.info(f"Order {order_number}: created {order_created_at}, status '{fulfillment_status}' - processing")

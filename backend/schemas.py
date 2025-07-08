@@ -54,6 +54,14 @@ class RuleCondition(BaseModel):
     operator: str  # equals, greater_than, less_than, contains, etc.
     value: Any
     
+    @validator('operator')
+    def validate_fulfillment_location_operators(cls, v, values):
+        # For fulfillment_location field, only allow equals and not_equals
+        if values.get('field') == 'fulfillment_location':
+            if v not in ['equals', 'not_equals']:
+                raise ValueError('fulfillment_location field only supports equals and not_equals operators')
+        return v
+    
 class RuleAction(BaseModel):
     type: str  # add_tag, set_fulfillment_location
     parameters: Dict[str, Any]
@@ -168,6 +176,7 @@ class SettingsBase(BaseModel):
     sync_frequency_minutes: int = 10
     auto_sync_enabled: bool = True
     log_retention_days: int = 30
+    sync_window_days: int = 7
     timezone: str = "UTC"
     date_format: str = "MMM d, yyyy HH:mm"
 
@@ -175,6 +184,7 @@ class SettingsUpdate(BaseModel):
     sync_frequency_minutes: Optional[int] = None
     auto_sync_enabled: Optional[bool] = None
     log_retention_days: Optional[int] = None
+    sync_window_days: Optional[int] = None
     timezone: Optional[str] = None
     date_format: Optional[str] = None
 

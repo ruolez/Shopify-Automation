@@ -15,6 +15,7 @@ interface Settings {
   sync_frequency_minutes: number;
   auto_sync_enabled: boolean;
   log_retention_days: number;
+  sync_window_days: number;
   timezone: string;
   date_format: string;
   created_at: string;
@@ -630,6 +631,29 @@ const Settings: React.FC = () => {
                 <option value={60}>Every hour</option>
                 <option value={120}>Every 2 hours</option>
               </select>
+            </div>
+
+            {/* Sync window */}
+            <div>
+              <label htmlFor="sync-window" className="block text-sm font-medium text-gray-700">
+                Order Sync Window (days)
+              </label>
+              <p className="text-sm text-gray-500 mb-2">
+                How many days back to fetch orders during manual sync (affects missing order recovery)
+              </p>
+              <input
+                id="sync-window"
+                type="number"
+                min="1"
+                max="365"
+                value={settings?.sync_window_days || 7}
+                onChange={(e) => updateSettings.mutate({ sync_window_days: parseInt(e.target.value) })}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                placeholder="7"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Set to 1 for recent orders only, or higher values (7-30) to recover older orders
+              </p>
             </div>
 
             {/* Log retention */}

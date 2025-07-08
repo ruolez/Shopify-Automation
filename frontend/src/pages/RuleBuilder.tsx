@@ -236,8 +236,16 @@ const RuleBuilder: React.FC = () => {
     }
   };
 
-  const getOperatorsForField = (fieldType: string) => {
+  const getOperatorsForField = (fieldType: string, fieldName?: string) => {
     if (!schema) return [];
+    
+    // Special case for fulfillment_location field - only allow equals and not_equals
+    if (fieldName === 'fulfillment_location') {
+      return schema.operators.filter(op => 
+        op.operator === 'equals' || op.operator === 'not_equals'
+      );
+    }
+    
     return schema.operators.filter(op => op.types.includes(fieldType));
   };
 
@@ -431,7 +439,8 @@ const RuleBuilder: React.FC = () => {
                     >
                       <option value="">Select operator</option>
                       {getOperatorsForField(
-                        getFieldType(watch(`conditions.conditions.${index}.field`))
+                        getFieldType(watch(`conditions.conditions.${index}.field`)),
+                        watch(`conditions.conditions.${index}.field`)
                       ).map(op => (
                         <option key={op.operator} value={op.operator}>
                           {op.label}
