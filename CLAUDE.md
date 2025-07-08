@@ -240,6 +240,60 @@ This system handles complex real-time order processing with proper error handlin
 
 ### Recent Feature Additions
 
+#### Server-Side Sorting & Date Filtering for Order Logs (2025-07-08)
+**Purpose**: Complete overhaul of Order Logs page with global sorting and comprehensive date filtering capabilities.
+
+**Server-Side Sorting Implementation**:
+- **Database-Level Sorting**: All sorting now performed at database level before pagination
+- **Supported Sort Fields**: 
+  - `order_number` - Direct field sorting
+  - `store_name` - JOIN with ShopifyStore table  
+  - `latest_date` - Aggregated max(created_at) sorting
+  - `status` - Complex priority-based sorting (error=0, match=1, skipped=2)
+  - `action_count` - COUNT-based sorting for number of actions per order
+- **Order Preservation Fix**: Added CASE statement to maintain backend sort order when retrieving logs
+- **API Changes**: Added `sort_field` and `sort_direction` parameters to `/order-logs` endpoint
+- **Result**: Sorting now works globally across all pages, not just current page data
+
+**Comprehensive Date Filtering System**:
+- **Quick Date Presets**:
+  - All Time (default) - No date filtering
+  - Today - Orders from current day only
+  - This Week - Orders from start of current week (Sunday) to now
+  - This Month - Orders from start of current month to now  
+  - This Year - Orders from start of current year to now
+  - Custom Range - User-selectable date range with from/to inputs
+- **Custom Date Selection**: 
+  - Date input fields appear when "Custom Range" selected
+  - Proper timezone-aware boundary calculations
+  - End date automatically includes full day (23:59:59)
+- **Backend Integration**:
+  - Added `date_from` and `date_to` parameters to API
+  - Timezone-aware ISO date parsing with proper UTC handling
+  - Applied across all sorting query branches using helper function
+- **UI Enhancements**:
+  - Date filter positioned as first column for better UX
+  - Enhanced filter headers with better visual hierarchy (`font-semibold`, darker colors)  
+  - Responsive 4-column filter grid layout
+  - Compact single-line design maintained
+
+**Critical Timezone Fixes**:
+- **Date Boundary Issues Resolved**: Fixed problem where selecting "7th to 7th" included entries from 6th
+- **Proper Timezone Handling**: Date objects now created with timezone awareness using `T00:00:00` suffixes
+- **Week Calculation Fix**: "This Week" now correctly calculates from Sunday in user's timezone
+- **Consistent Behavior**: Same timezone logic applied across OrderLogs and Reports pages
+
+**Technical Implementation**:
+- **Frontend**: `getDateRange()` function with smart timezone-aware calculations
+- **Backend**: Helper function `apply_filters()` ensures consistent filtering across all query branches  
+- **API**: Proper query invalidation when sort or date parameters change
+- **State Management**: Page reset to 1 when any filter changes
+
+**Performance Improvements**:
+- Database-optimized queries with proper indexing considerations
+- Reduced client-side processing by moving sorting to backend
+- Efficient pagination that respects global sort order
+
 #### Comprehensive Timezone Management System (2025-07-06)
 **Purpose**: Provides global timezone management with real-time updates across the entire application.
 - **Key Features**:
