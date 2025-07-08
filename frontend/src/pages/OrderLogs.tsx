@@ -620,7 +620,7 @@ const OrderLogs: React.FC = () => {
           {data && data.pagination.pages > 1 && (
             <div className="mt-4 flex justify-between items-center">
               <div className="text-sm text-gray-700">
-                Showing page {data.pagination.page} of {data.pagination.pages} ({groupedLogs.length} unique orders)
+                Showing page {data.pagination.page} of {data.pagination.pages} ({data.pagination.total} unique orders)
               </div>
               <div className="flex space-x-2">
                 <button

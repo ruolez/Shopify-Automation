@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func, text
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, date
 import uvicorn
@@ -866,12 +867,36 @@ async def get_order_logs(
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
     
-    # Get total count
-    total = query.count()
+    # Get unique order numbers with their latest created_at for proper pagination
+    # Group by order_number and get the max(created_at) for ordering
+    unique_orders_query = db.query(
+        OrderLog.order_number,
+        func.max(OrderLog.created_at).label('latest_created_at')
+    ).filter(OrderLog.user_id == current_user.id)
     
-    # Paginate
+    if store_id:
+        unique_orders_query = unique_orders_query.filter(OrderLog.store_id == store_id)
+    if status:
+        unique_orders_query = unique_orders_query.filter(OrderLog.status == status)
+    if action:
+        unique_orders_query = unique_orders_query.filter(OrderLog.action.contains(action))
+    if search:
+        unique_orders_query = unique_orders_query.filter(OrderLog.order_number.contains(search))
+    
+    unique_orders_query = unique_orders_query.group_by(OrderLog.order_number)
+    
+    # Get total unique orders count
+    total_unique_orders = unique_orders_query.count()
+    
+    # Get paginated order numbers ordered by latest activity
     offset = (page - 1) * per_page
-    logs = query.order_by(OrderLog.created_at.desc()).offset(offset).limit(per_page).all()
+    paginated_orders = unique_orders_query.order_by(text('latest_created_at DESC')).offset(offset).limit(per_page).all()
+    order_numbers = [row[0] for row in paginated_orders]
+    
+    # Get all logs for these order numbers
+    logs = []
+    if order_numbers:
+        logs = query.filter(OrderLog.order_number.in_(order_numbers)).order_by(OrderLog.created_at.desc()).all()
     
     # Get store names
     store_ids = list(set(log.store_id for log in logs))
@@ -895,10 +920,11 @@ async def get_order_logs(
             for log in logs
         ],
         "pagination": {
-            "total": total,
+            "total": total_unique_orders,
             "page": page,
             "per_page": per_page,
-            "pages": (total + per_page - 1) // per_page
+            "pages": (total_unique_orders + per_page - 1) // per_page,
+            "total_logs": len(logs)
         }
     }
 
