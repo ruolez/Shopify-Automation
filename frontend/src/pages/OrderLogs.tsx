@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { formatDate } from '../utils/dateFormat';
-import { useTimezone } from '../contexts/TimezoneContext';
+import React, { useState, useMemo, useEffect } from "react";
+import { motion } from "framer-motion";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { formatDate } from "../utils/dateFormat";
+import { useTimezone } from "../contexts/TimezoneContext";
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -13,10 +13,10 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   ChevronDownIcon as SortDownIcon,
-} from '@heroicons/react/24/outline';
-import toast from 'react-hot-toast';
-import api from '../utils/api';
-import LoadingSpinner from '../components/LoadingSpinner';
+} from "@heroicons/react/24/outline";
+import toast from "react-hot-toast";
+import api from "../utils/api";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 interface OrderLog {
   id: number;
@@ -51,76 +51,106 @@ interface GroupedOrderLog {
   has_success: boolean;
 }
 
-type SortField = 'order_number' | 'store_name' | 'latest_date' | 'status' | 'action_count';
-type SortDirection = 'asc' | 'desc';
+type SortField =
+  | "order_number"
+  | "store_name"
+  | "latest_date"
+  | "status"
+  | "action_count";
+type SortDirection = "asc" | "desc";
 
 const OrderLogs: React.FC = () => {
   const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('');
-  const [storeFilter, setStoreFilter] = useState<string>('');
-  const [dateFilter, setDateFilter] = useState<string>('');
-  const [customDateFrom, setCustomDateFrom] = useState<string>('');
-  const [customDateTo, setCustomDateTo] = useState<string>('');
+  const [searchInput, setSearchInput] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [storeFilter, setStoreFilter] = useState<string>("");
+  const [ruleFilter, setRuleFilter] = useState<string>("");
+  const [dateFilter, setDateFilter] = useState<string>("");
+  const [customDateFrom, setCustomDateFrom] = useState<string>("");
+  const [customDateTo, setCustomDateTo] = useState<string>("");
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
-  const [selectedRule, setSelectedRule] = useState<string>('');
+  const [selectedRule, setSelectedRule] = useState<string>("");
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
-  const [sortField, setSortField] = useState<SortField>('latest_date');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  
+  const [sortField, setSortField] = useState<SortField>("latest_date");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
   const queryClient = useQueryClient();
   const { timezone, dateFormat } = useTimezone();
 
   // Calculate date range based on filter with proper timezone handling
   const getDateRange = (filter: string) => {
     const now = new Date();
-    
+
     switch (filter) {
-      case 'today':
+      case "today":
         // Get start and end of today in user's timezone, then convert to UTC
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        const todayStart = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+        );
+        const todayEnd = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          23,
+          59,
+          59,
+          999,
+        );
         return {
           from: todayStart.toISOString(),
-          to: todayEnd.toISOString()
+          to: todayEnd.toISOString(),
         };
-      case 'week':
+      case "week":
         // Calculate week start (Sunday) in user's timezone
-        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+        );
         weekStart.setDate(weekStart.getDate() - weekStart.getDay());
         weekStart.setHours(0, 0, 0, 0);
         return {
           from: weekStart.toISOString(),
-          to: now.toISOString()
+          to: now.toISOString(),
         };
-      case 'month':
+      case "month":
         // Start of current month in user's timezone
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        const monthStart = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          1,
+          0,
+          0,
+          0,
+          0,
+        );
         return {
           from: monthStart.toISOString(),
-          to: now.toISOString()
+          to: now.toISOString(),
         };
-      case 'year':
+      case "year":
         // Start of current year in user's timezone
         const yearStart = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
         return {
           from: yearStart.toISOString(),
-          to: now.toISOString()
+          to: now.toISOString(),
         };
-      case 'custom':
+      case "custom":
         if (!customDateFrom || !customDateTo) {
           return { from: null, to: null };
         }
-        
+
         // Parse dates in user's local timezone and convert to UTC
         // This ensures the date boundaries represent the actual day in user's timezone
-        const fromDate = new Date(customDateFrom + 'T00:00:00');
-        const toDate = new Date(customDateTo + 'T23:59:59');
-        
+        const fromDate = new Date(customDateFrom + "T00:00:00");
+        const toDate = new Date(customDateTo + "T23:59:59");
+
         return {
           from: fromDate.toISOString(),
-          to: toDate.toISOString()
+          to: toDate.toISOString(),
         };
       default:
         return { from: null, to: null };
@@ -138,40 +168,53 @@ const OrderLogs: React.FC = () => {
   }, [searchInput]);
 
   const { data: stores } = useQuery({
-    queryKey: ['stores'],
+    queryKey: ["stores"],
     queryFn: async () => {
-      const response = await api.get('/stores');
+      const response = await api.get("/stores");
       return response.data;
     },
   });
 
   const { data: rules } = useQuery({
-    queryKey: ['rules'],
+    queryKey: ["rules"],
     queryFn: async () => {
-      const response = await api.get('/rules');
+      const response = await api.get("/rules");
       return response.data;
     },
   });
 
   const { data, isLoading, refetch } = useQuery<LogsResponse>({
-    queryKey: ['order-logs', page, searchQuery, statusFilter, storeFilter, dateFilter, customDateFrom, customDateTo, sortField, sortDirection],
+    queryKey: [
+      "order-logs",
+      page,
+      searchQuery,
+      statusFilter,
+      storeFilter,
+      ruleFilter,
+      dateFilter,
+      customDateFrom,
+      customDateTo,
+      sortField,
+      sortDirection,
+    ],
     queryFn: async () => {
       const params = new URLSearchParams({
         page: page.toString(),
-        per_page: '50',
+        per_page: "50",
         sort_field: sortField,
         sort_direction: sortDirection,
       });
-      
-      if (searchQuery) params.append('search', searchQuery);
-      if (statusFilter) params.append('status', statusFilter);
-      if (storeFilter) params.append('store_id', storeFilter);
-      
+
+      if (searchQuery) params.append("search", searchQuery);
+      if (statusFilter) params.append("status", statusFilter);
+      if (storeFilter) params.append("store_id", storeFilter);
+      if (ruleFilter) params.append("rule_id", ruleFilter);
+
       // Add date filtering
       const dateRange = getDateRange(dateFilter);
-      if (dateRange.from) params.append('date_from', dateRange.from);
-      if (dateRange.to) params.append('date_to', dateRange.to);
-      
+      if (dateRange.from) params.append("date_from", dateRange.from);
+      if (dateRange.to) params.append("date_to", dateRange.to);
+
       const response = await api.get(`/order-logs?${params}`);
       return response.data;
     },
@@ -183,8 +226,8 @@ const OrderLogs: React.FC = () => {
 
     // Group logs by order number - logs are returned in backend sort order
     const grouped = new Map<string, GroupedOrderLog>();
-    
-    data.logs.forEach(log => {
+
+    data.logs.forEach((log) => {
       const key = log.order_number;
       if (!grouped.has(key)) {
         grouped.set(key, {
@@ -197,57 +240,61 @@ const OrderLogs: React.FC = () => {
           has_success: false,
         });
       }
-      
+
       const group = grouped.get(key)!;
       group.logs.push(log);
-      
+
       // Update latest date
       if (new Date(log.created_at) > new Date(group.latest_date)) {
         group.latest_date = log.created_at;
       }
-      
+
       // Track status flags - only count actual failures, not info/skipped
-      if (log.status === 'error' || log.status === 'failed') group.has_failed = true;
-      if (log.status === 'match' || log.status === 'success') group.has_success = true;
+      if (log.status === "error" || log.status === "failed")
+        group.has_failed = true;
+      if (log.status === "match" || log.status === "success")
+        group.has_success = true;
       // Note: 'info' and 'skipped' are neutral and don't affect group status
     });
-    
+
     // Convert to array - maintain backend sort order
     const groupedArray = Array.from(grouped.values());
-    
+
     return groupedArray;
   }, [data?.logs]);
 
   const retryOrders = useMutation({
     mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
-      const response = await api.post('/order-logs/retry', data);
+      const response = await api.post("/order-logs/retry", data);
       return response.data;
     },
     onSuccess: (result) => {
-      toast.success(`Retry completed: ${result.processed_count} processed, ${result.failed_count} failed`);
-      queryClient.invalidateQueries({ queryKey: ['order-logs'] });
+      toast.success(
+        `Retry completed: ${result.processed_count} processed, ${result.failed_count} failed`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["order-logs"] });
       setSelectedOrders(new Set());
-      setSelectedRule('');
+      setSelectedRule("");
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to retry orders');
+      toast.error(error.response?.data?.detail || "Failed to retry orders");
     },
   });
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'match':
+      case "match":
         return <CheckCircleIcon className="h-5 w-5 text-green-500" />;
-      case 'skipped':
+      case "skipped":
         return <InformationCircleIcon className="h-5 w-5 text-gray-500" />;
-      case 'error':
+      case "error":
         return <XCircleIcon className="h-5 w-5 text-red-500" />;
       // Legacy status support
-      case 'success':
+      case "success":
         return <CheckCircleIcon className="h-5 w-5 text-green-500" />;
-      case 'failed':
+      case "failed":
         return <XCircleIcon className="h-5 w-5 text-red-500" />;
-      case 'info':
+      case "info":
         return <InformationCircleIcon className="h-5 w-5 text-blue-500" />;
       default:
         return <InformationCircleIcon className="h-5 w-5 text-blue-500" />;
@@ -255,33 +302,33 @@ const OrderLogs: React.FC = () => {
   };
 
   const getActionLabel = (action: string) => {
-    if (action.startsWith('applied_rule_')) {
-      return 'Applied Rule';
+    if (action.startsWith("applied_rule_")) {
+      return "Applied Rule";
     }
     switch (action) {
-      case 'no_rules_matched':
-        return 'No Rules Matched';
-      case 'processing_error':
-        return 'Processing Error';
-      case 'retry_processing':
-        return 'Retry Processing';
+      case "no_rules_matched":
+        return "No Rules Matched";
+      case "processing_error":
+        return "Processing Error";
+      case "retry_processing":
+        return "Retry Processing";
       default:
         return action;
     }
   };
 
   const getGroupStatus = (group: GroupedOrderLog) => {
-    if (group.has_failed) return 'error';
-    if (group.has_success) return 'match';
-    return 'skipped';
+    if (group.has_failed) return "error";
+    if (group.has_success) return "match";
+    return "skipped";
   };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortField(field);
-      setSortDirection('asc');
+      setSortDirection("asc");
     }
     // Reset to page 1 when sorting changes
     setPage(1);
@@ -291,9 +338,11 @@ const OrderLogs: React.FC = () => {
     if (sortField !== field) {
       return <ChevronUpIcon className="h-4 w-4 text-gray-400" />;
     }
-    return sortDirection === 'asc' ? 
-      <ChevronUpIcon className="h-4 w-4 text-gray-700" /> : 
-      <SortDownIcon className="h-4 w-4 text-gray-700" />;
+    return sortDirection === "asc" ? (
+      <ChevronUpIcon className="h-4 w-4 text-gray-700" />
+    ) : (
+      <SortDownIcon className="h-4 w-4 text-gray-700" />
+    );
   };
 
   const toggleOrderExpansion = (orderNumber: string) => {
@@ -320,7 +369,7 @@ const OrderLogs: React.FC = () => {
     if (selectedOrders.size === groupedLogs.length) {
       setSelectedOrders(new Set());
     } else {
-      const allOrderIds = new Set(groupedLogs.map(group => group.order_id));
+      const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
       setSelectedOrders(allOrderIds);
     }
   };
@@ -328,7 +377,7 @@ const OrderLogs: React.FC = () => {
   const handleRetryWithAllRules = () => {
     if (selectedOrders.size === 0) return;
     retryOrders.mutate({
-      order_ids: Array.from(selectedOrders)
+      order_ids: Array.from(selectedOrders),
     });
   };
 
@@ -336,7 +385,7 @@ const OrderLogs: React.FC = () => {
     if (selectedOrders.size === 0 || !selectedRule) return;
     retryOrders.mutate({
       order_ids: Array.from(selectedOrders),
-      rule_id: parseInt(selectedRule)
+      rule_id: parseInt(selectedRule),
     });
   };
 
@@ -375,9 +424,12 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <div>
-              <label htmlFor="date-filter" className="block text-sm font-semibold text-gray-900 mb-2">
+              <label
+                htmlFor="date-filter"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
                 Date Range
               </label>
               <div className="space-y-1">
@@ -386,9 +438,9 @@ const OrderLogs: React.FC = () => {
                   value={dateFilter}
                   onChange={(e) => {
                     setDateFilter(e.target.value);
-                    if (e.target.value !== 'custom') {
-                      setCustomDateFrom('');
-                      setCustomDateTo('');
+                    if (e.target.value !== "custom") {
+                      setCustomDateFrom("");
+                      setCustomDateTo("");
                     }
                     setPage(1);
                   }}
@@ -401,8 +453,8 @@ const OrderLogs: React.FC = () => {
                   <option value="year">This Year</option>
                   <option value="custom">Custom Range</option>
                 </select>
-                
-                {dateFilter === 'custom' && (
+
+                {dateFilter === "custom" && (
                   <div className="flex space-x-2">
                     <div className="flex-1">
                       <input
@@ -434,7 +486,10 @@ const OrderLogs: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="search-filter" className="block text-sm font-semibold text-gray-900 mb-2">
+              <label
+                htmlFor="search-filter"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
                 Search Order Number
               </label>
               <input
@@ -448,7 +503,10 @@ const OrderLogs: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="status-filter" className="block text-sm font-semibold text-gray-900 mb-2">
+              <label
+                htmlFor="status-filter"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
                 Status
               </label>
               <select
@@ -468,7 +526,10 @@ const OrderLogs: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="store-filter" className="block text-sm font-semibold text-gray-900 mb-2">
+              <label
+                htmlFor="store-filter"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
                 Store
               </label>
               <select
@@ -488,6 +549,31 @@ const OrderLogs: React.FC = () => {
                 ))}
               </select>
             </div>
+
+            <div>
+              <label
+                htmlFor="rule-filter"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
+                Rule
+              </label>
+              <select
+                id="rule-filter"
+                value={ruleFilter}
+                onChange={(e) => {
+                  setRuleFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+              >
+                <option value="">All Rules</option>
+                {rules?.map((rule: any) => (
+                  <option key={rule.id} value={rule.id}>
+                    {rule.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Logs table */}
@@ -503,54 +589,57 @@ const OrderLogs: React.FC = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <input
                         type="checkbox"
-                        checked={selectedOrders.size === groupedLogs.length && groupedLogs.length > 0}
+                        checked={
+                          selectedOrders.size === groupedLogs.length &&
+                          groupedLogs.length > 0
+                        }
                         onChange={handleSelectAll}
                         className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
                       />
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <button
-                        onClick={() => handleSort('order_number')}
+                        onClick={() => handleSort("order_number")}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Order</span>
-                        {getSortIcon('order_number')}
+                        {getSortIcon("order_number")}
                       </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <button
-                        onClick={() => handleSort('store_name')}
+                        onClick={() => handleSort("store_name")}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Store</span>
-                        {getSortIcon('store_name')}
+                        {getSortIcon("store_name")}
                       </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <button
-                        onClick={() => handleSort('action_count')}
+                        onClick={() => handleSort("action_count")}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Actions</span>
-                        {getSortIcon('action_count')}
+                        {getSortIcon("action_count")}
                       </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <button
-                        onClick={() => handleSort('status')}
+                        onClick={() => handleSort("status")}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Status</span>
-                        {getSortIcon('status')}
+                        {getSortIcon("status")}
                       </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       <button
-                        onClick={() => handleSort('latest_date')}
+                        onClick={() => handleSort("latest_date")}
                         className="flex items-center space-x-1 hover:text-gray-700"
                       >
                         <span>Latest Activity</span>
-                        {getSortIcon('latest_date')}
+                        {getSortIcon("latest_date")}
                       </button>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -579,25 +668,35 @@ const OrderLogs: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            {group.logs.length} action{group.logs.length !== 1 ? 's' : ''}
+                            {group.logs.length} action
+                            {group.logs.length !== 1 ? "s" : ""}
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center">
                             {getStatusIcon(getGroupStatus(group))}
                             <span className="ml-2 text-sm text-gray-500 capitalize">
-                              {group.has_failed && group.has_success ? 'Mixed' : 
-                               group.has_failed ? 'Error' : 
-                               group.has_success ? 'Match' : 'Skipped'}
+                              {group.has_failed && group.has_success
+                                ? "Mixed"
+                                : group.has_failed
+                                  ? "Error"
+                                  : group.has_success
+                                    ? "Match"
+                                    : "Skipped"}
                             </span>
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDate(group.latest_date, { timezone, dateFormat })}
+                          {formatDate(group.latest_date, {
+                            timezone,
+                            dateFormat,
+                          })}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <button
-                            onClick={() => toggleOrderExpansion(group.order_number)}
+                            onClick={() =>
+                              toggleOrderExpansion(group.order_number)
+                            }
                             className="p-1 text-gray-400 hover:text-gray-600 rounded"
                           >
                             {expandedOrders.has(group.order_number) ? (
@@ -608,46 +707,52 @@ const OrderLogs: React.FC = () => {
                           </button>
                         </td>
                       </tr>
-                      
+
                       {/* Expanded rows showing individual log entries */}
-                      {expandedOrders.has(group.order_number) && group.logs.map((log) => (
-                        <tr key={log.id} className="bg-gray-50">
-                          <td className="px-6 py-2"></td>
-                          <td className="px-6 py-2 text-xs text-gray-500">
-                            #{log.id}
-                          </td>
-                          <td className="px-6 py-2 text-xs text-gray-500">
-                            -
-                          </td>
-                          <td className="px-6 py-2 text-xs text-gray-500">
-                            {getActionLabel(log.action)}
-                          </td>
-                          <td className="px-6 py-2">
-                            <div className="flex items-center">
-                              {getStatusIcon(log.status)}
-                              <span className="ml-2 text-xs text-gray-500 capitalize">
-                                {log.status}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-2 text-xs text-gray-500">
-                            {formatDate(log.created_at, { timezone, dateFormat })}
-                          </td>
-                          <td className="px-6 py-2">
-                            <div className="text-xs text-gray-500 break-words">
-                              {log.error_message ? (
-                                <span className="text-red-600">{log.error_message}</span>
-                              ) : log.details?.rule_name ? (
-                                <span>Rule: {log.details.rule_name}</span>
-                              ) : log.details?.message ? (
-                                <span>{log.details.message}</span>
-                              ) : (
-                                '-'
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {expandedOrders.has(group.order_number) &&
+                        group.logs.map((log) => (
+                          <tr key={log.id} className="bg-gray-50">
+                            <td className="px-6 py-2"></td>
+                            <td className="px-6 py-2 text-xs text-gray-500">
+                              #{log.id}
+                            </td>
+                            <td className="px-6 py-2 text-xs text-gray-500">
+                              -
+                            </td>
+                            <td className="px-6 py-2 text-xs text-gray-500">
+                              {getActionLabel(log.action)}
+                            </td>
+                            <td className="px-6 py-2">
+                              <div className="flex items-center">
+                                {getStatusIcon(log.status)}
+                                <span className="ml-2 text-xs text-gray-500 capitalize">
+                                  {log.status}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-2 text-xs text-gray-500">
+                              {formatDate(log.created_at, {
+                                timezone,
+                                dateFormat,
+                              })}
+                            </td>
+                            <td className="px-6 py-2">
+                              <div className="text-xs text-gray-500 break-words">
+                                {log.error_message ? (
+                                  <span className="text-red-600">
+                                    {log.error_message}
+                                  </span>
+                                ) : log.details?.rule_name ? (
+                                  <span>Rule: {log.details.rule_name}</span>
+                                ) : log.details?.message ? (
+                                  <span>{log.details.message}</span>
+                                ) : (
+                                  "-"
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
                     </React.Fragment>
                   ))}
                 </tbody>
@@ -661,9 +766,10 @@ const OrderLogs: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
                   <span className="text-sm font-medium text-gray-700">
-                    {selectedOrders.size} order{selectedOrders.size !== 1 ? 's' : ''} selected
+                    {selectedOrders.size} order
+                    {selectedOrders.size !== 1 ? "s" : ""} selected
                   </span>
-                  
+
                   <button
                     onClick={handleRetryWithAllRules}
                     disabled={retryOrders.isPending}
@@ -691,7 +797,7 @@ const OrderLogs: React.FC = () => {
                       </option>
                     ))}
                   </select>
-                  
+
                   <button
                     onClick={handleRetryWithSpecificRule}
                     disabled={retryOrders.isPending || !selectedRule}
@@ -713,7 +819,8 @@ const OrderLogs: React.FC = () => {
           {data && data.pagination.pages > 1 && (
             <div className="mt-4 flex justify-between items-center">
               <div className="text-sm text-gray-700">
-                Showing page {data.pagination.page} of {data.pagination.pages} ({data.pagination.total} unique orders)
+                Showing page {data.pagination.page} of {data.pagination.pages} (
+                {data.pagination.total} unique orders)
               </div>
               <div className="flex space-x-2">
                 <button
@@ -724,7 +831,9 @@ const OrderLogs: React.FC = () => {
                   Previous
                 </button>
                 <button
-                  onClick={() => setPage(Math.min(data.pagination.pages, page + 1))}
+                  onClick={() =>
+                    setPage(Math.min(data.pagination.pages, page + 1))
+                  }
                   disabled={page === data.pagination.pages}
                   className="px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
                 >

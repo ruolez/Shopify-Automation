@@ -851,6 +851,7 @@ async def get_order_logs(
     status: Optional[str] = None,
     action: Optional[str] = None,
     search: Optional[str] = None,
+    rule_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sort_field: Optional[str] = "latest_date",
@@ -870,6 +871,8 @@ async def get_order_logs(
         query = query.filter(OrderLog.action.contains(action))
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
+    if rule_id:
+        query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
     
     # Apply date filtering
     if date_from:
@@ -914,6 +917,8 @@ async def get_order_logs(
             query = query.filter(OrderLog.action.contains(action))
         if search:
             query = query.filter(OrderLog.order_number.contains(search))
+        if rule_id:
+            query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
         if parsed_date_from:
             query = query.filter(OrderLog.created_at >= parsed_date_from)
         if parsed_date_to:
