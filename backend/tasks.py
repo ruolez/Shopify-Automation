@@ -53,6 +53,16 @@ def get_db():
     finally:
         db.close()
 
+def _combine_product_and_variant_title(product_title: str, variant_title: str) -> str:
+    """Combine product title and variant title for display"""
+    if not product_title:
+        product_title = "Unknown Product"
+    
+    if variant_title and variant_title.strip():
+        return f"{product_title} {variant_title}"
+    
+    return product_title
+
 def _record_oos_incident(
     db: Session,
     user_id: int,
@@ -81,8 +91,12 @@ def _record_oos_incident(
             # Extract product information
             product_id = product.get("id", "")
             variant_id = variant.get("id", "")
-            product_title = item.get("title", "Unknown Product")
+            base_product_title = item.get("title", "Unknown Product")
             variant_title = variant.get("title", "")
+            # Filter out "Default Title" - store as empty string instead
+            if variant_title == "Default Title":
+                variant_title = ""
+            combined_product_title = _combine_product_and_variant_title(base_product_title, variant_title)
             sku = variant.get("sku", "")
             
             # Skip excluded SKUs
@@ -110,7 +124,7 @@ def _record_oos_incident(
             ).first()
             
             if existing_incident:
-                logger.info(f"OOS incident already exists for {product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
+                logger.info(f"OOS incident already exists for {combined_product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
                 continue
             
             # Create OOS incident record
@@ -121,7 +135,7 @@ def _record_oos_incident(
                 order_number=order_number,
                 product_id=product_id,
                 variant_id=variant_id,
-                product_title=product_title,
+                product_title=combined_product_title,
                 variant_title=variant_title,
                 sku=sku,
                 vendor=vendor,
@@ -169,21 +183,30 @@ def _record_oos_incident_for_failed_items(
             # Extract product information from failed item data
             product_id = failed_item.get("product_id", "")
             variant_id = failed_item.get("variant_id", "")
-            product_title = failed_item.get("product_title", "Unknown Product")
+            base_product_title = failed_item.get("product_title", "Unknown Product")
             sku = failed_item.get("sku", "")
+            variant_title = ""
             
-            # SECURITY FIX: If SKU is missing from failed_item, get it from original order
-            if not sku and variant_id:
+            # Get missing data from original order (SKU and variant title)
+            if variant_id:
                 line_items = order.get("lineItems", {}).get("edges", [])
                 for item_edge in line_items:
                     item_variant = item_edge["node"].get("variant", {})
                     if item_variant.get("id") == variant_id:
-                        sku = item_variant.get("sku", "")
-                        logger.info(f"Retrieved missing SKU from order data: {sku} for variant {variant_id}")
+                        if not sku:
+                            sku = item_variant.get("sku", "")
+                            logger.info(f"Retrieved missing SKU from order data: {sku} for variant {variant_id}")
+                        variant_title = item_variant.get("title", "")
+                        # Filter out "Default Title" - store as empty string instead
+                        if variant_title == "Default Title":
+                            variant_title = ""
                         break
                         
                 if not sku:
                     logger.warning(f"Could not find SKU for variant {variant_id} in order data - exclusion check may be compromised")
+            
+            # Combine product and variant titles
+            combined_product_title = _combine_product_and_variant_title(base_product_title, variant_title)
             
             # Skip excluded SKUs
             if sku and excluded_skus:
@@ -208,7 +231,7 @@ def _record_oos_incident_for_failed_items(
             ).first()
             
             if existing_incident:
-                logger.info(f"OOS incident already exists for {product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
+                logger.info(f"OOS incident already exists for {combined_product_title} (SKU: {sku}) in order {order_number} for rule {rule_name}")
                 continue
             
             # Create OOS incident record for failed item
@@ -219,8 +242,8 @@ def _record_oos_incident_for_failed_items(
                 order_number=order_number,
                 product_id=product_id,
                 variant_id=variant_id,
-                product_title=product_title,
-                variant_title="",  # Not available in failed_item data
+                product_title=combined_product_title,
+                variant_title=variant_title,
                 sku=sku,
                 vendor="",  # Not available in failed_item data
                 product_type="",  # Not available in failed_item data
@@ -265,9 +288,10 @@ def _record_oos_incident_for_unavailable_items(
         
         for unavailable_item in unavailable_items:
             # Extract product information from inventory check data
-            product_title = unavailable_item.get("product_title", "Unknown Product")
+            base_product_title = unavailable_item.get("product_title", "Unknown Product")
             variant_id = unavailable_item.get("variant_id", "")
             sku = unavailable_item.get("sku", "")
+            variant_title = ""
             
             # Skip excluded SKUs
             if sku and excluded_skus:
@@ -283,20 +307,26 @@ def _record_oos_incident_for_unavailable_items(
             available_quantity = unavailable_item.get("available_quantity", 0)
             
             # For unavailable items from inventory check, we may not have all product details
-            # Extract product_id from variant_id if available
+            # Extract product_id and variant_title from order line items for more complete data
             product_id = ""
             if variant_id:
-                # Try to extract from order line items for more complete data
                 line_items = order.get("lineItems", {}).get("edges", [])
                 for item_edge in line_items:
                     item = item_edge["node"]
                     if item.get("variant", {}).get("id") == variant_id:
                         product = item.get("product", {})
                         product_id = product.get("id", "")
+                        variant_title = item.get("variant", {}).get("title", "")
+                        # Filter out "Default Title" - store as empty string instead
+                        if variant_title == "Default Title":
+                            variant_title = ""
                         # Use more complete product info from order line items
-                        if not product_title or product_title == "Unknown Product":
-                            product_title = item.get("title", "Unknown Product")
+                        if not base_product_title or base_product_title == "Unknown Product":
+                            base_product_title = item.get("title", "Unknown Product")
                         break
+            
+            # Combine product and variant titles
+            combined_product_title = _combine_product_and_variant_title(base_product_title, variant_title)
             
             # Create OOS incident record for unavailable item
             oos_incident = OutOfStockIncident(
@@ -306,8 +336,8 @@ def _record_oos_incident_for_unavailable_items(
                 order_number=order_number,
                 product_id=product_id,
                 variant_id=variant_id,
-                product_title=product_title,
-                variant_title="",  # May not be available in inventory check data
+                product_title=combined_product_title,
+                variant_title=variant_title,
                 sku=sku,
                 vendor="",  # May not be available in inventory check data
                 product_type="",  # May not be available in inventory check data

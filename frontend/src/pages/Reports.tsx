@@ -803,7 +803,7 @@ const Reports: React.FC = () => {
                       <td className="px-6 py-4 text-sm">
                         <div>
                           <div className="font-medium text-gray-900">{product.product_title}</div>
-                          {product.variant_title && (
+                          {product.variant_title && product.variant_title !== 'Default Title' && (
                             <div className="text-gray-500">{product.variant_title}</div>
                           )}
                           {product.product_type && (

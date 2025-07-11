@@ -144,6 +144,7 @@ class ShopifyClient:
                                     }
                                     variant {
                                         id
+                                        title
                                         sku
                                         inventoryItem {
                                             measurement {
@@ -511,6 +512,7 @@ class ShopifyClient:
                             }
                             variant {
                                 id
+                                title
                                 sku
                                 inventoryItem {
                                     measurement {
