@@ -414,10 +414,7 @@ const OrderLogs: React.FC = () => {
                 View all order processing activities and rule applications
               </p>
             </div>
-            <button
-              onClick={() => refetch()}
-              className="btn-secondary"
-            >
+            <button onClick={() => refetch()} className="btn-secondary">
               <ArrowPathIcon className="h-4 w-4 mr-2" />
               Refresh
             </button>
@@ -579,7 +576,9 @@ const OrderLogs: React.FC = () => {
           {/* Logs table */}
           {groupedLogs.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-gray-500 dark:text-dark-400">No order logs found</p>
+              <p className="text-gray-500 dark:text-dark-400">
+                No order logs found
+              </p>
             </div>
           ) : (
             <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg dark:ring-dark-200">
@@ -711,7 +710,10 @@ const OrderLogs: React.FC = () => {
                       {/* Expanded rows showing individual log entries */}
                       {expandedOrders.has(group.order_number) &&
                         group.logs.map((log) => (
-                          <tr key={log.id} className="bg-gray-50 dark:bg-dark-50">
+                          <tr
+                            key={log.id}
+                            className="bg-gray-50 dark:bg-dark-50"
+                          >
                             <td className="px-6 py-2"></td>
                             <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
                               #{log.id}
@@ -762,10 +764,10 @@ const OrderLogs: React.FC = () => {
 
           {/* Retry Action Bar */}
           {selectedOrders.size > 0 && (
-            <div className="mt-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="mt-4 bg-gray-50 dark:bg-dark-100 p-4 rounded-lg border border-gray-200 dark:border-dark-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
-                  <span className="text-sm font-medium text-gray-700">
+                  <span className="text-sm font-medium text-gray-700 dark:text-dark-600">
                     {selectedOrders.size} order
                     {selectedOrders.size !== 1 ? "s" : ""} selected
                   </span>
@@ -788,7 +790,7 @@ const OrderLogs: React.FC = () => {
                   <select
                     value={selectedRule}
                     onChange={(e) => setSelectedRule(e.target.value)}
-                    className="block w-48 text-sm border-gray-300 rounded-md shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                    className="block w-48 text-sm border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 rounded-md shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
                   >
                     <option value="">Select a specific rule...</option>
                     {rules?.map((rule: any) => (
@@ -801,7 +803,7 @@ const OrderLogs: React.FC = () => {
                   <button
                     onClick={handleRetryWithSpecificRule}
                     disabled={retryOrders.isPending || !selectedRule}
-                    className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm leading-4 font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
                   >
                     {retryOrders.isPending ? (
                       <LoadingSpinner size="sm" className="mr-2" />
@@ -818,7 +820,7 @@ const OrderLogs: React.FC = () => {
           {/* Pagination */}
           {data && data.pagination.pages > 1 && (
             <div className="mt-4 flex justify-between items-center">
-              <div className="text-sm text-gray-700">
+              <div className="text-sm text-gray-700 dark:text-dark-600">
                 Showing page {data.pagination.page} of {data.pagination.pages} (
                 {data.pagination.total} unique orders)
               </div>
@@ -826,7 +828,7 @@ const OrderLogs: React.FC = () => {
                 <button
                   onClick={() => setPage(Math.max(1, page - 1))}
                   disabled={page === 1}
-                  className="px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                  className="px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 disabled:opacity-50"
                 >
                   Previous
                 </button>
@@ -835,7 +837,7 @@ const OrderLogs: React.FC = () => {
                     setPage(Math.min(data.pagination.pages, page + 1))
                   }
                   disabled={page === data.pagination.pages}
-                  className="px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                  className="px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 disabled:opacity-50"
                 >
                   Next
                 </button>
