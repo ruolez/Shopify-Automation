@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Dialog } from '@headlessui/react';
+import { Dialog, Switch } from '@headlessui/react';
 import { PlusIcon, TrashIcon, XMarkIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -72,6 +72,21 @@ const Stores: React.FC = () => {
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.detail || 'Failed to start sync');
+    },
+  });
+
+  const toggleStoreMutation = useMutation({
+    mutationFn: async (storeId: number) => {
+      const response = await api.put(`/stores/${storeId}/toggle-active`);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['stores'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success(data.message);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to toggle store status');
     },
   });
 
@@ -153,7 +168,23 @@ const Stores: React.FC = () => {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-3">
+                  <Switch
+                    checked={store.is_active}
+                    onChange={() => toggleStoreMutation.mutate(store.id)}
+                    disabled={toggleStoreMutation.isPending}
+                    className={`${
+                      store.is_active ? 'bg-shopify-600' : 'bg-gray-200'
+                    } relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-shopify-500 focus:ring-offset-2 disabled:opacity-50`}
+                    title={store.is_active ? 'Deactivate store' : 'Activate store'}
+                  >
+                    <span className="sr-only">Toggle store active status</span>
+                    <span
+                      className={`${
+                        store.is_active ? 'translate-x-6' : 'translate-x-1'
+                      } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                    />
+                  </Switch>
                   <button
                     onClick={() => syncStoreMutation.mutate(store.id)}
                     disabled={syncStoreMutation.isPending}

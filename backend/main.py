@@ -216,6 +216,37 @@ async def remove_store(
     db.commit()
     return {"message": "Store removed successfully"}
 
+@app.put("/stores/{store_id}/toggle-active")
+async def toggle_store_active(
+    store_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    store = db.query(ShopifyStore).filter(
+        ShopifyStore.id == store_id,
+        ShopifyStore.user_id == current_user.id
+    ).first()
+    
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Store not found"
+        )
+    
+    old_status = store.is_active
+    store.is_active = not store.is_active
+    db.commit()
+    
+    return {
+        "id": store.id,
+        "shop_domain": store.shop_domain,
+        "shop_name": store.shop_name,
+        "is_active": store.is_active,
+        "created_at": store.created_at,
+        "last_sync": store.last_sync,
+        "message": f"Store {'activated' if store.is_active else 'deactivated'} successfully"
+    }
+
 # Rules management endpoints
 @app.post("/rules", status_code=status.HTTP_201_CREATED)
 async def create_rule(
