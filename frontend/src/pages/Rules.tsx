@@ -170,8 +170,8 @@ const Rules: React.FC = () => {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Rules</h1>
-          <p className="mt-2 text-gray-600">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800">Rules</h1>
+          <p className="mt-2 text-gray-600 dark:text-dark-500">
             Manage your order processing rules
           </p>
         </div>
@@ -180,7 +180,7 @@ const Rules: React.FC = () => {
             <>
               <button
                 onClick={handleActivateAll}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                 disabled={activateAllRulesMutation.isPending}
               >
                 <PlayIcon className="h-5 w-5 mr-2" />
@@ -188,7 +188,7 @@ const Rules: React.FC = () => {
               </button>
               <button
                 onClick={handleDeactivateAll}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                 disabled={deactivateAllRulesMutation.isPending}
               >
                 <PauseIcon className="h-5 w-5 mr-2" />
@@ -216,46 +216,46 @@ const Rules: React.FC = () => {
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center space-x-3">
-                    <h3 className="text-lg font-medium text-gray-900">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-dark-800">
                       {rule.name}
                     </h3>
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         rule.is_active
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
                       }`}
                     >
                       {rule.is_active ? 'Active' : 'Inactive'}
                     </span>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
                       Priority: {rule.priority}
                     </span>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400">
                       Delay: {rule.delay_ms}ms
                     </span>
                   </div>
                   
                   {rule.description && (
-                    <p className="text-sm text-gray-600 mt-1">{rule.description}</p>
+                    <p className="text-sm text-gray-600 dark:text-dark-500 mt-1">{rule.description}</p>
                   )}
                   
                   <div className="mt-3 space-y-2">
                     <div>
-                      <span className="text-sm font-medium text-gray-700">Conditions: </span>
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm font-medium text-gray-700 dark:text-dark-600">Conditions: </span>
+                      <span className="text-sm text-gray-600 dark:text-dark-500">
                         {formatConditions(rule.conditions)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-sm font-medium text-gray-700">Actions: </span>
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm font-medium text-gray-700 dark:text-dark-600">Actions: </span>
+                      <span className="text-sm text-gray-600 dark:text-dark-500">
                         {formatActions(rule.actions)}
                       </span>
                     </div>
                   </div>
                   
-                  <p className="text-xs text-gray-400 mt-3">
+                  <p className="text-xs text-gray-400 dark:text-dark-300 mt-3">
                     Created: {formatShortDate(rule.created_at, timezone)}
                   </p>
                 </div>
@@ -265,8 +265,8 @@ const Rules: React.FC = () => {
                     onClick={() => handleToggleRule(rule)}
                     className={`p-2 rounded-lg transition-colors ${
                       rule.is_active
-                        ? 'text-red-600 hover:bg-red-50'
-                        : 'text-green-600 hover:bg-green-50'
+                        ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20'
+                        : 'text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20'
                     }`}
                     title={rule.is_active ? 'Deactivate rule' : 'Activate rule'}
                   >
@@ -279,7 +279,7 @@ const Rules: React.FC = () => {
                   
                   <Link
                     to={`/rules/${rule.id}/edit`}
-                    className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
+                    className="p-2 text-gray-600 hover:bg-gray-50 dark:text-dark-500 dark:hover:bg-dark-200 rounded-lg transition-colors"
                     title="Edit rule"
                   >
                     <PencilIcon className="h-5 w-5" />
@@ -287,7 +287,7 @@ const Rules: React.FC = () => {
                   
                   <button
                     onClick={() => handleDeleteRule(rule.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                     title="Delete rule"
                   >
                     <TrashIcon className="h-5 w-5" />
@@ -320,8 +320,8 @@ const Rules: React.FC = () => {
                 />
               </svg>
             </div>
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No rules</h3>
-            <p className="mt-1 text-sm text-gray-500">
+            <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">No rules</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
               Get started by creating your first automation rule.
             </p>
             <div className="mt-6">

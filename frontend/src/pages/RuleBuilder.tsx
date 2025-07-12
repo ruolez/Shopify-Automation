@@ -268,15 +268,15 @@ const RuleBuilder: React.FC = () => {
       <div className="flex items-center space-x-4">
         <button
           onClick={() => navigate('/rules')}
-          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+          className="p-2 text-gray-600 hover:bg-gray-100 dark:text-dark-500 dark:hover:bg-dark-200 rounded-lg"
         >
           <ArrowLeftIcon className="h-5 w-5" />
         </button>
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800">
             {isEditing ? 'Edit Rule' : 'Create Rule'}
           </h1>
-          <p className="mt-2 text-gray-600">
+          <p className="mt-2 text-gray-600 dark:text-dark-500">
             {isEditing ? 'Update your automation rule' : 'Set up automated order processing'}
           </p>
         </div>
@@ -289,7 +289,7 @@ const RuleBuilder: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           className="card"
         >
-          <h2 className="text-xl font-semibold text-gray-900 mb-6">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-dark-800 mb-6">
             Basic Information
           </h2>
           
@@ -337,7 +337,7 @@ const RuleBuilder: React.FC = () => {
               {errors.delay_ms && (
                 <p className="mt-1 text-sm text-red-600">{errors.delay_ms.message}</p>
               )}
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
                 Time to wait after this rule executes before the next rule runs (0-60000ms)
               </p>
             </div>
@@ -360,7 +360,7 @@ const RuleBuilder: React.FC = () => {
                 type="checkbox"
                 className="rounded border-gray-300 text-shopify-600 focus:ring-shopify-500"
               />
-              <span className="ml-2 text-sm text-gray-700">
+              <span className="ml-2 text-sm text-gray-700 dark:text-dark-600">
                 Activate this rule immediately
               </span>
             </label>
@@ -376,7 +376,7 @@ const RuleBuilder: React.FC = () => {
         >
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-4">
-              <h2 className="text-xl font-semibold text-gray-900">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-dark-800">
                 Conditions
               </h2>
               {conditionFields.length > 1 && (
@@ -385,7 +385,7 @@ const RuleBuilder: React.FC = () => {
                   <select
                     value={logicalOperator}
                     onChange={(e) => setLogicalOperator(e.target.value as 'AND' | 'OR')}
-                    className="text-sm border border-gray-300 rounded-lg px-3 py-1 focus:ring-2 focus:ring-shopify-500 focus:border-shopify-500"
+                    className="input text-sm px-3 py-1"
                   >
                     <option value="AND">All conditions must be true (AND)</option>
                     <option value="OR">Any condition can be true (OR)</option>

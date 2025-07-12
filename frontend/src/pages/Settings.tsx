@@ -3,11 +3,12 @@ import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Switch } from '@headlessui/react';
 import { Dialog } from '@headlessui/react';
-import { ExclamationTriangleIcon, TrashIcon, PlusIcon, PencilIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, TrashIcon, PlusIcon, PencilIcon, SunIcon, MoonIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { formatDate, getCurrentTimeInTimezone, formatShortDate } from '../utils/dateFormat';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface Settings {
   id: number;
@@ -83,10 +84,10 @@ const TimezoneSelector: React.FC<{
 
   return (
     <div>
-      <label htmlFor="timezone" className="block text-sm font-medium text-gray-700">
+      <label htmlFor="timezone" className="block text-sm font-medium text-gray-700 dark:text-dark-600">
         Timezone
       </label>
-      <p className="text-sm text-gray-500 mb-2">
+      <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
         Select your preferred timezone for displaying dates and times
       </p>
       
@@ -95,7 +96,7 @@ const TimezoneSelector: React.FC<{
           id="timezone"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+          className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
         >
           {timezoneData && Object.entries(timezoneData.groups).map(([groupName, timezones]) => (
             <optgroup key={groupName} label={groupName}>
@@ -108,9 +109,9 @@ const TimezoneSelector: React.FC<{
           ))}
         </select>
         
-        <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
-          <div className="font-medium text-gray-700">Current time in {value}:</div>
-          <div className="text-lg font-mono">
+        <div className="text-sm text-gray-600 dark:text-dark-500 bg-gray-50 dark:bg-dark-200 p-3 rounded-md">
+          <div className="font-medium text-gray-700 dark:text-dark-600">Current time in {value}:</div>
+          <div className="text-lg font-mono text-gray-900 dark:text-dark-800">
             {formatDate(currentTime, { timezone: value, dateFormat: 'EEEE, MMMM d, yyyy HH:mm:ss' })}
           </div>
         </div>
@@ -139,10 +140,10 @@ const DateFormatSelector: React.FC<{
 
   return (
     <div>
-      <label htmlFor="date-format" className="block text-sm font-medium text-gray-700">
+      <label htmlFor="date-format" className="block text-sm font-medium text-gray-700 dark:text-dark-600">
         Date Format
       </label>
-      <p className="text-sm text-gray-500 mb-2">
+      <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
         Choose how dates and times should be displayed throughout the application
       </p>
       
@@ -151,7 +152,7 @@ const DateFormatSelector: React.FC<{
           id="date-format"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+          className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
         >
           {dateFormats?.map((format) => (
             <option key={format.format} value={format.format}>
@@ -160,10 +161,112 @@ const DateFormatSelector: React.FC<{
           ))}
         </select>
         
-        <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
-          <div className="font-medium text-gray-700">Preview with current format:</div>
-          <div className="text-lg font-mono">{previewTime}</div>
+        <div className="text-sm text-gray-600 dark:text-dark-500 bg-gray-50 dark:bg-dark-200 p-3 rounded-md">
+          <div className="font-medium text-gray-700 dark:text-dark-600">Preview with current format:</div>
+          <div className="text-lg font-mono text-gray-900 dark:text-dark-800">{previewTime}</div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const ThemeToggle: React.FC = () => {
+  const { theme, toggleTheme, setTheme } = useTheme();
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-dark-600 mb-3">
+          Theme Preference
+        </label>
+        <p className="text-sm text-gray-500 dark:text-dark-400 mb-4">
+          Choose your preferred color scheme for the application interface.
+        </p>
+        
+        <div className="grid grid-cols-3 gap-3">
+          {/* Light Mode */}
+          <button
+            onClick={() => setTheme('light')}
+            className={`relative flex flex-col items-center p-4 rounded-lg border-2 transition-all duration-200 ${
+              theme === 'light'
+                ? 'border-shopify-500 bg-shopify-50 dark:bg-shopify-900/20'
+                : 'border-gray-200 dark:border-dark-300 hover:border-gray-300 dark:hover:border-dark-400'
+            }`}
+          >
+            <SunIcon className="h-6 w-6 text-yellow-500 mb-2" />
+            <span className="text-sm font-medium text-gray-900 dark:text-dark-800">Light</span>
+            <span className="text-xs text-gray-500 dark:text-dark-400">Always light theme</span>
+            {theme === 'light' && (
+              <div className="absolute top-2 right-2">
+                <div className="h-2 w-2 bg-shopify-500 rounded-full"></div>
+              </div>
+            )}
+          </button>
+
+          {/* Dark Mode */}
+          <button
+            onClick={() => setTheme('dark')}
+            className={`relative flex flex-col items-center p-4 rounded-lg border-2 transition-all duration-200 ${
+              theme === 'dark'
+                ? 'border-shopify-500 bg-shopify-50 dark:bg-shopify-900/20'
+                : 'border-gray-200 dark:border-dark-300 hover:border-gray-300 dark:hover:border-dark-400'
+            }`}
+          >
+            <MoonIcon className="h-6 w-6 text-blue-500 mb-2" />
+            <span className="text-sm font-medium text-gray-900 dark:text-dark-800">Dark</span>
+            <span className="text-xs text-gray-500 dark:text-dark-400">Always dark theme</span>
+            {theme === 'dark' && (
+              <div className="absolute top-2 right-2">
+                <div className="h-2 w-2 bg-shopify-500 rounded-full"></div>
+              </div>
+            )}
+          </button>
+
+          {/* System Mode */}
+          <button
+            onClick={() => {
+              localStorage.removeItem('theme');
+              const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              setTheme(systemPrefersDark ? 'dark' : 'light');
+            }}
+            className={`relative flex flex-col items-center p-4 rounded-lg border-2 transition-all duration-200 ${
+              !localStorage.getItem('theme')
+                ? 'border-shopify-500 bg-shopify-50 dark:bg-shopify-900/20'
+                : 'border-gray-200 dark:border-dark-300 hover:border-gray-300 dark:hover:border-dark-400'
+            }`}
+          >
+            <div className="h-6 w-6 mb-2 flex">
+              <SunIcon className="h-3 w-3 text-yellow-500" />
+              <MoonIcon className="h-3 w-3 text-blue-500" />
+            </div>
+            <span className="text-sm font-medium text-gray-900 dark:text-dark-800">System</span>
+            <span className="text-xs text-gray-500 dark:text-dark-400">Follow system setting</span>
+            {!localStorage.getItem('theme') && (
+              <div className="absolute top-2 right-2">
+                <div className="h-2 w-2 bg-shopify-500 rounded-full"></div>
+              </div>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Toggle Switch */}
+      <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-dark-200 rounded-lg">
+        <div className="flex items-center space-x-3">
+          <SunIcon className="h-5 w-5 text-yellow-500" />
+          <span className="text-sm font-medium text-gray-700 dark:text-dark-600">Quick Toggle</span>
+          <MoonIcon className="h-5 w-5 text-blue-500" />
+        </div>
+        <button
+          onClick={toggleTheme}
+          className="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-200 dark:bg-dark-300 transition-colors focus:outline-none focus:ring-2 focus:ring-shopify-500 focus:ring-offset-2"
+        >
+          <span
+            className={`${
+              theme === 'dark' ? 'translate-x-6' : 'translate-x-1'
+            } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+          />
+        </button>
       </div>
     </div>
   );
@@ -277,11 +380,11 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
 
   return (
     <>
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-lg font-medium leading-6 text-gray-900">
+              <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
                 Excluded SKUs
               </h3>
               <p className="mt-1 text-sm text-gray-500">
@@ -306,27 +409,27 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
               {excludedSkus.map((sku) => (
                 <div
                   key={sku.id}
-                  className="flex items-center justify-between p-4 border border-gray-200 rounded-lg"
+                  className="flex items-center justify-between p-4 border border-gray-200 dark:border-dark-200 rounded-lg"
                 >
                   <div className="flex-1">
                     <div className="flex items-center space-x-3">
-                      <code className="px-2 py-1 bg-gray-100 rounded text-sm font-mono">
+                      <code className="px-2 py-1 bg-gray-100 dark:bg-dark-200 rounded text-sm font-mono text-gray-900 dark:text-dark-800">
                         {sku.sku_pattern}
                       </code>
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                           sku.is_active
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-red-100 text-red-800'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
+                            : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
                         }`}
                       >
                         {sku.is_active ? 'Active' : 'Inactive'}
                       </span>
                     </div>
                     {sku.description && (
-                      <p className="mt-1 text-sm text-gray-600">{sku.description}</p>
+                      <p className="mt-1 text-sm text-gray-600 dark:text-dark-500">{sku.description}</p>
                     )}
-                    <p className="mt-1 text-xs text-gray-400">
+                    <p className="mt-1 text-xs text-gray-400 dark:text-dark-300">
                       Created: {formatShortDate(sku.created_at, timezone)}
                     </p>
                   </div>
@@ -347,7 +450,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
                     </Switch>
                     <button
                       onClick={() => startEdit(sku)}
-                      className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
+                      className="p-2 text-gray-600 hover:bg-gray-50 dark:text-dark-500 dark:hover:bg-dark-200 rounded-lg transition-colors"
                       title="Edit SKU pattern"
                     >
                       <PencilIcon className="h-4 w-4" />
@@ -358,7 +461,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
                           deleteMutation.mutate(sku.id);
                         }
                       }}
-                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                       title="Delete SKU pattern"
                     >
                       <TrashIcon className="h-4 w-4" />
@@ -368,7 +471,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
               ))}
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-gray-500 dark:text-dark-400">
               <p>No excluded SKU patterns configured.</p>
               <p className="text-sm">Add patterns to exclude specific products from weight calculations and OOS reporting.</p>
             </div>
@@ -383,14 +486,14 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
         className="fixed inset-0 z-50 overflow-y-auto"
       >
         <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-          <Dialog.Overlay className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+          <Dialog.Overlay className="modal-overlay" />
 
-          <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+          <div className="modal-content inline-block align-bottom rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
             <div>
               <div className="mt-3 text-center sm:mt-0 sm:text-left">
                 <Dialog.Title
                   as="h3"
-                  className="text-lg leading-6 font-medium text-gray-900"
+                  className="text-lg leading-6 font-medium text-gray-900 dark:text-dark-800"
                 >
                   {editingSku ? 'Edit' : 'Add'} Excluded SKU Pattern
                 </Dialog.Title>
@@ -406,7 +509,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
                         value={formData.sku_pattern}
                         onChange={(e) => setFormData({ ...formData, sku_pattern: e.target.value })}
                         placeholder="e.g., SAMPLE, TEST-, _EXCLUDED"
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                        className="mt-1 block w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
                         required
                       />
                       <p className="mt-1 text-xs text-gray-500">
@@ -423,7 +526,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
                         onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                         placeholder="Why is this SKU pattern excluded?"
                         rows={3}
-                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                        className="mt-1 block w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
                       />
                     </div>
                   </form>
@@ -449,7 +552,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({ timezone = 'UTC'
               <button
                 type="button"
                 onClick={cancelEdit}
-                className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 sm:mt-0 sm:w-auto sm:text-sm"
+                className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 dark:border-dark-300 shadow-sm px-4 py-2 bg-white dark:bg-dark-100 text-base font-medium text-gray-700 dark:text-dark-600 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 sm:mt-0 sm:w-auto sm:text-sm"
               >
                 Cancel
               </button>
@@ -572,9 +675,9 @@ const Settings: React.FC = () => {
       animate={{ opacity: 1 }}
       className="space-y-6"
     >
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium leading-6 text-gray-900">
+          <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
             Sync Settings
           </h3>
           <p className="mt-1 text-sm text-gray-500">
@@ -612,14 +715,14 @@ const Settings: React.FC = () => {
               <label htmlFor="sync-frequency" className="block text-sm font-medium text-gray-700">
                 Sync Frequency (minutes)
               </label>
-              <p className="text-sm text-gray-500 mb-2">
+              <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
                 How often to check for new orders when auto-sync is enabled
               </p>
               <select
                 id="sync-frequency"
                 value={settings?.sync_frequency_minutes || 10}
                 onChange={(e) => updateSettings.mutate({ sync_frequency_minutes: parseInt(e.target.value) })}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
               >
                 <option value={1}>Every 1 minute</option>
                 <option value={2}>Every 2 minutes</option>
@@ -635,10 +738,10 @@ const Settings: React.FC = () => {
 
             {/* Sync window */}
             <div>
-              <label htmlFor="sync-window" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="sync-window" className="block text-sm font-medium text-gray-700 dark:text-dark-600">
                 Order Sync Window (days)
               </label>
-              <p className="text-sm text-gray-500 mb-2">
+              <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
                 How many days back to fetch orders during manual sync (affects missing order recovery)
               </p>
               <input
@@ -648,27 +751,27 @@ const Settings: React.FC = () => {
                 max="365"
                 value={settings?.sync_window_days || 7}
                 onChange={(e) => updateSettings.mutate({ sync_window_days: parseInt(e.target.value) })}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
                 placeholder="7"
               />
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-gray-400 dark:text-dark-300 mt-1">
                 Set to 1 for recent orders only, or higher values (7-30) to recover older orders
               </p>
             </div>
 
             {/* Log retention */}
             <div>
-              <label htmlFor="log-retention" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="log-retention" className="block text-sm font-medium text-gray-700 dark:text-dark-600">
                 Order Log Retention (days)
               </label>
-              <p className="text-sm text-gray-500 mb-2">
+              <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
                 How long to keep order processing logs
               </p>
               <select
                 id="log-retention"
                 value={settings?.log_retention_days || 30}
                 onChange={(e) => updateSettings.mutate({ log_retention_days: parseInt(e.target.value) })}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm"
               >
                 <option value={7}>7 days</option>
                 <option value={14}>14 days</option>
@@ -683,12 +786,12 @@ const Settings: React.FC = () => {
       </div>
 
       {/* Timezone & Date Format Settings */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium leading-6 text-gray-900">
+          <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
             Timezone & Date Format
           </h3>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
             Configure your preferred timezone and date format for displaying timestamps.
           </p>
 
@@ -709,10 +812,26 @@ const Settings: React.FC = () => {
         </div>
       </div>
 
-      {/* Manual sync section */}
-      <div className="bg-white shadow rounded-lg">
+      {/* Appearance Settings */}
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium leading-6 text-gray-900">
+          <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
+            Appearance
+          </h3>
+          <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
+            Customize the look and feel of the application.
+          </p>
+
+          <div className="mt-6">
+            <ThemeToggle />
+          </div>
+        </div>
+      </div>
+
+      {/* Manual sync section */}
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
             Manual Sync
           </h3>
           <p className="mt-1 text-sm text-gray-500">
@@ -742,9 +861,9 @@ const Settings: React.FC = () => {
       <ExcludedSKUsSection timezone={settings?.timezone} />
 
       {/* Data Management section */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium leading-6 text-gray-900">
+          <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
             Data Management
           </h3>
           <p className="mt-1 text-sm text-gray-500">
@@ -754,7 +873,7 @@ const Settings: React.FC = () => {
           <div className="mt-5">
             <button
               onClick={() => setShowResetModal(true)}
-              className="inline-flex items-center px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              className="inline-flex items-center px-4 py-2 border border-red-300 dark:border-red-600 text-sm font-medium rounded-md text-red-700 dark:text-red-400 bg-white dark:bg-dark-100 hover:bg-red-50 dark:hover:bg-red-900/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
             >
               <TrashIcon className="h-4 w-4 mr-2" />
               Reset Data
@@ -765,17 +884,17 @@ const Settings: React.FC = () => {
 
       {/* Reset Data Modal */}
       <Dialog open={showResetModal} onClose={() => setShowResetModal(false)} className="relative z-50">
-        <div className="fixed inset-0 bg-black bg-opacity-30" aria-hidden="true" />
+        <div className="fixed inset-0 bg-black/50 dark:bg-black/70" aria-hidden="true" />
         
         <div className="fixed inset-0 flex items-center justify-center p-4">
-          <Dialog.Panel className="mx-auto max-w-lg w-full bg-white rounded-xl shadow-lg">
+          <Dialog.Panel className="mx-auto max-w-lg w-full bg-white dark:bg-dark-100 rounded-xl shadow-lg border border-gray-200 dark:border-dark-200">
             <div className="p-6">
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <ExclamationTriangleIcon className="h-12 w-12 text-red-600" />
                 </div>
                 <div className="ml-4">
-                  <Dialog.Title className="text-lg font-medium text-gray-900">
+                  <Dialog.Title className="text-lg font-medium text-gray-900 dark:text-dark-800">
                     Reset Data
                   </Dialog.Title>
                   <p className="mt-1 text-sm text-gray-500">
@@ -786,7 +905,7 @@ const Settings: React.FC = () => {
 
               {dataStats && (
                 <div className="mt-6 space-y-4">
-                  <h4 className="text-sm font-medium text-gray-900">Select data to reset:</h4>
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-dark-800">Select data to reset:</h4>
                   
                   <div className="space-y-3">
                     <label className="flex items-center">
@@ -797,7 +916,7 @@ const Settings: React.FC = () => {
                         className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
                       />
                       <span className="ml-3 text-sm">
-                        <span className="font-medium text-gray-900">Order Logs</span>
+                        <span className="font-medium text-gray-900 dark:text-dark-800">Order Logs</span>
                         <span className="text-gray-500"> ({dataStats.order_logs} records)</span>
                       </span>
                     </label>
@@ -810,7 +929,7 @@ const Settings: React.FC = () => {
                         className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
                       />
                       <span className="ml-3 text-sm">
-                        <span className="font-medium text-gray-900">Processed Orders</span>
+                        <span className="font-medium text-gray-900 dark:text-dark-800">Processed Orders</span>
                         <span className="text-gray-500"> ({dataStats.processed_orders} records)</span>
                         <p className="text-xs text-gray-400">Allows orders to be reprocessed</p>
                       </span>
@@ -824,7 +943,7 @@ const Settings: React.FC = () => {
                         className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
                       />
                       <span className="ml-3 text-sm">
-                        <span className="font-medium text-gray-900">Out of Stock Incidents</span>
+                        <span className="font-medium text-gray-900 dark:text-dark-800">Out of Stock Incidents</span>
                         <span className="text-gray-500"> ({dataStats.oos_incidents} records)</span>
                       </span>
                     </label>
@@ -837,7 +956,7 @@ const Settings: React.FC = () => {
                         className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
                       />
                       <span className="ml-3 text-sm">
-                        <span className="font-medium text-gray-900">Old Task Status</span>
+                        <span className="font-medium text-gray-900 dark:text-dark-800">Old Task Status</span>
                         <span className="text-gray-500"> ({dataStats.task_status} records)</span>
                         <p className="text-xs text-gray-400">Tasks older than 24 hours</p>
                       </span>
@@ -871,7 +990,7 @@ const Settings: React.FC = () => {
                       confirmation: '',
                     });
                   }}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 border border-gray-300 dark:border-dark-300 rounded-md hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
                 >
                   Cancel
                 </button>

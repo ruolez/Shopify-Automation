@@ -322,8 +322,8 @@ const Reports: React.FC = () => {
         animate={{ opacity: 1, y: 0 }}
         className="mb-6"
       >
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Reports</h1>
-        <p className="text-gray-600">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800 mb-2">Reports</h1>
+        <p className="text-gray-600 dark:text-dark-500">
           Analyze out-of-stock orders to optimize inventory management.
         </p>
       </motion.div>
@@ -333,16 +333,16 @@ const Reports: React.FC = () => {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="bg-white rounded-lg shadow-sm border border-gray-200 p-3"
+        className="card border border-gray-200 dark:border-dark-200 p-3"
       >
         <div className="flex flex-wrap items-center gap-3">
           {/* Date Range with Dropdown */}
           <div className="relative group">
             <button
-              className="inline-flex items-center px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-shopify-500"
+              className="inline-flex items-center px-3 py-1.5 text-sm border border-gray-300 dark:border-dark-300 rounded-md bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-shopify-500"
             >
               <CalendarIcon className="h-4 w-4 mr-1.5 text-gray-500" />
-              <span className="text-gray-700">
+              <span className="text-gray-700 dark:text-dark-600">
                 {startDate || endDate ? (
                   <>
                     {startDate ? formatShortDate(startDate, timezone) : 'Start'}
@@ -357,7 +357,7 @@ const Reports: React.FC = () => {
             </button>
             
             {/* Dropdown Menu */}
-            <div className="absolute left-0 top-full mt-1 w-72 bg-white rounded-md shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+            <div className="absolute left-0 top-full mt-1 w-72 bg-white dark:bg-dark-100 rounded-md shadow-lg border border-gray-200 dark:border-dark-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
               <div className="p-3 space-y-3">
                 {/* Quick Presets */}
                 <div className="grid grid-cols-2 gap-1">
@@ -365,7 +365,7 @@ const Reports: React.FC = () => {
                     <button
                       key={index}
                       onClick={() => handleDatePreset(preset)}
-                      className="px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                      className="px-2 py-1 text-xs text-gray-700 dark:text-dark-600 hover:bg-gray-100 dark:hover:bg-dark-200 rounded transition-colors"
                     >
                       {preset.label}
                     </button>
@@ -379,14 +379,14 @@ const Reports: React.FC = () => {
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
                       placeholder="Start"
-                      className="px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-shopify-500"
+                      className="input text-xs px-2 py-1"
                     />
                     <input
                       type="date"
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
                       placeholder="End"
-                      className="px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-shopify-500"
+                      className="input text-xs px-2 py-1"
                     />
                   </div>
                 </div>
@@ -400,7 +400,7 @@ const Reports: React.FC = () => {
             <select
               value={ruleFilter}
               onChange={(e) => setRuleFilter(e.target.value)}
-              className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-shopify-500"
+              className="input text-sm px-2 py-1.5"
             >
               <option value="">All Rules</option>
               {uniqueRules.map((rule) => (
@@ -413,7 +413,7 @@ const Reports: React.FC = () => {
             <select
               value={locationFilter}
               onChange={(e) => setLocationFilter(e.target.value)}
-              className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-shopify-500"
+              className="input text-sm px-2 py-1.5"
             >
               <option value="">All Locations</option>
               {uniqueLocations.map((location) => (
@@ -435,7 +435,7 @@ const Reports: React.FC = () => {
                     {endDate && formatShortDate(endDate, timezone)}
                     <button
                       onClick={() => { setStartDate(''); setEndDate(''); }}
-                      className="ml-1 hover:text-gray-900"
+                      className="ml-1 hover:text-gray-900 dark:hover:text-dark-800"
                     >
                       <XMarkIcon className="h-3 w-3" />
                     </button>
@@ -487,7 +487,7 @@ const Reports: React.FC = () => {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
-        className="bg-white rounded-lg shadow-sm border border-gray-200"
+        className="bg-white dark:bg-dark-100 rounded-lg shadow-sm border border-gray-200 dark:border-dark-200"
       >
         <div className="p-6">
           {oosLoading ? (
@@ -500,7 +500,7 @@ const Reports: React.FC = () => {
               <div className="border-b border-gray-200 pb-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-3 sm:space-y-0">
                   <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
-                    <h3 className="text-lg font-medium text-gray-900">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-dark-800">
                       Out of Stock Orders
                     </h3>
                     {filteredAndSortedOrders.length > 0 && (
@@ -513,7 +513,7 @@ const Reports: React.FC = () => {
                     <button
                       onClick={() => exportToCSV(filteredAndSortedOrders, 'oos-orders.csv')}
                       disabled={filteredAndSortedOrders.length === 0}
-                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <DocumentArrowDownIcon className="h-4 w-4 mr-1.5" />
                       Export All
@@ -525,7 +525,7 @@ const Reports: React.FC = () => {
                             filteredAndSortedOrders.filter(order => selectedOrders.has(order.order_number)),
                             'selected-oos-orders.csv'
                           )}
-                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
+                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
                         >
                           <DocumentArrowDownIcon className="h-4 w-4 mr-1.5" />
                           Export Selected ({selectedOrders.size})
@@ -550,11 +550,11 @@ const Reports: React.FC = () => {
 
               {/* Data Table */}
               {filteredAndSortedOrders.length > 0 ? (
-                <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                <div className="overflow-x-auto border border-gray-200 dark:border-dark-200 rounded-lg">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-dark-200">
+                    <thead className="bg-gray-50 dark:bg-dark-200">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                           <input
                             type="checkbox"
                             checked={selectedOrders.size === filteredAndSortedOrders.length && filteredAndSortedOrders.length > 0}
@@ -563,7 +563,7 @@ const Reports: React.FC = () => {
                           />
                         </th>
                         <th 
-                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                           onClick={() => handleSort('order_number')}
                         >
                           <div className="flex items-center">
@@ -574,7 +574,7 @@ const Reports: React.FC = () => {
                           </div>
                         </th>
                         <th 
-                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                           onClick={() => handleSort('created_at')}
                         >
                           <div className="flex items-center">
@@ -585,7 +585,7 @@ const Reports: React.FC = () => {
                           </div>
                         </th>
                         <th 
-                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                           onClick={() => handleSort('rule_name')}
                         >
                           <div className="flex items-center">
@@ -596,7 +596,7 @@ const Reports: React.FC = () => {
                           </div>
                         </th>
                         <th 
-                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                          className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                           onClick={() => handleSort('location_alias')}
                         >
                           <div className="flex items-center">
@@ -608,9 +608,9 @@ const Reports: React.FC = () => {
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="bg-white dark:bg-dark-100 divide-y divide-gray-200 dark:divide-dark-200">
                       {filteredAndSortedOrders.map((order, index) => (
-                        <tr key={index} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => handleSelectOrder(order.order_number)}>
+                        <tr key={index} className="hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors cursor-pointer" onClick={() => handleSelectOrder(order.order_number)}>
                           <td className="px-4 py-4 whitespace-nowrap">
                             <input
                               type="checkbox"
@@ -621,7 +621,7 @@ const Reports: React.FC = () => {
                             />
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">{order.order_number}</div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-dark-800">{order.order_number}</div>
                           </td>
                           <td className="px-4 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-500">{formatFullDateTime(order.created_at, timezone, dateFormat)}</div>
@@ -644,7 +644,7 @@ const Reports: React.FC = () => {
               ) : (
                 <div className="text-center py-12">
                   <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No orders found</h3>
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">No orders found</h3>
                   <p className="mt-1 text-sm text-gray-500">
                     {(ruleFilter || locationFilter) 
                       ? 'Try adjusting your filters to see more results.'
@@ -655,7 +655,7 @@ const Reports: React.FC = () => {
                     <div className="mt-4">
                       <button
                         onClick={handleClearFilters}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
                       >
                         Clear Filters
                       </button>
@@ -667,7 +667,7 @@ const Reports: React.FC = () => {
           ) : (
             <div className="text-center py-12">
               <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No data available</h3>
+              <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">No data available</h3>
               <p className="mt-1 text-sm text-gray-500">
                 Set a date range and click "Generate Report" to analyze out-of-stock orders.
               </p>
@@ -681,20 +681,20 @@ const Reports: React.FC = () => {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50"
+          className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50"
           onClick={() => setShowProductAnalysis(false)}
         >
           <motion.div
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-lg p-4 sm:p-6 max-w-6xl w-full max-h-[90vh] overflow-hidden"
+            className="bg-white dark:bg-dark-100 rounded-lg p-4 sm:p-6 max-w-6xl w-full max-h-[90vh] overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">Product Analysis Results</h2>
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-dark-800">Product Analysis Results</h2>
               <button
                 onClick={() => setShowProductAnalysis(false)}
-                className="text-gray-400 hover:text-gray-500"
+                className="text-gray-400 dark:text-dark-400 hover:text-gray-500 dark:hover:text-dark-500"
               >
                 <span className="sr-only">Close</span>
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -734,11 +734,11 @@ const Reports: React.FC = () => {
             </div>
 
             <div className="overflow-y-auto max-h-[60vh]">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50 sticky top-0">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-dark-200">
+                <thead className="bg-gray-50 dark:bg-dark-200 sticky top-0">
                   <tr>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                       onClick={() => handleProductSort('product_title')}
                     >
                       <div className="flex items-center">
@@ -749,7 +749,7 @@ const Reports: React.FC = () => {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                       onClick={() => handleProductSort('sku')}
                     >
                       <div className="flex items-center">
@@ -760,7 +760,7 @@ const Reports: React.FC = () => {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                       onClick={() => handleProductSort('vendor')}
                     >
                       <div className="flex items-center">
@@ -771,7 +771,7 @@ const Reports: React.FC = () => {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                       onClick={() => handleProductSort('total_incidents')}
                     >
                       <div className="flex items-center">
@@ -782,7 +782,7 @@ const Reports: React.FC = () => {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-300 transition-colors"
                       onClick={() => handleProductSort('total_quantity_affected')}
                     >
                       <div className="flex items-center">
@@ -792,17 +792,17 @@ const Reports: React.FC = () => {
                         )}
                       </div>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       Locations
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white dark:bg-dark-100 divide-y divide-gray-200 dark:divide-dark-200">
                   {sortedProductAnalysisData.map((product: any, index: number) => (
-                    <tr key={index} className="hover:bg-gray-50">
+                    <tr key={index} className="hover:bg-gray-50 dark:hover:bg-dark-200">
                       <td className="px-6 py-4 text-sm">
                         <div>
-                          <div className="font-medium text-gray-900">{product.product_title}</div>
+                          <div className="font-medium text-gray-900 dark:text-dark-800">{product.product_title}</div>
                           {product.variant_title && product.variant_title !== 'Default Title' && (
                             <div className="text-gray-500">{product.variant_title}</div>
                           )}
@@ -820,7 +820,7 @@ const Reports: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">
                         {product.total_incidents}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-dark-800">
                         {product.total_quantity_affected}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-500">
@@ -846,7 +846,7 @@ const Reports: React.FC = () => {
             <div className="mt-4 flex flex-col sm:flex-row sm:justify-end space-y-2 sm:space-y-0 sm:space-x-2">
               <button
                 onClick={() => exportToCSV(sortedProductAnalysisData, 'product-analysis.csv')}
-                className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
+                className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-dark-300 text-sm font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
               >
                 <DocumentArrowDownIcon className="h-4 w-4 mr-2" />
                 Export CSV

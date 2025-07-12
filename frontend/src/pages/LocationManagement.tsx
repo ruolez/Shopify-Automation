@@ -160,8 +160,8 @@ const LocationManagement: React.FC = () => {
         animate={{ opacity: 1, y: 0 }}
         className="mb-8"
       >
-        <h1 className="text-3xl font-bold text-gray-900 mb-4">Location Management</h1>
-        <p className="text-gray-600">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800 mb-4">Location Management</h1>
+        <p className="text-gray-600 dark:text-dark-500">
           Assign aliases to your Shopify fulfillment locations for consistent rule management across all your stores.
         </p>
       </motion.div>
@@ -173,15 +173,15 @@ const LocationManagement: React.FC = () => {
         transition={{ delay: 0.1 }}
         className="card mb-8"
       >
-        <h2 className="text-xl font-semibold text-gray-900 mb-6">Fulfillment Locations from Connected Stores</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-dark-800 mb-6">Fulfillment Locations from Connected Stores</h2>
         
         {storeLocations && storeLocations.length > 0 ? (
           <div className="space-y-6">
             {storeLocations.map((store) => (
-              <div key={store.store_id} className="border border-gray-200 rounded-lg p-4">
+              <div key={store.store_id} className="border border-gray-200 dark:border-dark-200 rounded-lg p-4">
                 <div className="mb-4">
-                  <h3 className="font-medium text-gray-900">{store.store_name}</h3>
-                  <p className="text-sm text-gray-500">{store.store_domain}</p>
+                  <h3 className="font-medium text-gray-900 dark:text-dark-800">{store.store_name}</h3>
+                  <p className="text-sm text-gray-500 dark:text-dark-400">{store.store_domain}</p>
                 </div>
                 
                 {store.locations.length > 0 ? (
@@ -196,10 +196,10 @@ const LocationManagement: React.FC = () => {
                       );
                       
                       return (
-                        <div key={location.id} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                        <div key={location.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-dark-50 rounded">
                           <div>
-                            <div className="font-medium text-gray-900">{location.name}</div>
-                            <div className="text-xs text-gray-500">{location.id}</div>
+                            <div className="font-medium text-gray-900 dark:text-dark-800">{location.name}</div>
+                            <div className="text-xs text-gray-500 dark:text-dark-400">{location.id}</div>
                           </div>
                           
                           <div className="flex items-center gap-3">
@@ -228,7 +228,7 @@ const LocationManagement: React.FC = () => {
                     })}
                   </div>
                 ) : (
-                  <div className="text-sm text-gray-500 italic">
+                  <div className="text-sm text-gray-500 dark:text-dark-400 italic">
                     No fulfillment locations found for this store
                   </div>
                 )}
@@ -236,7 +236,7 @@ const LocationManagement: React.FC = () => {
             ))}
           </div>
         ) : (
-          <div className="text-center py-8 text-gray-500">
+          <div className="text-center py-8 text-gray-500 dark:text-dark-400">
             No connected stores found. Please connect your Shopify stores first.
           </div>
         )}
@@ -249,20 +249,20 @@ const LocationManagement: React.FC = () => {
         transition={{ delay: 0.2 }}
         className="card mb-8"
       >
-        <h2 className="text-xl font-semibold text-gray-900 mb-6">Location Aliases</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-dark-800 mb-6">Location Aliases</h2>
 
 
         {/* Aliases List */}
         <div className="space-y-4">
           {aliases?.map((alias) => (
-            <div key={alias.id} className="border border-gray-200 rounded-lg p-4">
+            <div key={alias.id} className="border border-gray-200 dark:border-dark-200 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center">
                   <MapPinIcon className="h-5 w-5 text-shopify-600 mr-2" />
                   <div>
-                    <h3 className="font-medium text-gray-900">{alias.alias_name}</h3>
+                    <h3 className="font-medium text-gray-900 dark:text-dark-800">{alias.alias_name}</h3>
                     {alias.description && (
-                      <p className="text-sm text-gray-500">{alias.description}</p>
+                      <p className="text-sm text-gray-500 dark:text-dark-400">{alias.description}</p>
                     )}
                   </div>
                 </div>
@@ -272,7 +272,7 @@ const LocationManagement: React.FC = () => {
                   </span>
                   <button
                     onClick={() => setEditingAlias(alias)}
-                    className="p-1 text-gray-400 hover:text-gray-600"
+                    className="p-1 text-gray-400 dark:text-dark-400 hover:text-gray-600 dark:hover:text-dark-600"
                   >
                     <PencilIcon className="h-4 w-4" />
                   </button>
@@ -286,8 +286,8 @@ const LocationManagement: React.FC = () => {
               </div>
 
               {/* Mapping Status */}
-              <div className="bg-gray-50 p-3 rounded">
-                <div className="text-sm text-gray-600 mb-2">
+              <div className="bg-gray-50 dark:bg-dark-200 p-3 rounded">
+                <div className="text-sm text-gray-600 dark:text-dark-500 mb-2">
                   Mapped to {alias.mappings.length} store{alias.mappings.length !== 1 ? 's' : ''}
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -314,8 +314,8 @@ const LocationManagement: React.FC = () => {
 
       {/* Assign Alias Modal */}
       {assigningLocation && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-dark-100 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-medium mb-4">
               Assign Alias to Location
             </h3>
@@ -426,8 +426,8 @@ const LocationManagement: React.FC = () => {
 
       {/* Edit Alias Modal */}
       {editingAlias && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-dark-100 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-medium mb-4">Edit Location Alias</h3>
             
             <div className="space-y-4 mb-6">

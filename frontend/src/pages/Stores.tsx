@@ -106,8 +106,8 @@ const Stores: React.FC = () => {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Stores</h1>
-          <p className="mt-2 text-gray-600">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800">Stores</h1>
+          <p className="mt-2 text-gray-600 dark:text-dark-500">
             Manage your connected Shopify stores
           </p>
         </div>
@@ -132,23 +132,23 @@ const Stores: React.FC = () => {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-dark-800">
                     {store.shop_name}
                   </h3>
-                  <p className="text-sm text-gray-500">{store.shop_domain}</p>
+                  <p className="text-sm text-gray-500 dark:text-dark-400">{store.shop_domain}</p>
                   <div className="mt-3 flex items-center">
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         store.is_active
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
                       }`}
                     >
                       {store.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </div>
                   {store.last_sync && (
-                    <p className="text-xs text-gray-400 mt-2">
+                    <p className="text-xs text-gray-400 dark:text-dark-300 mt-2">
                       Last sync: {formatShortDate(store.last_sync, timezone)}
                     </p>
                   )}
@@ -191,8 +191,8 @@ const Stores: React.FC = () => {
                 />
               </svg>
             </div>
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No stores</h3>
-            <p className="mt-1 text-sm text-gray-500">
+            <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">No stores</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
               Get started by connecting your first Shopify store.
             </p>
             <div className="mt-6">
@@ -214,16 +214,16 @@ const Stores: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         className="relative z-50"
       >
-        <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+        <div className="modal-overlay" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4">
-          <Dialog.Panel className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <Dialog.Panel className="modal-content max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-4">
-              <Dialog.Title className="text-lg font-medium text-gray-900">
+              <Dialog.Title className="text-lg font-medium text-gray-900 dark:text-dark-800">
                 Connect Shopify Store
               </Dialog.Title>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-gray-400 hover:text-gray-500"
+                className="text-gray-400 hover:text-gray-500 dark:text-dark-400 dark:hover:text-dark-500"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
@@ -260,7 +260,7 @@ const Stores: React.FC = () => {
                 )}
               </div>
 
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-gray-500 dark:text-dark-400">
                 <p>
                   To get an access token, create a private app in your Shopify admin
                   and copy the Admin API access token.

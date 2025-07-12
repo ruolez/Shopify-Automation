@@ -13,6 +13,7 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
+import ThemeToggle from './ThemeToggle';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -39,13 +40,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-dark-50">
       {/* Sidebar */}
-      <div className="fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-lg">
+      <div className="fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-dark-100 shadow-lg dark:shadow-2xl border-r border-gray-200 dark:border-dark-200">
         <div className="flex h-full flex-col">
           {/* Logo */}
-          <div className="flex h-16 items-center justify-center border-b border-gray-200">
-            <h1 className="text-xl font-bold text-shopify-700">
+          <div className="flex h-16 items-center justify-center border-b border-gray-200 dark:border-dark-200">
+            <h1 className="text-xl font-bold text-shopify-700 dark:text-shopify-400">
               Shopify Automation
             </h1>
           </div>
@@ -58,15 +59,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Link
                   key={item.name}
                   to={item.href}
-                  className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors ${
+                  className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
                     isActive
-                      ? 'bg-shopify-100 text-shopify-900'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      ? 'bg-shopify-100 dark:bg-shopify-800/30 text-shopify-900 dark:text-shopify-300 shadow-sm'
+                      : 'text-gray-600 dark:text-dark-500 hover:bg-gray-50 dark:hover:bg-dark-200 hover:text-gray-900 dark:hover:text-dark-700'
                   }`}
                 >
                   <item.icon
-                    className={`mr-3 h-6 w-6 flex-shrink-0 ${
-                      isActive ? 'text-shopify-600' : 'text-gray-400'
+                    className={`mr-3 h-6 w-6 flex-shrink-0 transition-colors ${
+                      isActive ? 'text-shopify-600 dark:text-shopify-400' : 'text-gray-400 dark:text-dark-400 group-hover:text-gray-500 dark:group-hover:text-dark-500'
                     }`}
                   />
                   {item.name}
@@ -76,20 +77,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </nav>
 
           {/* User menu */}
-          <div className="border-t border-gray-200 p-4">
+          <div className="border-t border-gray-200 dark:border-dark-200 p-4">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <UserIcon className="h-8 w-8 text-gray-400" />
+                <UserIcon className="h-8 w-8 text-gray-400 dark:text-dark-400" />
               </div>
               <div className="ml-3 flex-1">
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-medium text-gray-900 dark:text-dark-800">
                   {user?.full_name}
                 </p>
-                <p className="text-xs text-gray-500">{user?.email}</p>
+                <p className="text-xs text-gray-500 dark:text-dark-400">{user?.email}</p>
               </div>
               <button
                 onClick={handleLogout}
-                className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-500"
+                className="flex-shrink-0 p-1 text-gray-400 dark:text-dark-400 hover:text-gray-500 dark:hover:text-dark-500 transition-colors"
                 title="Logout"
               >
                 <ArrowRightOnRectangleIcon className="h-5 w-5" />
@@ -101,7 +102,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Main content */}
       <div className="pl-64">
-        <main className="py-8">
+        {/* Top bar with theme toggle */}
+        <div className="flex justify-end items-center px-4 sm:px-6 lg:px-8 py-4">
+          <ThemeToggle />
+        </div>
+        <main className="py-4">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}

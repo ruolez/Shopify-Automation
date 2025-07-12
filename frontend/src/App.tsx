@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { TimezoneProvider } from './contexts/TimezoneContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -24,9 +25,11 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
+      <ThemeProvider>
+        <div className="min-h-screen flex items-center justify-center">
+          <LoadingSpinner size="lg" />
+        </div>
+      </ThemeProvider>
     );
   }
 
@@ -35,45 +38,51 @@ function App() {
   
   if (isAdminRoute) {
     return (
-      <Routes>
-        <Route path="/admin/login" element={<AdminLogin />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard />} />
-        <Route path="/admin/users" element={<AdminUsers />} />
-        <Route path="/admin/database" element={<AdminDatabase />} />
-        <Route path="/admin/*" element={<Navigate to="/admin/login" replace />} />
-      </Routes>
+      <ThemeProvider>
+        <Routes>
+          <Route path="/admin/login" element={<AdminLogin />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/users" element={<AdminUsers />} />
+          <Route path="/admin/database" element={<AdminDatabase />} />
+          <Route path="/admin/*" element={<Navigate to="/admin/login" replace />} />
+        </Routes>
+      </ThemeProvider>
     );
   }
 
   if (!user) {
     return (
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <ThemeProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </ThemeProvider>
     );
   }
 
   return (
-    <SettingsProvider>
-      <TimezoneProvider>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/stores" element={<Stores />} />
-            <Route path="/rules" element={<Rules />} />
-            <Route path="/rules/new" element={<RuleBuilder />} />
-            <Route path="/rules/:id/edit" element={<RuleBuilder />} />
-            <Route path="/order-logs" element={<OrderLogs />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/locations" element={<LocationManagement />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Layout>
-      </TimezoneProvider>
-    </SettingsProvider>
+    <ThemeProvider>
+      <SettingsProvider>
+        <TimezoneProvider>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/stores" element={<Stores />} />
+              <Route path="/rules" element={<Rules />} />
+              <Route path="/rules/new" element={<RuleBuilder />} />
+              <Route path="/rules/:id/edit" element={<RuleBuilder />} />
+              <Route path="/order-logs" element={<OrderLogs />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/locations" element={<LocationManagement />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Layout>
+        </TimezoneProvider>
+      </SettingsProvider>
+    </ThemeProvider>
   );
 }
 

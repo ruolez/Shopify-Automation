@@ -403,20 +403,20 @@ const OrderLogs: React.FC = () => {
       animate={{ opacity: 1 }}
       className="space-y-6"
     >
-      <div className="bg-white shadow rounded-lg">
+      <div className="card">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex justify-between items-center mb-6">
             <div>
-              <h3 className="text-lg font-medium leading-6 text-gray-900">
+              <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
                 Order Processing Logs
               </h3>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
                 View all order processing activities and rule applications
               </p>
             </div>
             <button
               onClick={() => refetch()}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500"
+              className="btn-secondary"
             >
               <ArrowPathIcon className="h-4 w-4 mr-2" />
               Refresh
@@ -428,7 +428,7 @@ const OrderLogs: React.FC = () => {
             <div>
               <label
                 htmlFor="date-filter"
-                className="block text-sm font-semibold text-gray-900 mb-2"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
               >
                 Date Range
               </label>
@@ -444,7 +444,7 @@ const OrderLogs: React.FC = () => {
                     }
                     setPage(1);
                   }}
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                  className="input"
                 >
                   <option value="">All Time</option>
                   <option value="today">Today</option>
@@ -464,7 +464,7 @@ const OrderLogs: React.FC = () => {
                           setCustomDateFrom(e.target.value);
                           setPage(1);
                         }}
-                        className="block w-full text-xs rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                        className="input text-xs"
                         placeholder="From"
                       />
                     </div>
@@ -476,7 +476,7 @@ const OrderLogs: React.FC = () => {
                           setCustomDateTo(e.target.value);
                           setPage(1);
                         }}
-                        className="block w-full text-xs rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                        className="input text-xs"
                         placeholder="To"
                       />
                     </div>
@@ -488,7 +488,7 @@ const OrderLogs: React.FC = () => {
             <div>
               <label
                 htmlFor="search-filter"
-                className="block text-sm font-semibold text-gray-900 mb-2"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
               >
                 Search Order Number
               </label>
@@ -498,14 +498,14 @@ const OrderLogs: React.FC = () => {
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 placeholder="Enter order number..."
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="input"
               />
             </div>
 
             <div>
               <label
                 htmlFor="status-filter"
-                className="block text-sm font-semibold text-gray-900 mb-2"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
               >
                 Status
               </label>
@@ -516,7 +516,7 @@ const OrderLogs: React.FC = () => {
                   setStatusFilter(e.target.value);
                   setPage(1);
                 }}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="input"
               >
                 <option value="">All Statuses</option>
                 <option value="match">Match</option>
@@ -528,7 +528,7 @@ const OrderLogs: React.FC = () => {
             <div>
               <label
                 htmlFor="store-filter"
-                className="block text-sm font-semibold text-gray-900 mb-2"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
               >
                 Store
               </label>
@@ -539,7 +539,7 @@ const OrderLogs: React.FC = () => {
                   setStoreFilter(e.target.value);
                   setPage(1);
                 }}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="input"
               >
                 <option value="">All Stores</option>
                 {stores?.map((store: any) => (
@@ -553,7 +553,7 @@ const OrderLogs: React.FC = () => {
             <div>
               <label
                 htmlFor="rule-filter"
-                className="block text-sm font-semibold text-gray-900 mb-2"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
               >
                 Rule
               </label>
@@ -564,7 +564,7 @@ const OrderLogs: React.FC = () => {
                   setRuleFilter(e.target.value);
                   setPage(1);
                 }}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 sm:text-sm"
+                className="input"
               >
                 <option value="">All Rules</option>
                 {rules?.map((rule: any) => (
@@ -579,14 +579,14 @@ const OrderLogs: React.FC = () => {
           {/* Logs table */}
           {groupedLogs.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-gray-500">No order logs found</p>
+              <p className="text-gray-500 dark:text-dark-400">No order logs found</p>
             </div>
           ) : (
-            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
+            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg dark:ring-dark-200">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-dark-200">
+                <thead className="table-header">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <input
                         type="checkbox"
                         checked={
@@ -597,61 +597,61 @@ const OrderLogs: React.FC = () => {
                         className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
                       />
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
                         onClick={() => handleSort("order_number")}
-                        className="flex items-center space-x-1 hover:text-gray-700"
+                        className="flex items-center space-x-1 hover:text-gray-700 dark:hover:text-dark-600"
                       >
                         <span>Order</span>
                         {getSortIcon("order_number")}
                       </button>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
                         onClick={() => handleSort("store_name")}
-                        className="flex items-center space-x-1 hover:text-gray-700"
+                        className="flex items-center space-x-1 hover:text-gray-700 dark:hover:text-dark-600"
                       >
                         <span>Store</span>
                         {getSortIcon("store_name")}
                       </button>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
                         onClick={() => handleSort("action_count")}
-                        className="flex items-center space-x-1 hover:text-gray-700"
+                        className="flex items-center space-x-1 hover:text-gray-700 dark:hover:text-dark-600"
                       >
                         <span>Actions</span>
                         {getSortIcon("action_count")}
                       </button>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
                         onClick={() => handleSort("status")}
-                        className="flex items-center space-x-1 hover:text-gray-700"
+                        className="flex items-center space-x-1 hover:text-gray-700 dark:hover:text-dark-600"
                       >
                         <span>Status</span>
                         {getSortIcon("status")}
                       </button>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
                         onClick={() => handleSort("latest_date")}
-                        className="flex items-center space-x-1 hover:text-gray-700"
+                        className="flex items-center space-x-1 hover:text-gray-700 dark:hover:text-dark-600"
                       >
                         <span>Latest Activity</span>
                         {getSortIcon("latest_date")}
                       </button>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       Expand
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white dark:bg-dark-100 divide-y divide-gray-200 dark:divide-dark-200">
                   {groupedLogs.map((group) => (
                     <React.Fragment key={group.order_number}>
                       {/* Main row for each order */}
-                      <tr className="hover:bg-gray-50">
+                      <tr className="table-row">
                         <td className="px-6 py-4 whitespace-nowrap">
                           <input
                             type="checkbox"
@@ -660,14 +660,14 @@ const OrderLogs: React.FC = () => {
                             className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
                           />
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-dark-800">
                           {group.order_number}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
                           {group.store_name}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
                             {group.logs.length} action
                             {group.logs.length !== 1 ? "s" : ""}
                           </span>
@@ -675,7 +675,7 @@ const OrderLogs: React.FC = () => {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center">
                             {getStatusIcon(getGroupStatus(group))}
-                            <span className="ml-2 text-sm text-gray-500 capitalize">
+                            <span className="ml-2 text-sm text-gray-500 dark:text-dark-500 capitalize">
                               {group.has_failed && group.has_success
                                 ? "Mixed"
                                 : group.has_failed
@@ -686,7 +686,7 @@ const OrderLogs: React.FC = () => {
                             </span>
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
                           {formatDate(group.latest_date, {
                             timezone,
                             dateFormat,
@@ -697,7 +697,7 @@ const OrderLogs: React.FC = () => {
                             onClick={() =>
                               toggleOrderExpansion(group.order_number)
                             }
-                            className="p-1 text-gray-400 hover:text-gray-600 rounded"
+                            className="p-1 text-gray-400 hover:text-gray-600 dark:text-dark-400 dark:hover:text-dark-600 rounded"
                           >
                             {expandedOrders.has(group.order_number) ? (
                               <ChevronDownIcon className="h-4 w-4" />
@@ -711,35 +711,35 @@ const OrderLogs: React.FC = () => {
                       {/* Expanded rows showing individual log entries */}
                       {expandedOrders.has(group.order_number) &&
                         group.logs.map((log) => (
-                          <tr key={log.id} className="bg-gray-50">
+                          <tr key={log.id} className="bg-gray-50 dark:bg-dark-50">
                             <td className="px-6 py-2"></td>
-                            <td className="px-6 py-2 text-xs text-gray-500">
+                            <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
                               #{log.id}
                             </td>
-                            <td className="px-6 py-2 text-xs text-gray-500">
+                            <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
                               -
                             </td>
-                            <td className="px-6 py-2 text-xs text-gray-500">
+                            <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
                               {getActionLabel(log.action)}
                             </td>
                             <td className="px-6 py-2">
                               <div className="flex items-center">
                                 {getStatusIcon(log.status)}
-                                <span className="ml-2 text-xs text-gray-500 capitalize">
+                                <span className="ml-2 text-xs text-gray-500 dark:text-dark-400 capitalize">
                                   {log.status}
                                 </span>
                               </div>
                             </td>
-                            <td className="px-6 py-2 text-xs text-gray-500">
+                            <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
                               {formatDate(log.created_at, {
                                 timezone,
                                 dateFormat,
                               })}
                             </td>
                             <td className="px-6 py-2">
-                              <div className="text-xs text-gray-500 break-words">
+                              <div className="text-xs text-gray-500 dark:text-dark-400 break-words">
                                 {log.error_message ? (
-                                  <span className="text-red-600">
+                                  <span className="text-red-600 dark:text-red-400">
                                     {log.error_message}
                                   </span>
                                 ) : log.details?.rule_name ? (
