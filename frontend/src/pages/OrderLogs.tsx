@@ -74,6 +74,9 @@ const OrderLogs: React.FC = () => {
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [sortField, setSortField] = useState<SortField>("latest_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [isAllResultsSelected, setIsAllResultsSelected] = useState<boolean>(false);
+  const [allResultsCount, setAllResultsCount] = useState<number>(0);
+  const [showGlobalSelection, setShowGlobalSelection] = useState<boolean>(false);
 
   const queryClient = useQueryClient();
   const { timezone, dateFormat } = useTimezone();
@@ -167,6 +170,22 @@ const OrderLogs: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, [searchInput]);
 
+  // Reset global selection when filters change
+  useEffect(() => {
+    setSelectedOrders(new Set());
+    setShowGlobalSelection(false);
+    setIsAllResultsSelected(false);
+    setAllResultsCount(0);
+  }, [
+    searchQuery,
+    statusFilter,
+    storeFilter,
+    ruleFilter,
+    dateFilter,
+    customDateFrom,
+    customDateTo,
+  ]);
+
   const { data: stores } = useQuery({
     queryKey: ["stores"],
     queryFn: async () => {
@@ -218,6 +237,37 @@ const OrderLogs: React.FC = () => {
       const response = await api.get(`/order-logs?${params}`);
       return response.data;
     },
+  });
+
+  // Query for all order IDs (for global selection)
+  const { data: allOrderIdsData, refetch: refetchAllOrderIds } = useQuery({
+    queryKey: [
+      "order-logs-all-ids",
+      searchQuery,
+      statusFilter,
+      storeFilter,
+      ruleFilter,
+      dateFilter,
+      customDateFrom,
+      customDateTo,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+
+      if (searchQuery) params.append("search", searchQuery);
+      if (statusFilter) params.append("status", statusFilter);
+      if (storeFilter) params.append("store_id", storeFilter);
+      if (ruleFilter) params.append("rule_id", ruleFilter);
+
+      // Add date filtering
+      const dateRange = getDateRange(dateFilter);
+      if (dateRange.from) params.append("date_from", dateRange.from);
+      if (dateRange.to) params.append("date_to", dateRange.to);
+
+      const response = await api.get(`/order-logs/all-order-ids?${params}`);
+      return response.data;
+    },
+    enabled: showGlobalSelection, // Only fetch when global selection is needed
   });
 
   // Group logs (sorting is now handled by backend)
@@ -273,8 +323,12 @@ const OrderLogs: React.FC = () => {
         `Retry completed: ${result.processed_count} processed, ${result.failed_count} failed`,
       );
       queryClient.invalidateQueries({ queryKey: ["order-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["order-logs-all-ids"] });
       setSelectedOrders(new Set());
       setSelectedRule("");
+      setShowGlobalSelection(false);
+      setIsAllResultsSelected(false);
+      setAllResultsCount(0);
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.detail || "Failed to retry orders");
@@ -366,11 +420,33 @@ const OrderLogs: React.FC = () => {
   };
 
   const handleSelectAll = () => {
-    if (selectedOrders.size === groupedLogs.length) {
+    if (selectedOrders.size === groupedLogs.length && !isAllResultsSelected) {
+      // If all current page orders are selected, deselect all
       setSelectedOrders(new Set());
+      setShowGlobalSelection(false);
+      setIsAllResultsSelected(false);
     } else {
+      // Select all orders on current page
       const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
       setSelectedOrders(allOrderIds);
+      setShowGlobalSelection(true);
+      setIsAllResultsSelected(false);
+    }
+  };
+
+  const handleGlobalSelection = () => {
+    if (isAllResultsSelected) {
+      // Deselect global, go back to page selection
+      const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
+      setSelectedOrders(allOrderIds);
+      setIsAllResultsSelected(false);
+    } else {
+      // Select all results globally
+      if (allOrderIdsData) {
+        setSelectedOrders(new Set(allOrderIdsData.order_ids));
+        setAllResultsCount(allOrderIdsData.total_count);
+        setIsAllResultsSelected(true);
+      }
     }
   };
 
@@ -414,7 +490,13 @@ const OrderLogs: React.FC = () => {
                 View all order processing activities and rule applications
               </p>
             </div>
-            <button onClick={() => refetch()} className="btn-secondary">
+            <button 
+              onClick={() => {
+                refetch();
+                refetchAllOrderIds();
+              }} 
+              className="btn-secondary"
+            >
               <ArrowPathIcon className="h-4 w-4 mr-2" />
               Refresh
             </button>
@@ -586,15 +668,51 @@ const OrderLogs: React.FC = () => {
                 <thead className="table-header">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
-                      <input
-                        type="checkbox"
-                        checked={
-                          selectedOrders.size === groupedLogs.length &&
-                          groupedLogs.length > 0
-                        }
-                        onChange={handleSelectAll}
-                        className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
-                      />
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={
+                            (selectedOrders.size === groupedLogs.length &&
+                              groupedLogs.length > 0) ||
+                            isAllResultsSelected
+                          }
+                          onChange={handleSelectAll}
+                          className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                        />
+                        
+                        {/* Compact selection display */}
+                        {showGlobalSelection && data?.pagination.total > groupedLogs.length ? (
+                          <div className="flex items-center space-x-1">
+                            <span className="text-xs text-gray-700 dark:text-dark-600">
+                              {isAllResultsSelected ? (
+                                <span>Select All ({allResultsCount})</span>
+                              ) : (
+                                <span>Select All ({groupedLogs.length})</span>
+                              )}
+                            </span>
+                            {!isAllResultsSelected && (
+                              <button
+                                onClick={handleGlobalSelection}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
+                              >
+                                All {data.pagination.total}
+                              </button>
+                            )}
+                            {isAllResultsSelected && (
+                              <button
+                                onClick={handleGlobalSelection}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
+                              >
+                                Page Only
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-700 dark:text-dark-600">
+                            Select All ({data?.pagination.total || 0})
+                          </span>
+                        )}
+                      </div>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
                       <button
@@ -770,6 +888,16 @@ const OrderLogs: React.FC = () => {
                   <span className="text-sm font-medium text-gray-700 dark:text-dark-600">
                     {selectedOrders.size} order
                     {selectedOrders.size !== 1 ? "s" : ""} selected
+                    {isAllResultsSelected && (
+                      <span className="ml-1 text-blue-600 dark:text-blue-400">
+                        (across all pages)
+                      </span>
+                    )}
+                    {!isAllResultsSelected && showGlobalSelection && (
+                      <span className="ml-1 text-gray-500 dark:text-dark-400">
+                        (current page only)
+                      </span>
+                    )}
                   </span>
 
                   <button

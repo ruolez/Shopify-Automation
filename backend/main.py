@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 from database import engine, get_db, create_tables
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings, FraudAnalysis
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
 from admin_auth import get_current_admin_user, create_admin_access_token, verify_admin_password, get_admin_password_hash, log_admin_action, require_admin_role
 from schemas import (
@@ -27,9 +27,10 @@ from schemas import (
     AdminAuditLogResponse, SystemStatsResponse, UserManagementResponse
 )
 from shopify_client import ShopifyClient
+from fraud_service import FraudAnalysisService
 from tasks import test_celery_connection, process_store_orders, process_all_orders
 import database_utils
-from database_utils import migrate_rules_to_new_format
+from database_utils import migrate_rules_to_new_format, migrate_fraud_analysis_customer_name, migrate_fraud_analysis_restricted_state
 
 security = HTTPBearer()
 
@@ -43,6 +44,14 @@ async def lifespan(app: FastAPI):
     # Migrate existing rules to new format
     print("Checking for rule migrations...")
     migrate_rules_to_new_format()
+    
+    # Migrate fraud analysis table for customer_name field
+    print("Checking for fraud analysis table migrations...")
+    migrate_fraud_analysis_customer_name()
+    
+    # Migrate fraud analysis table for restricted_state field
+    print("Checking for fraud analysis restricted_state field migration...")
+    migrate_fraud_analysis_restricted_state()
     
     test_celery_connection.delay()
     yield
@@ -1074,6 +1083,56 @@ async def get_order_logs(
             "pages": (total_unique_orders + per_page - 1) // per_page,
             "total_logs": len(logs)
         }
+    }
+
+@app.get("/order-logs/all-order-ids")
+async def get_all_order_ids(
+    store_id: Optional[int] = None,
+    status: Optional[str] = None,
+    action: Optional[str] = None,
+    search: Optional[str] = None,
+    rule_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all order IDs matching current filters (no pagination)"""
+    query = db.query(OrderLog.order_id).filter(OrderLog.user_id == current_user.id)
+    
+    if store_id:
+        query = query.filter(OrderLog.store_id == store_id)
+    if status:
+        query = query.filter(OrderLog.status == status)
+    if action:
+        query = query.filter(OrderLog.action.contains(action))
+    if search:
+        query = query.filter(OrderLog.order_number.contains(search))
+    if rule_id:
+        query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
+    
+    # Apply date filtering (same logic as main endpoint)
+    if date_from:
+        try:
+            from_date = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            query = query.filter(OrderLog.created_at >= from_date)
+        except ValueError:
+            pass  # Ignore invalid date format
+    
+    if date_to:
+        try:
+            to_date = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            query = query.filter(OrderLog.created_at <= to_date)
+        except ValueError:
+            pass  # Ignore invalid date format
+    
+    # Get unique order IDs only
+    unique_order_ids = query.distinct().all()
+    order_ids = [row[0] for row in unique_order_ids]
+    
+    return {
+        "order_ids": order_ids,
+        "total_count": len(order_ids)
     }
 
 @app.post("/order-logs/retry")
@@ -2351,6 +2410,391 @@ async def delete_excluded_sku(
         logger.error(f"Error deleting excluded SKU: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete excluded SKU")
+
+# ==================== FRAUD DETECTION ENDPOINTS ====================
+
+@app.post("/fraud-detection/analyze/{store_id}")
+async def analyze_order_fraud(
+    store_id: int,
+    order_name: str = Query(..., description="Name of the order to analyze"),
+    enhanced: bool = Query(False, description="Use enhanced MCP-based delivery tracking"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Analyze an order for fraud indicators"""
+    try:
+        # Get the store and verify ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        logger.info(f"Fraud analysis request for order {order_name} in store {store_id}")
+        
+        # Delete any existing analysis for this order to ensure fresh analysis
+        deleted_count = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id,
+            FraudAnalysis.store_id == store_id,
+            FraudAnalysis.order_name == order_name
+        ).delete(synchronize_session=False)
+        
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} existing analysis(es) for order {order_name} to perform fresh analysis")
+            db.commit()
+        
+        # Get order data from Shopify
+        logger.info(f"Fetching order data from Shopify for order {order_name}")
+        client = ShopifyClient(
+            shop_domain=store.shop_domain,
+            access_token=store.access_token
+        )
+        
+        order_data = await client.get_order_fraud_data(order_name)
+        if not order_data:
+            logger.warning(f"Order {order_name} not found in Shopify")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order not found in Shopify"
+            )
+        
+        logger.info(f"Successfully fetched order data for {order_name}, starting fraud analysis")
+        
+        # Perform fraud analysis
+        fraud_service = FraudAnalysisService(db, store, current_user)
+        analysis = fraud_service.analyze_order_fraud(order_data)
+        
+        logger.info(f"Fraud analysis completed for order {order_name}, analysis ID: {analysis.id if analysis else 'None'}")
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to analyze order for fraud"
+            )
+        
+        return {
+            "message": "Fraud analysis completed successfully",
+            "analysis_id": analysis.id,
+            "status": "completed",
+            "order_name": analysis.order_name,
+            "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error analyzing order fraud: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to analyze order for fraud"
+        )
+
+@app.get("/fraud-detection/analyses")
+async def get_fraud_analyses(
+    store_id: Optional[int] = None,
+    order_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 50,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get fraud analysis history with pagination and filtering"""
+    try:
+        query = db.query(FraudAnalysis).filter(FraudAnalysis.user_id == current_user.id)
+        
+        # Apply filters
+        if store_id:
+            # Verify store ownership
+            store = db.query(ShopifyStore).filter(
+                ShopifyStore.id == store_id,
+                ShopifyStore.user_id == current_user.id
+            ).first()
+            if not store:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Store not found"
+                )
+            query = query.filter(FraudAnalysis.store_id == store_id)
+        
+        if order_name:
+            query = query.filter(FraudAnalysis.order_name.contains(order_name))
+        
+        # Apply date filtering
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                query = query.filter(FraudAnalysis.analysis_timestamp >= start_dt)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid start_date format. Use ISO format."
+                )
+        
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                query = query.filter(FraudAnalysis.analysis_timestamp <= end_dt)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid end_date format. Use ISO format."
+                )
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * per_page
+        analyses = query.order_by(FraudAnalysis.analysis_timestamp.desc()).offset(offset).limit(per_page).all()
+        
+        # Format response
+        results = []
+        for analysis in analyses:
+            # Get store name
+            store_name = analysis.store.shop_name if analysis.store else "Unknown Store"
+            
+            results.append({
+                "id": analysis.id,
+                "store_id": analysis.store_id,
+                "store_name": store_name,
+                "order_name": analysis.order_name,
+                "shopify_order_id": analysis.shopify_order_id,
+                "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "is_first_time_customer": analysis.is_first_time_customer,
+                "order_total": float(analysis.order_total) if analysis.order_total else None,
+                "transaction_attempts_count": analysis.transaction_attempts_count,
+                "customer_name": analysis.customer_name,
+                "duplicate_within_7days": analysis.duplicate_within_7days,
+                "previous_order_delivery_status": analysis.previous_order_delivery_status,
+                "previous_order_total": float(analysis.previous_order_total) if analysis.previous_order_total else None,
+                "current_order_total": float(analysis.current_order_total) if analysis.current_order_total else None,
+                "shopify_fraud_risk_level": analysis.shopify_fraud_risk_level,
+                "age_checker_detected": analysis.age_checker_detected
+            })
+        
+        return {
+            "analyses": results,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "pages": (total + per_page - 1) // per_page
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fraud analyses: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get fraud analyses"
+        )
+
+@app.get("/fraud-detection/analysis/{analysis_id}")
+async def get_fraud_analysis_details(
+    analysis_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get detailed fraud analysis by ID"""
+    try:
+        analysis = db.query(FraudAnalysis).filter(
+            FraudAnalysis.id == analysis_id,
+            FraudAnalysis.user_id == current_user.id
+        ).first()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud analysis not found"
+            )
+        
+        # Get store name
+        store_name = analysis.store.shop_name if analysis.store else "Unknown Store"
+        
+        return {
+            "analysis": {
+                "id": analysis.id,
+                "user_id": analysis.user_id,
+                "store_id": analysis.store_id,
+                "order_name": analysis.order_name,
+                "shopify_order_id": analysis.shopify_order_id,
+                "is_first_time_customer": analysis.is_first_time_customer,
+                "order_total": float(analysis.order_total) if analysis.order_total else None,
+                "transaction_attempts_count": analysis.transaction_attempts_count,
+                "customer_name": analysis.customer_name,
+                "duplicate_within_7days": analysis.duplicate_within_7days,
+                "previous_order_delivery_status": analysis.previous_order_delivery_status,
+                "previous_order_total": float(analysis.previous_order_total) if analysis.previous_order_total else None,
+                "current_order_total": float(analysis.current_order_total) if analysis.current_order_total else None,
+                "shopify_fraud_risk_level": analysis.shopify_fraud_risk_level,
+                "age_checker_detected": analysis.age_checker_detected,
+                "customer_notes": analysis.customer_notes,
+                "billing_address_outside_us": analysis.billing_address_outside_us,
+                "same_billing_shipping": analysis.same_billing_shipping,
+                "restricted_state": analysis.restricted_state,
+                "additional_details": analysis.additional_details,
+                "current_order_delivery_status": analysis.current_order_delivery_status,
+                "raw_shopify_data": analysis.raw_shopify_data,
+                "duplicate_match_details": analysis.duplicate_match_details,
+                "transaction_details": analysis.transaction_details,
+                "risk_assessment_details": analysis.risk_assessment_details,
+                "customer_order_history": analysis.customer_order_history,
+                "analysis_timestamp": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "processing_time_seconds": float(analysis.processing_time_seconds) if analysis.processing_time_seconds else None,
+                "analysis_version": analysis.analysis_version
+            },
+            "store_name": store_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fraud analysis details: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get fraud analysis details"
+        )
+
+@app.get("/fraud-detection/stats")
+async def get_fraud_detection_stats(
+    store_id: Optional[int] = None,
+    days: Optional[int] = 30,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get fraud detection statistics for dashboard"""
+    try:
+        # Base query
+        query = db.query(FraudAnalysis).filter(FraudAnalysis.user_id == current_user.id)
+        
+        # Filter by store if specified
+        if store_id:
+            # Verify store ownership
+            store = db.query(ShopifyStore).filter(
+                ShopifyStore.id == store_id,
+                ShopifyStore.user_id == current_user.id
+            ).first()
+            if not store:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Store not found"
+                )
+            query = query.filter(FraudAnalysis.store_id == store_id)
+        
+        # Filter by date range
+        if days:
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            query = query.filter(FraudAnalysis.analysis_timestamp >= cutoff_date)
+        
+        # Get all analyses for stats calculation
+        analyses = query.all()
+        
+        total_analyses = len(analyses)
+        
+        if total_analyses == 0:
+            return {
+                "total_analyses": 0,
+                "period_days": days,
+                "stats": {
+                    "first_time_customers": {"count": 0, "percentage": 0},
+                    "multiple_transaction_attempts": {"count": 0, "percentage": 0},
+                    "duplicate_orders": {"count": 0, "percentage": 0},
+                    "high_fraud_risk": {"count": 0, "percentage": 0},
+                    "age_checker_detected": {"count": 0, "percentage": 0}
+                },
+                "risk_level_distribution": {
+                    "low": {"count": 0, "percentage": 0},
+                    "medium": {"count": 0, "percentage": 0},
+                    "high": {"count": 0, "percentage": 0},
+                    "unknown": {"count": 0, "percentage": 0}
+                },
+                "average_order_total": 0,
+                "recent_analyses": []
+            }
+        
+        # Calculate statistics
+        first_time_customers = sum(1 for a in analyses if a.is_first_time_customer)
+        multiple_attempts = sum(1 for a in analyses if a.transaction_attempts_count and a.transaction_attempts_count > 1)
+        duplicate_orders = sum(1 for a in analyses if a.duplicate_within_7days)
+        high_fraud_risk = sum(1 for a in analyses if a.shopify_fraud_risk_level == 'high')
+        age_checker_detected = sum(1 for a in analyses if a.age_checker_detected)
+        
+        # Risk level distribution
+        risk_levels = {"low": 0, "medium": 0, "high": 0, "unknown": 0}
+        for analysis in analyses:
+            level = analysis.shopify_fraud_risk_level or "unknown"
+            risk_levels[level] = risk_levels.get(level, 0) + 1
+        
+        # Average order total
+        order_totals = [float(a.order_total) for a in analyses if a.order_total]
+        average_order_total = sum(order_totals) / len(order_totals) if order_totals else 0
+        
+        # Recent analyses (last 5)
+        recent_analyses = sorted(analyses, key=lambda x: x.analysis_timestamp or datetime.min, reverse=True)[:5]
+        recent_list = []
+        for analysis in recent_analyses:
+            store_name = analysis.store.shop_name if analysis.store else "Unknown Store"
+            recent_list.append({
+                "id": analysis.id,
+                "order_name": analysis.order_name,
+                "store_name": store_name,
+                "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "fraud_risk_level": analysis.shopify_fraud_risk_level or "unknown"
+            })
+        
+        return {
+            "total_analyses": total_analyses,
+            "period_days": days,
+            "stats": {
+                "first_time_customers": {
+                    "count": first_time_customers,
+                    "percentage": round((first_time_customers / total_analyses) * 100, 1)
+                },
+                "multiple_transaction_attempts": {
+                    "count": multiple_attempts,
+                    "percentage": round((multiple_attempts / total_analyses) * 100, 1)
+                },
+                "duplicate_orders": {
+                    "count": duplicate_orders,
+                    "percentage": round((duplicate_orders / total_analyses) * 100, 1)
+                },
+                "high_fraud_risk": {
+                    "count": high_fraud_risk,
+                    "percentage": round((high_fraud_risk / total_analyses) * 100, 1)
+                },
+                "age_checker_detected": {
+                    "count": age_checker_detected,
+                    "percentage": round((age_checker_detected / total_analyses) * 100, 1)
+                }
+            },
+            "risk_level_distribution": {
+                level: {
+                    "count": count,
+                    "percentage": round((count / total_analyses) * 100, 1)
+                }
+                for level, count in risk_levels.items()
+            },
+            "average_order_total": round(average_order_total, 2),
+            "recent_analyses": recent_list
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fraud detection stats: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get fraud detection statistics"
+        )
 
 # ==================== ADMIN ENDPOINTS ====================
 
