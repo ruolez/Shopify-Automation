@@ -5,18 +5,19 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, case
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import uvicorn
 import os
 import logging
 import asyncio
+import json
 import tempfile
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
 from database import engine, get_db, create_tables
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings, FraudAnalysis
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings, FraudAnalysis, FraudDetectionRule, TaskStatus
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
 from admin_auth import get_current_admin_user, create_admin_access_token, verify_admin_password, get_admin_password_hash, log_admin_action, require_admin_role
 from schemas import (
@@ -24,15 +25,45 @@ from schemas import (
     LocationAliasCreate, LocationAliasUpdate, LocationAliasResponse, LocationMappingCreate, LocationMappingUpdate, 
     LocationMappingResponse, StoreLocationResponse, ExcludedSKUCreate, ExcludedSKUUpdate, ExcludedSKUResponse,
     AdminUserCreate, AdminUserLogin, AdminUserUpdate, AdminUserChangePassword, AdminUserResponse, AdminTokenResponse,
-    AdminAuditLogResponse, SystemStatsResponse, UserManagementResponse
+    AdminAuditLogResponse, SystemStatsResponse, UserManagementResponse,
+    FraudRuleCreate, FraudRuleResponse, TaskStatusResponse, FailedTasksResponse
 )
 from shopify_client import ShopifyClient
 from fraud_service import FraudAnalysisService
-from tasks import test_celery_connection, process_store_orders, process_all_orders
+from tasks import test_celery_connection, process_store_orders, process_all_orders, trigger_fraud_analysis_all_recent, reprocess_fraud_rules_recent
 import database_utils
-from database_utils import migrate_rules_to_new_format, migrate_fraud_analysis_customer_name, migrate_fraud_analysis_restricted_state
+from database_utils import migrate_rules_to_new_format, migrate_fraud_analysis_customer_name, migrate_settings_duplicate_detection_days, migrate_fraud_analysis_shipping_state
 
 security = HTTPBearer()
+
+def _format_timestamp_with_user_timezone(timestamp: datetime, user_id: int, db: Session) -> str:
+    """Format timestamp using user's timezone settings"""
+    if not timestamp:
+        return None
+    
+    try:
+        import pytz
+        from datetime import timezone
+        
+        # Get user's timezone settings
+        user_settings = db.query(Settings).filter(Settings.user_id == user_id).first()
+        user_timezone = user_settings.timezone if user_settings and user_settings.timezone else "UTC"
+        
+        # Convert UTC timestamp to user's timezone
+        user_tz = pytz.timezone(user_timezone)
+        
+        # Ensure timestamp is timezone-aware (assume UTC if naive)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        
+        # Convert to user timezone and format
+        user_time = timestamp.astimezone(user_tz)
+        return user_time.isoformat()
+        
+    except Exception as e:
+        logger.warning(f"Error formatting timestamp with user timezone: {str(e)}")
+        # Fallback to UTC isoformat
+        return timestamp.isoformat() if timestamp else None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,9 +80,13 @@ async def lifespan(app: FastAPI):
     print("Checking for fraud analysis table migrations...")
     migrate_fraud_analysis_customer_name()
     
-    # Migrate fraud analysis table for restricted_state field
-    print("Checking for fraud analysis restricted_state field migration...")
-    migrate_fraud_analysis_restricted_state()
+    # Migrate fraud analysis table to rename restricted_state to shipping_state
+    print("Checking for fraud analysis shipping_state migration...")
+    migrate_fraud_analysis_shipping_state()
+    
+    # Migrate settings table for duplicate_detection_days field
+    print("Checking for settings duplicate_detection_days field migration...")
+    migrate_settings_duplicate_detection_days()
     
     test_celery_connection.delay()
     yield
@@ -548,6 +583,225 @@ async def get_dashboard_stats(
         ]
     }
 
+@app.get("/dashboard/enhanced-stats")
+async def get_enhanced_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, and_, or_, case
+    
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seven_days_ago = now - timedelta(days=7)
+    
+    # Processing metrics
+    orders_today = db.query(func.count(func.distinct(OrderLog.order_id))).filter(
+        OrderLog.user_id == current_user.id,
+        OrderLog.created_at >= today_start
+    ).scalar() or 0
+    
+    # Get orders for last 7 days
+    orders_by_day = []
+    for i in range(7):
+        day_start = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        count = db.query(func.count(func.distinct(OrderLog.order_id))).filter(
+            OrderLog.user_id == current_user.id,
+            OrderLog.created_at >= day_start,
+            OrderLog.created_at < day_end
+        ).scalar() or 0
+        orders_by_day.append(count)
+    orders_by_day.reverse()  # Oldest to newest
+    
+    # Success rate calculation
+    total_orders = db.query(func.count(func.distinct(OrderLog.order_id))).filter(
+        OrderLog.user_id == current_user.id,
+        OrderLog.created_at >= today_start
+    ).scalar() or 0
+    
+    error_orders = db.query(func.count(func.distinct(OrderLog.order_id))).filter(
+        OrderLog.user_id == current_user.id,
+        OrderLog.created_at >= today_start,
+        OrderLog.status == "error"
+    ).scalar() or 0
+    
+    success_rate = ((total_orders - error_orders) / total_orders * 100) if total_orders > 0 else 100
+    
+    # Get user settings for sync info
+    settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
+    is_sync_enabled = settings.auto_sync_enabled if settings else False
+    sync_frequency = settings.sync_frequency_minutes if settings else 10
+    
+    # Get last sync time from stores
+    last_sync_time = db.query(func.max(ShopifyStore.last_sync)).filter(
+        ShopifyStore.user_id == current_user.id
+    ).scalar()
+    
+    # Calculate next sync time
+    next_sync = None
+    if last_sync_time and is_sync_enabled:
+        next_sync = last_sync_time + timedelta(minutes=sync_frequency)
+    
+    # Rules triggered today
+    rules_triggered = db.query(
+        OrderLog.details,
+        func.count(func.distinct(OrderLog.order_id)).label('count')
+    ).filter(
+        OrderLog.user_id == current_user.id,
+        OrderLog.created_at >= today_start,
+        OrderLog.action == "rule_applied"
+    ).group_by(OrderLog.details).all()
+    
+    rules_triggered_dict = {}
+    for detail, count in rules_triggered:
+        if detail:
+            try:
+                import json
+                details = json.loads(detail) if isinstance(detail, str) else detail
+                rule_name = details.get('rule_name', 'Unknown') if isinstance(details, dict) else 'Unknown'
+                rules_triggered_dict[rule_name] = count
+            except:
+                pass
+    
+    # Store activity
+    store_activity = db.query(
+        ShopifyStore.shop_name,
+        func.count(func.distinct(OrderLog.order_id)).label('count')
+    ).join(
+        OrderLog, OrderLog.store_id == ShopifyStore.id
+    ).filter(
+        ShopifyStore.user_id == current_user.id,
+        OrderLog.created_at >= today_start
+    ).group_by(ShopifyStore.shop_name).all()
+    
+    store_activity_dict = {name: count for name, count in store_activity}
+    
+    # Fraud detection stats (if enabled)
+    fraud_analyses_today = 0
+    high_risk_count = 0
+    active_fraud_rules = 0
+    
+    try:
+        active_fraud_rules = db.query(func.count(FraudDetectionRule.id)).filter(
+            FraudDetectionRule.user_id == current_user.id,
+            FraudDetectionRule.is_active == True
+        ).scalar() or 0
+        
+        if active_fraud_rules > 0:
+            # For now, we'll just count all fraud analyses since the model doesn't have timestamps
+            fraud_analyses_today = db.query(func.count(FraudAnalysis.id)).filter(
+                FraudAnalysis.user_id == current_user.id
+            ).scalar() or 0
+            
+            high_risk_count = db.query(func.count(FraudAnalysis.id)).filter(
+                FraudAnalysis.user_id == current_user.id,
+                FraudAnalysis.risk_level == "high"
+            ).scalar() or 0
+    except Exception as e:
+        # Fraud detection models might not exist
+        logger.debug(f"Fraud detection query failed: {e}")
+        pass
+    
+    # System health (simplified for now)
+    failed_tasks = db.query(func.count(TaskStatus.id)).filter(
+        TaskStatus.user_id == current_user.id,
+        TaskStatus.status == "failed",
+        TaskStatus.created_at >= seven_days_ago
+    ).scalar() or 0
+    
+    # Recent activity
+    recent_activity = db.query(OrderLog).filter(
+        OrderLog.user_id == current_user.id
+    ).order_by(OrderLog.created_at.desc()).limit(10).all()
+    
+    # Recent errors
+    recent_errors = db.query(OrderLog).filter(
+        OrderLog.user_id == current_user.id,
+        OrderLog.status == "error"
+    ).order_by(OrderLog.created_at.desc()).limit(5).all()
+    
+    # Total processed orders (all time)
+    # ProcessedOrder doesn't have user_id, so join with ShopifyStore
+    total_processed = db.query(func.count(ProcessedOrder.id)).join(
+        ShopifyStore, ProcessedOrder.store_id == ShopifyStore.id
+    ).filter(
+        ShopifyStore.user_id == current_user.id
+    ).scalar() or 0
+    
+    # Active stores and rules already fetched above
+    active_stores = db.query(ShopifyStore).filter(
+        ShopifyStore.user_id == current_user.id,
+        ShopifyStore.is_active == True
+    ).count()
+    
+    total_stores = db.query(ShopifyStore).filter(
+        ShopifyStore.user_id == current_user.id
+    ).count()
+    
+    active_rules = db.query(ProcessingRule).filter(
+        ProcessingRule.user_id == current_user.id,
+        ProcessingRule.is_active == True
+    ).count()
+    
+    total_rules = db.query(ProcessingRule).filter(
+        ProcessingRule.user_id == current_user.id
+    ).count()
+    
+    return {
+        "processing": {
+            "orders_today": orders_today,
+            "orders_last_7_days": orders_by_day,
+            "success_rate": round(success_rate, 1),
+            "total_processed": total_processed,
+            "last_sync": last_sync_time.isoformat() + 'Z' if last_sync_time else None,
+            "next_sync": next_sync.isoformat() + 'Z' if next_sync else None,
+            "is_syncing": False,  # Would need to check Celery tasks for real status
+            "sync_enabled": is_sync_enabled
+        },
+        "rules": {
+            "total": total_rules,
+            "active": active_rules,
+            "triggered_today": rules_triggered_dict
+        },
+        "stores": {
+            "total": total_stores,
+            "active": active_stores,
+            "activity": store_activity_dict
+        },
+        "fraud": {
+            "analyses_today": fraud_analyses_today,
+            "high_risk_count": high_risk_count,
+            "active_rules": active_fraud_rules
+        },
+        "system": {
+            "celery_status": "healthy" if failed_tasks < 5 else "degraded" if failed_tasks < 20 else "down",
+            "failed_tasks": failed_tasks
+        },
+        "recent_activity": [
+            {
+                "id": log.id,
+                "order_id": log.order_id,
+                "order_number": log.order_number,
+                "store_name": log.store.shop_name if log.store else "Unknown",
+                "action": log.action,
+                "status": log.status,
+                "created_at": log.created_at.isoformat() + 'Z'
+            } for log in recent_activity
+        ],
+        "recent_errors": [
+            {
+                "id": log.id,
+                "order_id": log.order_id,
+                "order_number": log.order_number,
+                "store_name": log.store.shop_name if log.store else "Unknown",
+                "action": log.action,
+                "error_message": log.error_message,
+                "created_at": log.created_at.isoformat() + 'Z'
+            } for log in recent_errors
+        ]
+    }
+
 # Locations endpoint
 @app.get("/locations")
 async def get_all_locations(
@@ -647,6 +901,8 @@ async def reset_user_data(
     reset_order_logs = reset_options.get("reset_order_logs", True)
     reset_processed_orders = reset_options.get("reset_processed_orders", True)
     reset_oos_incidents = reset_options.get("reset_oos_incidents", True)
+    reset_fraud_analyses = reset_options.get("reset_fraud_analyses", True)
+    reset_archived_fraud_analyses = reset_options.get("reset_archived_fraud_analyses", False)
     reset_task_status = reset_options.get("reset_task_status", False)
     
     deleted_counts = {}
@@ -687,6 +943,31 @@ async def reset_user_data(
             deleted_counts["oos_incidents"] = count
             logger.info(f"Deleted {count} OOS incidents for user {current_user.id}")
         
+        # Delete fraud analyses
+        if reset_fraud_analyses:
+            count = db.query(FraudAnalysis).filter(
+                FraudAnalysis.user_id == current_user.id
+            ).count()
+            db.query(FraudAnalysis).filter(
+                FraudAnalysis.user_id == current_user.id
+            ).delete()
+            deleted_counts["fraud_analyses"] = count
+            logger.info(f"Deleted {count} fraud analyses for user {current_user.id}")
+        
+        # Delete archived fraud analyses
+        if reset_archived_fraud_analyses:
+            try:
+                result = db.execute(
+                    text("DELETE FROM fraud_analyses_archive WHERE user_id = :user_id"),
+                    {"user_id": current_user.id}
+                )
+                count = result.rowcount
+                deleted_counts["archived_fraud_analyses"] = count
+                logger.info(f"Deleted {count} archived fraud analyses for user {current_user.id}")
+            except Exception as e:
+                logger.warning(f"Could not delete archived fraud analyses: {str(e)}")
+                deleted_counts["archived_fraud_analyses"] = 0
+        
         # Delete old task status records (optional)
         if reset_task_status:
             # Only delete completed tasks older than 1 day
@@ -719,6 +1000,8 @@ async def reset_user_data(
                     "reset_order_logs": reset_order_logs,
                     "reset_processed_orders": reset_processed_orders,
                     "reset_oos_incidents": reset_oos_incidents,
+                    "reset_fraud_analyses": reset_fraud_analyses,
+                    "reset_archived_fraud_analyses": reset_archived_fraud_analyses,
                     "reset_task_status": reset_task_status
                 }
             }
@@ -752,6 +1035,17 @@ async def get_data_statistics(
     ).all()
     store_ids = [s[0] for s in store_ids]
     
+    # Count archived fraud analyses using raw SQL since we don't have a model for it
+    archived_fraud_count = 0
+    try:
+        result = db.execute(
+            text("SELECT COUNT(*) FROM fraud_analyses_archive WHERE user_id = :user_id"),
+            {"user_id": current_user.id}
+        ).scalar()
+        archived_fraud_count = result or 0
+    except Exception as e:
+        logger.warning(f"Could not count archived fraud analyses: {str(e)}")
+    
     stats = {
         "order_logs": db.query(OrderLog).filter(OrderLog.user_id == current_user.id).count(),
         "processed_orders": db.query(ProcessedOrder).filter(
@@ -760,6 +1054,10 @@ async def get_data_statistics(
         "oos_incidents": db.query(OutOfStockIncident).filter(
             OutOfStockIncident.user_id == current_user.id
         ).count(),
+        "fraud_analyses": db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id
+        ).count(),
+        "archived_fraud_analyses": archived_fraud_count,
         "task_status": db.query(TaskStatus).filter(
             TaskStatus.completed_at < datetime.utcnow() - timedelta(days=1),
             TaskStatus.status.in_(["success", "failed"])
@@ -1153,11 +1451,9 @@ async def retry_order_processing_endpoint(
             detail="No order IDs provided"
         )
     
-    if len(order_ids) > 50:  # Limit batch size
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Too many orders selected. Maximum 50 orders at once."
-        )
+    # Warn for very large batches but don't block
+    if len(order_ids) > 100:
+        logger.warning(f"Large batch retry requested: {len(order_ids)} orders for user {current_user.id}")
     
     # Validate rule_id if provided
     if rule_id:
@@ -1260,6 +1556,28 @@ async def debug_get_locations(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching locations: {str(e)}")
+
+@app.get("/debug/query-costs/{store_id}")
+async def debug_query_costs(
+    store_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get GraphQL query cost statistics for a store"""
+    store = db.query(ShopifyStore).filter(
+        ShopifyStore.id == store_id,
+        ShopifyStore.user_id == current_user.id
+    ).first()
+    
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    
+    client = ShopifyClient(store.shop_domain, store.access_token)
+    
+    return {
+        "store": store.shop_name,
+        "query_stats": client.get_query_cost_stats()
+    }
 
 @app.get("/debug/orders/{store_id}")
 async def debug_get_recent_orders(
@@ -2482,7 +2800,7 @@ async def analyze_order_fraud(
             "analysis_id": analysis.id,
             "status": "completed",
             "order_name": analysis.order_name,
-            "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None
+            "analyzed_at": _format_timestamp_with_user_timezone(analysis.analysis_timestamp, current_user.id, db)
         }
         
     except HTTPException:
@@ -2498,15 +2816,38 @@ async def analyze_order_fraud(
 async def get_fraud_analyses(
     store_id: Optional[int] = None,
     order_name: Optional[str] = None,
+    search: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    matched_rules: Optional[str] = None,  # Comma-separated list of rules
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    page: int = 1,
-    per_page: int = 50,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    skip: Optional[int] = None,
+    limit: Optional[int] = None,
+    sort_field: Optional[str] = "analysis_timestamp",
+    sort_direction: Optional[str] = "desc",
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+    include_archived: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get fraud analysis history with pagination and filtering"""
     try:
+        # If including archived data, we need to use raw SQL to union both tables
+        if include_archived:
+            # Build base SQL for both active and archived tables
+            base_sql = """
+                SELECT *, 'active' as source FROM fraud_analyses WHERE user_id = :user_id
+                UNION ALL
+                SELECT *, 'archived' as source FROM fraud_analyses_archive WHERE user_id = :user_id
+            """
+            
+            # We'll use a more complex approach for archived data
+            # For now, let's warn that it's not fully implemented
+            logger.warning("Include archived functionality will be implemented with raw SQL queries")
+            
         query = db.query(FraudAnalysis).filter(FraudAnalysis.user_id == current_user.id)
         
         # Apply filters
@@ -2526,10 +2867,20 @@ async def get_fraud_analyses(
         if order_name:
             query = query.filter(FraudAnalysis.order_name.contains(order_name))
         
-        # Apply date filtering
-        if start_date:
+        # Handle search parameter (searches order name)
+        if search:
+            query = query.filter(FraudAnalysis.order_name.contains(search))
+        
+        # Filter by risk level (case-insensitive)
+        if risk_level:
+            # Convert to uppercase to match database storage format
+            query = query.filter(FraudAnalysis.shopify_fraud_risk_level == risk_level.upper())
+        
+        # Apply date filtering (support both old and new parameter names)
+        effective_start_date = date_from or start_date
+        if effective_start_date:
             try:
-                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                start_dt = datetime.fromisoformat(effective_start_date.replace('Z', '+00:00'))
                 query = query.filter(FraudAnalysis.analysis_timestamp >= start_dt)
             except ValueError:
                 raise HTTPException(
@@ -2537,9 +2888,10 @@ async def get_fraud_analyses(
                     detail="Invalid start_date format. Use ISO format."
                 )
         
-        if end_date:
+        effective_end_date = date_to or end_date
+        if effective_end_date:
             try:
-                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                end_dt = datetime.fromisoformat(effective_end_date.replace('Z', '+00:00'))
                 query = query.filter(FraudAnalysis.analysis_timestamp <= end_dt)
             except ValueError:
                 raise HTTPException(
@@ -2547,12 +2899,121 @@ async def get_fraud_analyses(
                     detail="Invalid end_date format. Use ISO format."
                 )
         
-        # Get total count
+        # Filter by matched rules if provided
+        if matched_rules:
+            # Parse comma-separated rules
+            selected_rules = [rule.strip() for rule in matched_rules.split(',') if rule.strip()]
+            
+            if selected_rules:
+                # Need to filter in Python after fetching all records that match other criteria
+                # This is because rule_processing_results is JSON and complex to filter in SQL
+                all_analyses = query.all()
+                filtered_analyses = []
+                
+                for analysis in all_analyses:
+                    if analysis.rule_processing_results:
+                        results = analysis.rule_processing_results
+                        if isinstance(results, dict):
+                            rule_results = results.get("results", [])
+                            
+                            # Check for "No rules matched" special case
+                            if "No rules matched" in selected_rules:
+                                # Check if no rules matched
+                                has_matched_rules = any(
+                                    r.get("matched", False) for r in rule_results 
+                                    if isinstance(r, dict)
+                                )
+                                if not has_matched_rules and len(selected_rules) == 1:
+                                    # Only "No rules matched" is selected
+                                    filtered_analyses.append(analysis)
+                                # If other rules are also selected with "No rules matched", skip
+                                # because an order can't both have no rules and have specific rules
+                                continue
+                            
+                            # Get all matched rules for this analysis
+                            matched_rule_names = set()
+                            for rule_result in rule_results:
+                                if isinstance(rule_result, dict) and rule_result.get("matched", False):
+                                    rule_name = rule_result.get("rule_name", "")
+                                    if rule_name:
+                                        matched_rule_names.add(rule_name)
+                            
+                            # Check if ALL selected rules are matched (AND operation)
+                            if all(rule in matched_rule_names for rule in selected_rules):
+                                filtered_analyses.append(analysis)
+                    elif "No rules matched" in selected_rules and len(selected_rules) == 1:
+                        # No rule results means no rules matched
+                        filtered_analyses.append(analysis)
+                
+                # Convert back to query-like result for pagination
+                analysis_ids = [a.id for a in filtered_analyses]
+                if analysis_ids:
+                    query = db.query(FraudAnalysis).filter(
+                        FraudAnalysis.id.in_(analysis_ids),
+                        FraudAnalysis.user_id == current_user.id
+                    )
+                else:
+                    # No matches, return empty query
+                    query = db.query(FraudAnalysis).filter(FraudAnalysis.id == -1)
+        
+        # Get total count after all filters
         total = query.count()
         
-        # Apply pagination
-        offset = (page - 1) * per_page
-        analyses = query.order_by(FraudAnalysis.analysis_timestamp.desc()).offset(offset).limit(per_page).all()
+        # Handle sorting - comprehensive column support
+        sort_field_map = {
+            # Basic fields
+            "order_name": FraudAnalysis.order_name,
+            "analysis_timestamp": FraudAnalysis.analysis_timestamp,
+            "fraud_score": FraudAnalysis.order_total,  # Using order_total as proxy for score
+            "risk_level": FraudAnalysis.shopify_fraud_risk_level,
+            "store_name": ShopifyStore.shop_name,
+            
+            # Customer data
+            "customer_name": FraudAnalysis.customer_name,
+            "is_first_time_customer": FraudAnalysis.is_first_time_customer,
+            "order_total": FraudAnalysis.order_total,
+            "current_order_total": FraudAnalysis.current_order_total,
+            "previous_order_total": FraudAnalysis.previous_order_total,
+            
+            # Risk indicators
+            "transaction_attempts_count": FraudAnalysis.transaction_attempts_count,
+            "duplicate_within_7days": FraudAnalysis.duplicate_within_7days,
+            "billing_address_outside_us": FraudAnalysis.billing_address_outside_us,
+            "same_billing_shipping": FraudAnalysis.same_billing_shipping,
+            "shipping_state": FraudAnalysis.shipping_state,
+            
+            # Delivery tracking
+            "previous_order_delivery_status": FraudAnalysis.previous_order_delivery_status,
+            "current_order_delivery_status": FraudAnalysis.current_order_delivery_status,
+            
+            # Processing metadata  
+            "processing_time_seconds": FraudAnalysis.processing_time_seconds,
+            "analysis_version": FraudAnalysis.analysis_version,
+            "shopify_order_id": FraudAnalysis.shopify_order_id
+        }
+        
+        # Join with ShopifyStore if sorting by store_name
+        if sort_field == "store_name":
+            query = query.join(ShopifyStore)
+        
+        # Apply sorting
+        sort_column = sort_field_map.get(sort_field, FraudAnalysis.analysis_timestamp)
+        if sort_direction == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+        
+        # Apply pagination (support both skip/limit and page/per_page)
+        if skip is not None and limit is not None:
+            offset = skip
+            page_size = limit
+        else:
+            # Fall back to page/per_page with defaults
+            actual_page = page or 1
+            page_size = per_page or 50
+            offset = (actual_page - 1) * page_size
+        
+        analyses = query.offset(offset).limit(page_size).all()
         
         # Format response
         results = []
@@ -2566,7 +3027,7 @@ async def get_fraud_analyses(
                 "store_name": store_name,
                 "order_name": analysis.order_name,
                 "shopify_order_id": analysis.shopify_order_id,
-                "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "analysis_timestamp": _format_timestamp_with_user_timezone(analysis.analysis_timestamp, current_user.id, db),
                 "is_first_time_customer": analysis.is_first_time_customer,
                 "order_total": float(analysis.order_total) if analysis.order_total else None,
                 "transaction_attempts_count": analysis.transaction_attempts_count,
@@ -2576,17 +3037,22 @@ async def get_fraud_analyses(
                 "previous_order_total": float(analysis.previous_order_total) if analysis.previous_order_total else None,
                 "current_order_total": float(analysis.current_order_total) if analysis.current_order_total else None,
                 "shopify_fraud_risk_level": analysis.shopify_fraud_risk_level,
-                "age_checker_detected": analysis.age_checker_detected
+                "rule_triggered_ids": analysis.rule_triggered_ids,
+                "rule_processing_results": analysis.rule_processing_results,
+                "analysis_data": {
+                    "first_time_customer": analysis.is_first_time_customer,
+                    "duplicate_order_detected": analysis.duplicate_within_7days
+                },
+                "recommendations": [],  # Can be populated based on analysis
+                "fraud_score": 75 if analysis.shopify_fraud_risk_level and analysis.shopify_fraud_risk_level.upper() == "HIGH" else (50 if analysis.shopify_fraud_risk_level and analysis.shopify_fraud_risk_level.upper() == "MEDIUM" else 25),
+                "risk_level": (analysis.shopify_fraud_risk_level or "medium").lower()
             })
         
         return {
             "analyses": results,
-            "pagination": {
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "pages": (total + per_page - 1) // per_page
-            }
+            "total": total,
+            "skip": offset,
+            "limit": page_size
         }
         
     except HTTPException:
@@ -2596,6 +3062,205 @@ async def get_fraud_analyses(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get fraud analyses"
+        )
+
+@app.get("/fraud-detection/matched-rules")
+async def get_all_matched_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all unique matched rules across all fraud analyses for the current user"""
+    try:
+        # Get all fraud analyses for the user
+        analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id
+        ).all()
+        
+        # Extract all unique rules from the analyses
+        unique_rules = set()
+        no_rules_count = 0
+        
+        for analysis in analyses:
+            if analysis.rule_processing_results:
+                # Extract matched rules from the JSON results
+                results = analysis.rule_processing_results
+                if isinstance(results, dict):
+                    # Check for the 'results' array structure
+                    rule_results = results.get("results", [])
+                    has_matched_rules = False
+                    
+                    for rule_result in rule_results:
+                        if isinstance(rule_result, dict) and rule_result.get("matched", False):
+                            rule_name = rule_result.get("rule_name", "")
+                            if rule_name:
+                                unique_rules.add(rule_name)
+                                has_matched_rules = True
+                    
+                    if not has_matched_rules:
+                        no_rules_count += 1
+                else:
+                    no_rules_count += 1
+            else:
+                no_rules_count += 1
+        
+        # Convert to sorted list and add "No rules matched" if applicable
+        rules_list = sorted(list(unique_rules))
+        if no_rules_count > 0:
+            rules_list.append("No rules matched")
+        
+        # Calculate counts for each rule
+        rule_counts = {}
+        for rule in unique_rules:
+            rule_counts[rule] = 0
+        
+        # Count occurrences of each rule
+        for analysis in analyses:
+            if analysis.rule_processing_results:
+                results = analysis.rule_processing_results
+                if isinstance(results, dict):
+                    rule_results = results.get("results", [])
+                    matched_rules_in_analysis = set()
+                    
+                    for rule_result in rule_results:
+                        if isinstance(rule_result, dict) and rule_result.get("matched", False):
+                            rule_name = rule_result.get("rule_name", "")
+                            if rule_name:
+                                matched_rules_in_analysis.add(rule_name)
+                    
+                    # Increment count for each matched rule
+                    for rule in matched_rules_in_analysis:
+                        if rule in rule_counts:
+                            rule_counts[rule] += 1
+        
+        # Add count for "No rules matched" if applicable
+        if no_rules_count > 0:
+            rule_counts["No rules matched"] = no_rules_count
+        
+        return {
+            "rules": rules_list,
+            "rule_counts": rule_counts,
+            "total_analyses": len(analyses),
+            "analyses_with_no_rules": no_rules_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting matched rules: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get matched rules"
+        )
+
+@app.get("/fraud-detection/rule-intersection-counts")
+async def get_rule_intersection_counts(
+    selected_rules: str = Query(None, description="Comma-separated list of currently selected rules"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get counts for each rule showing how many analyses match both the rule and all selected rules"""
+    try:
+        # Parse selected rules
+        selected_rules_list = selected_rules.split(',') if selected_rules else []
+        
+        # Get all fraud analyses for the user
+        analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id
+        ).all()
+        
+        # First, find analyses that match ALL selected rules
+        matching_analyses_ids = set()
+        
+        if selected_rules_list:
+            for analysis in analyses:
+                if analysis.rule_processing_results:
+                    results = analysis.rule_processing_results
+                    if isinstance(results, dict):
+                        rule_results = results.get("results", [])
+                        
+                        # Get all matched rules for this analysis
+                        matched_rules_in_analysis = set()
+                        for rule_result in rule_results:
+                            if isinstance(rule_result, dict) and rule_result.get("matched", False):
+                                rule_name = rule_result.get("rule_name", "")
+                                if rule_name:
+                                    matched_rules_in_analysis.add(rule_name)
+                        
+                        # Check if ALL selected rules are in this analysis
+                        if all(rule in matched_rules_in_analysis for rule in selected_rules_list):
+                            matching_analyses_ids.add(analysis.id)
+        else:
+            # If no rules selected, all analyses match
+            matching_analyses_ids = set(analysis.id for analysis in analyses)
+        
+        # Now calculate intersection counts for each rule
+        all_rules = set()
+        rule_intersection_counts = {}
+        
+        # First pass: collect all unique rules
+        for analysis in analyses:
+            if analysis.rule_processing_results:
+                results = analysis.rule_processing_results
+                if isinstance(results, dict):
+                    rule_results = results.get("results", [])
+                    for rule_result in rule_results:
+                        if isinstance(rule_result, dict) and rule_result.get("matched", False):
+                            rule_name = rule_result.get("rule_name", "")
+                            if rule_name:
+                                all_rules.add(rule_name)
+        
+        # Add "No rules matched" to the set
+        all_rules.add("No rules matched")
+        
+        # Second pass: count intersections
+        for rule in all_rules:
+            if selected_rules_list and rule in selected_rules_list:
+                # For already selected rules, show the count of current filtered results
+                rule_intersection_counts[rule] = len(matching_analyses_ids)
+            else:
+                # For unselected rules, count how many of the matching analyses also have this rule
+                count = 0
+                for analysis_id in matching_analyses_ids:
+                    analysis = next((a for a in analyses if a.id == analysis_id), None)
+                    if analysis:
+                        if rule == "No rules matched":
+                            # Check if this analysis has no matched rules
+                            if analysis.rule_processing_results:
+                                results = analysis.rule_processing_results
+                                if isinstance(results, dict):
+                                    rule_results = results.get("results", [])
+                                    has_matched_rules = any(
+                                        r.get("matched", False) for r in rule_results 
+                                        if isinstance(r, dict)
+                                    )
+                                    if not has_matched_rules:
+                                        count += 1
+                            else:
+                                count += 1
+                        else:
+                            # Check if this analysis has the specific rule
+                            if analysis.rule_processing_results:
+                                results = analysis.rule_processing_results
+                                if isinstance(results, dict):
+                                    rule_results = results.get("results", [])
+                                    for rule_result in rule_results:
+                                        if (isinstance(rule_result, dict) and 
+                                            rule_result.get("matched", False) and
+                                            rule_result.get("rule_name", "") == rule):
+                                            count += 1
+                                            break
+                
+                rule_intersection_counts[rule] = count
+        
+        return {
+            "rule_counts": rule_intersection_counts,
+            "total_matching": len(matching_analyses_ids),
+            "selected_rules": selected_rules_list
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting rule intersection counts: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get rule intersection counts"
         )
 
 @app.get("/fraud-detection/analysis/{analysis_id}")
@@ -2636,11 +3301,10 @@ async def get_fraud_analysis_details(
                 "previous_order_total": float(analysis.previous_order_total) if analysis.previous_order_total else None,
                 "current_order_total": float(analysis.current_order_total) if analysis.current_order_total else None,
                 "shopify_fraud_risk_level": analysis.shopify_fraud_risk_level,
-                "age_checker_detected": analysis.age_checker_detected,
                 "customer_notes": analysis.customer_notes,
                 "billing_address_outside_us": analysis.billing_address_outside_us,
                 "same_billing_shipping": analysis.same_billing_shipping,
-                "restricted_state": analysis.restricted_state,
+                "shipping_state": analysis.shipping_state,
                 "additional_details": analysis.additional_details,
                 "current_order_delivery_status": analysis.current_order_delivery_status,
                 "raw_shopify_data": analysis.raw_shopify_data,
@@ -2648,7 +3312,7 @@ async def get_fraud_analysis_details(
                 "transaction_details": analysis.transaction_details,
                 "risk_assessment_details": analysis.risk_assessment_details,
                 "customer_order_history": analysis.customer_order_history,
-                "analysis_timestamp": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "analysis_timestamp": _format_timestamp_with_user_timezone(analysis.analysis_timestamp, current_user.id, db),
                 "processing_time_seconds": float(analysis.processing_time_seconds) if analysis.processing_time_seconds else None,
                 "analysis_version": analysis.analysis_version
             },
@@ -2708,8 +3372,7 @@ async def get_fraud_detection_stats(
                     "first_time_customers": {"count": 0, "percentage": 0},
                     "multiple_transaction_attempts": {"count": 0, "percentage": 0},
                     "duplicate_orders": {"count": 0, "percentage": 0},
-                    "high_fraud_risk": {"count": 0, "percentage": 0},
-                    "age_checker_detected": {"count": 0, "percentage": 0}
+                    "high_fraud_risk": {"count": 0, "percentage": 0}
                 },
                 "risk_level_distribution": {
                     "low": {"count": 0, "percentage": 0},
@@ -2725,13 +3388,12 @@ async def get_fraud_detection_stats(
         first_time_customers = sum(1 for a in analyses if a.is_first_time_customer)
         multiple_attempts = sum(1 for a in analyses if a.transaction_attempts_count and a.transaction_attempts_count > 1)
         duplicate_orders = sum(1 for a in analyses if a.duplicate_within_7days)
-        high_fraud_risk = sum(1 for a in analyses if a.shopify_fraud_risk_level == 'high')
-        age_checker_detected = sum(1 for a in analyses if a.age_checker_detected)
+        high_fraud_risk = sum(1 for a in analyses if a.shopify_fraud_risk_level and a.shopify_fraud_risk_level.upper() == 'HIGH')
         
         # Risk level distribution
         risk_levels = {"low": 0, "medium": 0, "high": 0, "unknown": 0}
         for analysis in analyses:
-            level = analysis.shopify_fraud_risk_level or "unknown"
+            level = (analysis.shopify_fraud_risk_level or "unknown").lower()
             risk_levels[level] = risk_levels.get(level, 0) + 1
         
         # Average order total
@@ -2747,7 +3409,7 @@ async def get_fraud_detection_stats(
                 "id": analysis.id,
                 "order_name": analysis.order_name,
                 "store_name": store_name,
-                "analyzed_at": analysis.analysis_timestamp.isoformat() if analysis.analysis_timestamp else None,
+                "analyzed_at": _format_timestamp_with_user_timezone(analysis.analysis_timestamp, current_user.id, db),
                 "fraud_risk_level": analysis.shopify_fraud_risk_level or "unknown"
             })
         
@@ -2770,10 +3432,6 @@ async def get_fraud_detection_stats(
                 "high_fraud_risk": {
                     "count": high_fraud_risk,
                     "percentage": round((high_fraud_risk / total_analyses) * 100, 1)
-                },
-                "age_checker_detected": {
-                    "count": age_checker_detected,
-                    "percentage": round((age_checker_detected / total_analyses) * 100, 1)
                 }
             },
             "risk_level_distribution": {
@@ -2794,6 +3452,275 @@ async def get_fraud_detection_stats(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get fraud detection statistics"
+        )
+
+@app.get("/fraud-detection/archived-analyses")
+async def get_archived_fraud_analyses(
+    store_id: Optional[int] = None,
+    order_name: Optional[str] = None,
+    search: Optional[str] = None,
+    archive_reason: Optional[str] = None,  # order_fulfilled or order_cancelled
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    sort_field: Optional[str] = "archived_at",
+    sort_direction: Optional[str] = "desc",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get archived fraud analyses with filtering and pagination"""
+    try:
+        # Build query for archived analyses
+        params = {
+            "user_id": current_user.id,
+            "skip": skip,
+            "limit": limit
+        }
+        
+        # Start building the WHERE clause
+        where_clauses = ["user_id = :user_id"]
+        
+        # Apply filters
+        if store_id:
+            # Verify store ownership
+            store = db.query(ShopifyStore).filter(
+                ShopifyStore.id == store_id,
+                ShopifyStore.user_id == current_user.id
+            ).first()
+            if not store:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Store not found"
+                )
+            where_clauses.append("store_id = :store_id")
+            params["store_id"] = store_id
+        
+        if order_name:
+            where_clauses.append("order_name LIKE :order_name")
+            params["order_name"] = f"%{order_name}%"
+        
+        if search:
+            where_clauses.append("order_name LIKE :search")
+            params["search"] = f"%{search}%"
+        
+        if archive_reason:
+            where_clauses.append("archive_reason = :archive_reason")
+            params["archive_reason"] = archive_reason
+        
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                where_clauses.append("archived_at >= :start_date")
+                params["start_date"] = start_dt
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid start_date format. Use ISO format."
+                )
+        
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                where_clauses.append("archived_at <= :end_date")
+                params["end_date"] = end_dt
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid end_date format. Use ISO format."
+                )
+        
+        # Build the WHERE clause
+        where_sql = " AND ".join(where_clauses)
+        
+        # Map sort fields
+        sort_field_map = {
+            "order_name": "order_name",
+            "risk_level": "shopify_fraud_risk_level",
+            "customer_name": "customer_name",
+            "order_total": "order_total",
+            "archived_at": "archived_at",
+            "archive_reason": "archive_reason"
+        }
+        
+        # Validate and set sort field
+        actual_sort_field = sort_field_map.get(sort_field, "archived_at")
+        sort_dir = "DESC" if sort_direction.upper() == "DESC" else "ASC"
+        
+        # Count total archived analyses matching filters
+        count_sql = f"SELECT COUNT(*) as total FROM fraud_analyses_archive WHERE {where_sql}"
+        count_result = db.execute(text(count_sql), params).fetchone()
+        total_count = count_result.total if count_result else 0
+        
+        # Get archived analyses with pagination
+        query_sql = f"""
+            SELECT * FROM fraud_analyses_archive 
+            WHERE {where_sql}
+            ORDER BY {actual_sort_field} {sort_dir}
+            LIMIT :limit OFFSET :skip
+        """
+        
+        result = db.execute(text(query_sql), params)
+        
+        # Convert results to list of dicts
+        analyses = []
+        for row in result:
+            analysis_dict = dict(row._mapping)
+            
+            # Parse JSON fields
+            json_fields = [
+                'raw_shopify_data', 'duplicate_match_details', 'transaction_details',
+                'risk_assessment_details', 'customer_order_history', 'delivery_analytics',
+                'rule_triggered_ids', 'rule_processing_results'
+            ]
+            
+            for field in json_fields:
+                if analysis_dict.get(field) and isinstance(analysis_dict[field], str):
+                    try:
+                        analysis_dict[field] = json.loads(analysis_dict[field])
+                    except Exception as e:
+                        logger.warning(f"Failed to parse JSON field {field}: {e}")
+                        pass
+            
+            # Get store name
+            store = db.query(ShopifyStore).filter(
+                ShopifyStore.id == analysis_dict['store_id']
+            ).first()
+            
+            analyses.append({
+                **analysis_dict,
+                "store_name": store.shop_name if store else "Unknown Store",
+                "is_archived": True
+            })
+        
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": analyses
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting archived fraud analyses: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get archived fraud analyses"
+        )
+
+@app.post("/fraud-detection/archive/{analysis_id}")
+async def manually_archive_fraud_analysis(
+    analysis_id: int,
+    archive_reason: str = "manual_archive",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually archive a specific fraud analysis for testing purposes"""
+    try:
+        # Find the analysis
+        analysis = db.query(FraudAnalysis).filter(
+            FraudAnalysis.id == analysis_id,
+            FraudAnalysis.user_id == current_user.id
+        ).first()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud analysis not found"
+            )
+        
+        # Validate archive reason
+        valid_reasons = ["manual_archive", "order_fulfilled", "order_cancelled"]
+        if archive_reason not in valid_reasons:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid archive reason. Must be one of: {', '.join(valid_reasons)}"
+            )
+        
+        # Use the fraud archive service to archive the analysis
+        from fraud_archive_service import FraudArchiveService
+        archive_service = FraudArchiveService(db)
+        
+        # Archive the analysis
+        archive_service._archive_analysis(analysis, archive_reason)
+        
+        # Commit the transaction
+        db.commit()
+        
+        return {
+            "message": "Fraud analysis archived successfully",
+            "analysis_id": analysis_id,
+            "order_name": analysis.order_name,
+            "archive_reason": archive_reason,
+            "archived_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error manually archiving fraud analysis: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to archive fraud analysis"
+        )
+
+@app.post("/fraud-detection/archive-fulfilled-cancelled")
+async def bulk_archive_fulfilled_cancelled_orders(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually trigger the archive process for all fulfilled and cancelled orders"""
+    logger.info(f"Bulk archive requested by user {current_user.id} ({current_user.email})")
+    try:
+        from fraud_archive_service import FraudArchiveService
+        
+        archive_service = FraudArchiveService(db)
+        
+        # Use the existing archive service method that fetches fresh data from Shopify
+        result = await archive_service.archive_fulfilled_and_cancelled_analyses(current_user.id)
+        
+        # Create a more informative message based on the results
+        archived_count = result["archived"]
+        checked_count = result["checked"]
+        
+        # Get remaining count
+        remaining_count = result.get("total_remaining", 0)
+        
+        # Get user's batch size setting
+        settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
+        batch_size = settings.reconciliation_batch_size if settings else 500
+        
+        if archived_count == 0:
+            if checked_count == 0:
+                message = "No fraud analyses found to reconcile."
+            else:
+                message = f"Checked {checked_count} orders - all are still unfulfilled. Nothing to reconcile at this time."
+        else:
+            message = f"Reconciliation completed. Archived {archived_count} out of {checked_count} orders."
+        
+        # Add note about remaining analyses
+        if remaining_count > 0:
+            message += f" ({remaining_count} more orders to check - run again to continue, batch size: {batch_size})"
+        
+        # Use the actual archived orders from the service
+        archived_orders = result.get("archived_orders", [])
+        
+        return {
+            "message": message,
+            "archived_count": archived_count,
+            "checked_count": checked_count,
+            "archived_orders": archived_orders,
+            "total_remaining": remaining_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during bulk archive process: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to run bulk archive process: {str(e)}"
         )
 
 # ==================== ADMIN ENDPOINTS ====================
@@ -3321,6 +4248,1512 @@ async def get_database_info(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get database info: {str(e)}"
         )
+
+# Fraud Rule Management endpoints
+def _normalize_fraud_rule_conditions(conditions):
+    """Normalize fraud rule conditions - capitalize fraud risk level values"""
+    if isinstance(conditions, dict):
+        if 'conditions' in conditions:
+            # Handle new format with operator and conditions array
+            normalized_conditions = []
+            for condition in conditions['conditions']:
+                if (condition.get('field') == 'fraud_risk_level' and 
+                    condition.get('operator') in ['risk_level_equals', 'risk_level_not_equals']):
+                    # Capitalize the risk level value to match Shopify's format
+                    condition = condition.copy()
+                    condition['value'] = str(condition['value']).upper()
+                normalized_conditions.append(condition)
+            
+            return {
+                'operator': conditions['operator'],
+                'conditions': normalized_conditions
+            }
+        else:
+            # Handle legacy format - direct conditions array
+            normalized_conditions = []
+            for condition in conditions:
+                if (condition.get('field') == 'fraud_risk_level' and 
+                    condition.get('operator') in ['risk_level_equals', 'risk_level_not_equals']):
+                    # Capitalize the risk level value to match Shopify's format
+                    condition = condition.copy()
+                    condition['value'] = str(condition['value']).upper()
+                normalized_conditions.append(condition)
+            return normalized_conditions
+    return conditions
+
+@app.post("/fraud-rules", status_code=status.HTTP_201_CREATED, response_model=FraudRuleResponse)
+async def create_fraud_rule(
+    rule_data: FraudRuleCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new fraud detection rule"""
+    try:
+        # Normalize conditions through the schema validator and convert to dict
+        # rule_data.conditions is already normalized to dict format by the validator
+        if hasattr(rule_data.conditions, 'dict'):
+            conditions_to_save = rule_data.conditions.dict()
+        else:
+            conditions_to_save = rule_data.conditions
+        
+        # Normalize fraud risk level values to uppercase
+        conditions_to_save = _normalize_fraud_rule_conditions(conditions_to_save)
+        
+        db_rule = FraudDetectionRule(
+            user_id=current_user.id,
+            name=rule_data.name,
+            description=rule_data.description,
+            conditions=conditions_to_save,
+            actions=[action.dict() for action in rule_data.actions],
+            priority=rule_data.priority,
+            delay_ms=rule_data.delay_ms,
+            is_active=rule_data.is_active
+        )
+        db.add(db_rule)
+        db.commit()
+        db.refresh(db_rule)
+        
+        logger.info(f"Created fraud detection rule '{rule_data.name}' for user {current_user.id}")
+        
+        return FraudRuleResponse(
+            id=db_rule.id,
+            name=db_rule.name,
+            description=db_rule.description,
+            conditions=db_rule.conditions,
+            actions=db_rule.actions,
+            priority=db_rule.priority,
+            delay_ms=db_rule.delay_ms,
+            is_active=db_rule.is_active,
+            created_at=db_rule.created_at,
+            updated_at=db_rule.updated_at
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating fraud rule: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create fraud rule: {str(e)}"
+        )
+
+@app.get("/fraud-rules", response_model=List[FraudRuleResponse])
+async def get_fraud_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all fraud detection rules for the current user"""
+    try:
+        rules = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.user_id == current_user.id
+        ).order_by(FraudDetectionRule.priority.asc()).all()
+        
+        return [
+            FraudRuleResponse(
+                id=rule.id,
+                name=rule.name,
+                description=rule.description,
+                conditions=rule.conditions,
+                actions=rule.actions,
+                priority=rule.priority,
+                delay_ms=rule.delay_ms,
+                is_active=rule.is_active,
+                created_at=rule.created_at,
+                updated_at=rule.updated_at
+            )
+            for rule in rules
+        ]
+        
+    except Exception as e:
+        logger.error(f"Error fetching fraud rules: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch fraud rules: {str(e)}"
+        )
+
+@app.get("/fraud-rules/schema")
+async def get_fraud_rule_schema(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get available fields, operators, and actions for fraud rule creation"""
+    try:
+        from rule_engine import RuleEngine
+        engine = RuleEngine()
+        
+        # Get user's duplicate detection days setting
+        user_settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
+        duplicate_detection_days = user_settings.duplicate_detection_days if user_settings else 7
+        
+        # Get fraud-specific fields for rule conditions
+        fraud_fields = [
+            {"field": "first_time_customer", "label": "First Time Customer", "type": "boolean"},
+            {"field": "order_total", "label": "Order Total", "type": "number"},
+            {"field": "fraud_order_total_multiple", "label": "Order Total Multiple (vs Previous Order)", "type": "number"},
+            {"field": "transaction_attempts", "label": "Transaction Attempts", "type": "number"},
+            {"field": "customer_name", "label": "Customer Name", "type": "string"},
+            {"field": "duplicate_within_7days", "label": f"Duplicate Within {duplicate_detection_days} Days", "type": "boolean"},
+            {"field": "previous_order_delivery_status", "label": "Previous Order Delivery Status", "type": "string"},
+            {"field": "previous_order_total", "label": "Previous Order Total", "type": "number"},
+            {"field": "current_order_total", "label": "Current Order Total", "type": "number"},
+            {"field": "fraud_risk_level", "label": "Shopify Fraud Risk Level", "type": "string"},
+            {"field": "customer_notes", "label": "Customer Notes", "type": "string"},
+            {"field": "billing_outside_us", "label": "Billing Address Outside US", "type": "boolean"},
+            {"field": "same_billing_shipping", "label": "Same Billing & Shipping", "type": "boolean"},
+            {"field": "shipping_state", "label": "Shipping State", "type": "string"},
+            {"field": "days_since_last_delivery", "label": "Days Since Last Delivery", "type": "number"},
+            {"field": "previous_order_cancelled", "label": "Previous Order Cancelled", "type": "boolean"},
+            {"field": "customer_total_orders", "label": "Customer Total Orders", "type": "number"}
+        ]
+        
+        # Get fraud-specific operators
+        fraud_operators = [
+            {"operator": "equals", "label": "Equals", "types": ["string", "number", "boolean"]},
+            {"operator": "not_equals", "label": "Not Equals", "types": ["string", "number", "boolean"]},
+            {"operator": "greater_than", "label": "Greater Than", "types": ["number"]},
+            {"operator": "less_than", "label": "Less Than", "types": ["number"]},
+            {"operator": "greater_than_or_equal", "label": "Greater Than or Equal", "types": ["number"]},
+            {"operator": "less_than_or_equal", "label": "Less Than or Equal", "types": ["number"]},
+            {"operator": "multiple_greater_than", "label": "Multiple Greater Than", "types": ["number"]},
+            {"operator": "contains", "label": "Contains", "types": ["string"]},
+            {"operator": "not_contains", "label": "Does Not Contain", "types": ["string"]},
+            {"operator": "starts_with", "label": "Starts With", "types": ["string"]},
+            {"operator": "ends_with", "label": "Ends With", "types": ["string"]},
+            {"operator": "in_list", "label": "In List", "types": ["string"]},
+            {"operator": "not_in_list", "label": "Not In List", "types": ["string"]},
+            {"operator": "is_empty", "label": "Is Empty", "types": ["string"]},
+            {"operator": "is_not_empty", "label": "Is Not Empty", "types": ["string"]},
+            {"operator": "risk_level_equals", "label": "Risk Level Equals", "types": ["string"]},
+            {"operator": "delivery_status_contains", "label": "Delivery Status Contains", "types": ["string"]},
+            {"operator": "fraud_ratio_greater_than", "label": "Ratio Greater Than", "types": ["number"]},
+            {"operator": "fraud_ratio_less_than", "label": "Ratio Less Than", "types": ["number"]}
+        ]
+        
+        # Get fraud-specific action types
+        fraud_actions = [
+            {"type": "do_nothing", "label": "Do Nothing", "parameters": []},
+            {"type": "add_tag", "label": "Add Tag", "parameters": ["tags"]},
+            {"type": "remove_tag", "label": "Remove Tag", "parameters": ["tags"]},
+            {"type": "place_on_hold", "label": "Place Order on Hold", "parameters": []}
+        ]
+        
+        return {
+            "fields": fraud_fields,
+            "operators": fraud_operators,
+            "action_types": fraud_actions
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting fraud rule schema: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get fraud rule schema: {str(e)}"
+        )
+
+@app.get("/fraud-rules/{rule_id}", response_model=FraudRuleResponse)
+async def get_fraud_rule(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific fraud detection rule"""
+    try:
+        rule = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.id == rule_id,
+            FraudDetectionRule.user_id == current_user.id
+        ).first()
+        
+        if not rule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud rule not found"
+            )
+        
+        return FraudRuleResponse(
+            id=rule.id,
+            name=rule.name,
+            description=rule.description,
+            conditions=rule.conditions,
+            actions=rule.actions,
+            priority=rule.priority,
+            delay_ms=rule.delay_ms,
+            is_active=rule.is_active,
+            created_at=rule.created_at,
+            updated_at=rule.updated_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching fraud rule {rule_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch fraud rule: {str(e)}"
+        )
+
+@app.put("/fraud-rules/{rule_id}", response_model=FraudRuleResponse)
+async def update_fraud_rule(
+    rule_id: int,
+    rule_data: FraudRuleCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an existing fraud detection rule"""
+    try:
+        rule = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.id == rule_id,
+            FraudDetectionRule.user_id == current_user.id
+        ).first()
+        
+        if not rule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud rule not found"
+            )
+        
+        # Normalize conditions through the schema validator and convert to dict
+        if hasattr(rule_data.conditions, 'dict'):
+            conditions_to_save = rule_data.conditions.dict()
+        else:
+            conditions_to_save = rule_data.conditions
+        
+        # Normalize fraud risk level values to uppercase
+        conditions_to_save = _normalize_fraud_rule_conditions(conditions_to_save)
+        
+        # Update rule fields
+        rule.name = rule_data.name
+        rule.description = rule_data.description
+        rule.conditions = conditions_to_save
+        rule.actions = [action.dict() for action in rule_data.actions]
+        rule.priority = rule_data.priority
+        rule.delay_ms = rule_data.delay_ms
+        rule.is_active = rule_data.is_active
+        rule.updated_at = func.now()
+        
+        db.commit()
+        db.refresh(rule)
+        
+        logger.info(f"Updated fraud detection rule '{rule_data.name}' for user {current_user.id}")
+        
+        return FraudRuleResponse(
+            id=rule.id,
+            name=rule.name,
+            description=rule.description,
+            conditions=rule.conditions,
+            actions=rule.actions,
+            priority=rule.priority,
+            delay_ms=rule.delay_ms,
+            is_active=rule.is_active,
+            created_at=rule.created_at,
+            updated_at=rule.updated_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating fraud rule {rule_id}: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update fraud rule: {str(e)}"
+        )
+
+@app.delete("/fraud-rules/{rule_id}")
+async def delete_fraud_rule(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a fraud detection rule"""
+    try:
+        rule = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.id == rule_id,
+            FraudDetectionRule.user_id == current_user.id
+        ).first()
+        
+        if not rule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud rule not found"
+            )
+        
+        db.delete(rule)
+        db.commit()
+        
+        logger.info(f"Deleted fraud detection rule '{rule.name}' for user {current_user.id}")
+        return {"message": "Fraud rule deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting fraud rule {rule_id}: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete fraud rule: {str(e)}"
+        )
+
+@app.put("/fraud-rules/{rule_id}/toggle")
+async def toggle_fraud_rule(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Toggle the active status of a fraud detection rule"""
+    try:
+        rule = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.id == rule_id,
+            FraudDetectionRule.user_id == current_user.id
+        ).first()
+        
+        if not rule:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud rule not found"
+            )
+        
+        # Toggle the active status
+        rule.is_active = not rule.is_active
+        rule.updated_at = func.now()
+        db.commit()
+        
+        status_text = "activated" if rule.is_active else "deactivated"
+        logger.info(f"Fraud detection rule '{rule.name}' {status_text} for user {current_user.id}")
+        
+        return {
+            "message": f"Fraud rule {status_text} successfully",
+            "is_active": rule.is_active
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling fraud rule {rule_id}: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to toggle fraud rule: {str(e)}"
+        )
+
+
+# Fraud Sync Control Endpoints
+@app.get("/settings/fraud-sync-status")
+async def get_fraud_sync_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current fraud sync status and statistics"""
+    try:
+        # Get recent fraud analyses count (last 7 days)
+        from datetime import datetime, timedelta, timezone
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        
+        recent_analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id,
+            FraudAnalysis.analysis_timestamp >= week_ago
+        ).count()
+        
+        # Get total fraud analyses
+        total_analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id
+        ).count()
+        
+        # Get active fraud rules count
+        active_fraud_rules = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.user_id == current_user.id,
+            FraudDetectionRule.is_active == True
+        ).count()
+        
+        # Get active stores count
+        active_stores = db.query(ShopifyStore).filter(
+            ShopifyStore.user_id == current_user.id,
+            ShopifyStore.is_active == True
+        ).count()
+        
+        # Check for running fraud tasks
+        from models import TaskStatus
+        from datetime import datetime, timedelta, timezone
+        
+        # Clean up stale running tasks (older than 2 minutes)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+        stale_tasks = db.query(TaskStatus).filter(
+            TaskStatus.task_name.in_(["trigger_fraud_analysis", "reprocess_fraud_rules"]),
+            TaskStatus.status == "running",
+            TaskStatus.created_at < stale_cutoff
+        ).all()
+        
+        for task in stale_tasks:
+            logger.warning(f"Cleaning up stale task {task.task_id} (created {task.created_at})")
+            task.status = "failed"
+            task.error_message = "Task timed out"
+            task.completed_at = datetime.utcnow()
+        
+        if stale_tasks:
+            db.commit()
+        
+        # Get currently running tasks
+        running_fraud_tasks = db.query(TaskStatus).filter(
+            TaskStatus.task_name.in_(["trigger_fraud_analysis", "reprocess_fraud_rules"]),
+            TaskStatus.status == "running"
+        ).all()
+        
+        return {
+            "recent_analyses_count": recent_analyses,
+            "total_analyses_count": total_analyses,
+            "active_fraud_rules_count": active_fraud_rules,
+            "active_stores_count": active_stores,
+            "is_processing": len(running_fraud_tasks) > 0,
+            "running_tasks": [
+                {
+                    "task_id": task.task_id,
+                    "task_type": task.task_name,
+                    "started_at": task.created_at,
+                    "status": task.status
+                }
+                for task in running_fraud_tasks
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting fraud sync status: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get fraud sync status: {str(e)}"
+        )
+
+
+@app.post("/settings/trigger-fraud-analysis")
+async def trigger_fraud_analysis(
+    days_back: int = Query(default=7, ge=1, le=30, description="Days back to analyze orders"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually trigger fraud analysis for all recent orders"""
+    try:
+        # Check if there are any active stores
+        active_stores = db.query(ShopifyStore).filter(
+            ShopifyStore.user_id == current_user.id,
+            ShopifyStore.is_active == True
+        ).count()
+        
+        if active_stores == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active stores found. Please connect and activate at least one store."
+            )
+        
+        # Check if there's already a running fraud analysis task
+        from models import TaskStatus
+        running_task = db.query(TaskStatus).filter(
+            TaskStatus.task_name == "trigger_fraud_analysis",
+            TaskStatus.status == "running"
+        ).first()
+        
+        if running_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Fraud analysis is already running. Please wait for it to complete."
+            )
+        
+        # Start the fraud analysis task
+        task = trigger_fraud_analysis_all_recent.delay(current_user.id, days_back)
+        
+        # Create task status record
+        from models import TaskStatus
+        task_status = TaskStatus(
+            task_id=task.id,
+            task_name="trigger_fraud_analysis",
+            status="running",
+            started_at=datetime.utcnow()
+        )
+        db.add(task_status)
+        db.commit()
+        
+        logger.info(f"Fraud analysis task started for user {current_user.id} (task ID: {task.id})")
+        
+        return {
+            "message": f"Fraud analysis started for orders from the last {days_back} days",
+            "task_id": task.id,
+            "days_back": days_back,
+            "stores_count": active_stores
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering fraud analysis: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger fraud analysis: {str(e)}"
+        )
+
+
+@app.get("/debug/task-status")
+async def debug_task_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check task status"""
+    from models import TaskStatus
+    from datetime import datetime, timedelta, timezone
+    
+    # Get all fraud-related tasks
+    all_tasks = db.query(TaskStatus).filter(
+        TaskStatus.task_name.in_(["trigger_fraud_analysis", "reprocess_fraud_rules"])
+    ).order_by(TaskStatus.created_at.desc()).limit(10).all()
+    
+    # Clean up stale running tasks (older than 5 minutes)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    stale_tasks = db.query(TaskStatus).filter(
+        TaskStatus.task_name.in_(["trigger_fraud_analysis", "reprocess_fraud_rules"]),
+        TaskStatus.status == "running",
+        TaskStatus.created_at < stale_cutoff
+    ).all()
+    
+    for task in stale_tasks:
+        logger.warning(f"Cleaning up stale task {task.task_id} - marking as failed")
+        task.status = "failed"
+        task.error_message = "Task timed out - marked as failed after 5 minutes"
+        task.completed_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return {
+        "recent_tasks": [
+            {
+                "task_id": task.task_id,
+                "task_name": task.task_name,
+                "status": task.status,
+                "created_at": task.created_at,
+                "completed_at": task.completed_at,
+                "result": task.result,
+                "error_message": task.error_message
+            }
+            for task in all_tasks
+        ],
+        "cleaned_stale_tasks": len(stale_tasks)
+    }
+
+
+@app.post("/settings/reprocess-fraud-rules")
+async def reprocess_fraud_rules(
+    days_back: int = Query(default=7, ge=1, le=30, description="Days back to reprocess fraud rules"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reprocess fraud rules for recent fraud analyses"""
+    try:
+        # Check if there are any active fraud rules
+        active_fraud_rules = db.query(FraudDetectionRule).filter(
+            FraudDetectionRule.user_id == current_user.id,
+            FraudDetectionRule.is_active == True
+        ).count()
+        
+        if active_fraud_rules == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active fraud detection rules found. Please create and activate at least one fraud rule."
+            )
+        
+        # Check for recent fraud analyses
+        from datetime import datetime, timedelta, timezone
+        import pytz
+        
+        # Get user's timezone settings
+        user_settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
+        user_timezone = user_settings.timezone if user_settings and user_settings.timezone else "UTC"
+        
+        # Calculate date range using user's timezone
+        user_tz = pytz.timezone(user_timezone)
+        now_user_tz = datetime.now(user_tz)
+        since_date_user_tz = now_user_tz - timedelta(days=days_back)
+        since_date = since_date_user_tz.astimezone(timezone.utc)
+        
+        recent_analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == current_user.id,
+            FraudAnalysis.analysis_timestamp >= since_date
+        ).count()
+        
+        if recent_analyses == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No fraud analyses found from the last {days_back} days. Please run fraud analysis first."
+            )
+        
+        # Check if there's already a running fraud rules task
+        from models import TaskStatus
+        running_task = db.query(TaskStatus).filter(
+            TaskStatus.task_name == "reprocess_fraud_rules",
+            TaskStatus.status == "running"
+        ).first()
+        
+        if running_task:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Fraud rule reprocessing is already running. Please wait for it to complete."
+            )
+        
+        # Start the fraud rules reprocessing task
+        task = reprocess_fraud_rules_recent.delay(current_user.id, days_back)
+        
+        # Create task status record
+        from models import TaskStatus
+        task_status = TaskStatus(
+            task_id=task.id,
+            task_name="reprocess_fraud_rules",
+            status="running",
+            started_at=datetime.utcnow()
+        )
+        db.add(task_status)
+        db.commit()
+        
+        logger.info(f"Fraud rules reprocessing task started for user {current_user.id} (task ID: {task.id})")
+        
+        return {
+            "message": f"Fraud rule reprocessing started for analyses from the last {days_back} days",
+            "task_id": task.id,
+            "days_back": days_back,
+            "analyses_count": recent_analyses,
+            "rules_count": active_fraud_rules
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reprocessing fraud rules: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reprocess fraud rules: {str(e)}"
+        )
+
+
+# Order Hold Management Endpoints
+@app.get("/orders/{order_id}/fulfillment-orders")
+async def get_order_fulfillment_orders(
+    order_id: str,
+    store_id: int = Query(..., description="Store ID to get the order from"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all fulfillment orders for a given order"""
+    logger.info(f"Fulfillment orders endpoint called with order_id: '{order_id}', store_id: {store_id}")
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # URL decode the order_id in case it's encoded
+        import urllib.parse
+        decoded_order_id = urllib.parse.unquote(order_id)
+        logger.info(f"Looking up order: original='{order_id}', decoded='{decoded_order_id}'")
+        
+        # Get fulfillment orders
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        fulfillment_orders = await client.get_fulfillment_orders_for_order(decoded_order_id)
+        
+        # If no fulfillment orders found, try to get order info for debugging
+        if not fulfillment_orders:
+            logger.warning(f"No fulfillment orders found for order {decoded_order_id}")
+            try:
+                # Try to get basic order info to see if the order exists
+                order_info = await client.get_order_by_id(decoded_order_id)
+                if order_info:
+                    order_status = order_info.get('displayFulfillmentStatus', 'unknown')
+                    financial_status = order_info.get('displayFinancialStatus', 'unknown')
+                    logger.info(f"Order {decoded_order_id} exists but has no fulfillment orders. Status: {order_status}, Financial: {financial_status}")
+                    
+                    # Provide specific guidance based on order status
+                    if order_status == "UNFULFILLED":
+                        debug_info = "Order is unfulfilled but has no fulfillment orders yet. This may be a new order - fulfillment orders are typically created automatically by Shopify within a few minutes. Try again shortly."
+                    elif order_status == "FULFILLED":
+                        debug_info = "Order is already fulfilled - no fulfillment orders available for holds"
+                    elif order_status == "CANCELLED":
+                        debug_info = "Order is cancelled - no fulfillment orders available"
+                    else:
+                        debug_info = f"Order exists but has no fulfillment orders (Status: {order_status})"
+                    
+                    return {
+                        "order_id": decoded_order_id,
+                        "fulfillment_orders": [],
+                        "order_exists": True,
+                        "order_status": order_status,
+                        "financial_status": financial_status,
+                        "debug_info": debug_info
+                    }
+                else:
+                    logger.warning(f"Order {decoded_order_id} not found in Shopify")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Order {decoded_order_id} not found in Shopify"
+                    )
+            except Exception as debug_error:
+                logger.error(f"Error getting order info for debugging: {str(debug_error)}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Order {decoded_order_id} not found or inaccessible"
+                )
+        
+        return {
+            "order_id": decoded_order_id,
+            "fulfillment_orders": fulfillment_orders
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fulfillment orders for order {order_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get fulfillment orders: {str(e)}"
+        )
+
+
+@app.get("/fulfillment-orders")
+async def get_order_fulfillment_orders_alt(
+    order_id: str = Query(..., description="Order ID to get fulfillment orders for"),
+    store_id: int = Query(..., description="Store ID to get the order from"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all fulfillment orders for a given order (alternative endpoint with query params)"""
+    logger.info(f"Alternative fulfillment orders endpoint called with order_id: '{order_id}', store_id: {store_id}")
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # URL decode the order_id in case it's encoded
+        import urllib.parse
+        decoded_order_id = urllib.parse.unquote(order_id)
+        logger.info(f"Looking up order: original='{order_id}', decoded='{decoded_order_id}'")
+        
+        # Get fulfillment orders
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        fulfillment_orders = await client.get_fulfillment_orders_for_order(decoded_order_id)
+        
+        # If no fulfillment orders found, try to get order info for debugging
+        if not fulfillment_orders:
+            logger.warning(f"No fulfillment orders found for order {decoded_order_id}")
+            try:
+                # Try to get basic order info to see if the order exists
+                order_info = await client.get_order_by_id(decoded_order_id)
+                if order_info:
+                    order_status = order_info.get('displayFulfillmentStatus', 'unknown')
+                    financial_status = order_info.get('displayFinancialStatus', 'unknown')
+                    logger.info(f"Order {decoded_order_id} exists but has no fulfillment orders. Status: {order_status}, Financial: {financial_status}")
+                    
+                    # Provide specific guidance based on order status
+                    if order_status == "UNFULFILLED":
+                        debug_info = "Order is unfulfilled but has no fulfillment orders yet. This may be a new order - fulfillment orders are typically created automatically by Shopify within a few minutes. Try again shortly."
+                    elif order_status == "FULFILLED":
+                        debug_info = "Order is already fulfilled - no fulfillment orders available for holds"
+                    elif order_status == "CANCELLED":
+                        debug_info = "Order is cancelled - no fulfillment orders available"
+                    else:
+                        debug_info = f"Order exists but has no fulfillment orders (Status: {order_status})"
+                    
+                    return {
+                        "order_id": decoded_order_id,
+                        "fulfillment_orders": [],
+                        "order_exists": True,
+                        "order_status": order_status,
+                        "financial_status": financial_status,
+                        "debug_info": debug_info
+                    }
+                else:
+                    logger.warning(f"Order {decoded_order_id} not found in Shopify")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Order {decoded_order_id} not found in Shopify"
+                    )
+            except Exception as debug_error:
+                logger.error(f"Error getting order info for debugging: {str(debug_error)}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Order {decoded_order_id} not found or inaccessible"
+                )
+        
+        return {
+            "order_id": decoded_order_id,
+            "fulfillment_orders": fulfillment_orders
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fulfillment orders for order {order_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get fulfillment orders: {str(e)}"
+        )
+
+
+@app.get("/debug/fulfillment-orders-raw")
+async def debug_fulfillment_orders_raw(
+    order_id: str = Query(..., description="Order ID to debug"),
+    store_id: int = Query(..., description="Store ID"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to see raw GraphQL response for fulfillment orders"""
+    import traceback
+    import urllib.parse
+    
+    logger.info(f"Debug fulfillment orders raw - User: {current_user.email}, Store: {store_id}, Order: {order_id}")
+    
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            logger.error(f"Store not found - Store ID: {store_id}, User ID: {current_user.id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        logger.info(f"Store found - Domain: {store.shop_domain}, Store Name: {store.shop_name}")
+        
+        # URL decode the order_id
+        decoded_order_id = urllib.parse.unquote(order_id)
+        logger.info(f"Decoded order ID: {decoded_order_id}")
+        
+        # Get raw GraphQL response
+        try:
+            client = ShopifyClient(store.shop_domain, store.access_token)
+            logger.info(f"ShopifyClient initialized for domain: {store.shop_domain}")
+        except Exception as client_error:
+            logger.error(f"Failed to initialize ShopifyClient: {str(client_error)}")
+            logger.error(f"Client error traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "Failed to initialize Shopify client",
+                    "details": str(client_error),
+                    "traceback": traceback.format_exc()
+                }
+            )
+        
+        # Make the same query as get_fulfillment_orders_for_order but return raw response
+        query = """
+        query getFulfillmentOrders($orderId: ID!) {
+            order(id: $orderId) {
+                id
+                name
+                displayFulfillmentStatus
+                displayFinancialStatus
+                createdAt
+                updatedAt
+                fulfillmentOrders(first: 20) {
+                    edges {
+                        node {
+                            id
+                            status
+                            requestStatus
+                            createdAt
+                            updatedAt
+                            assignedLocation {
+                                location {
+                                    id
+                                    name
+                                }
+                            }
+                            lineItems(first: 20) {
+                                edges {
+                                    node {
+                                        id
+                                        totalQuantity
+                                        remainingQuantity
+                                        variant {
+                                            id
+                                            title
+                                            sku
+                                        }
+                                    }
+                                }
+                            }
+                            fulfillmentHolds {
+                                id
+                                reason
+                                reasonNotes
+                                displayReason
+                                handle
+                                heldByApp {
+                                    id
+                                    title
+                                }
+                                heldByRequestingApp
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {"orderId": decoded_order_id}
+        logger.info(f"Making GraphQL request with variables: {variables}")
+        
+        try:
+            raw_result = await client._make_graphql_request(query, variables)
+            logger.info(f"GraphQL request successful - Response keys: {list(raw_result.keys()) if isinstance(raw_result, dict) else 'Not a dict'}")
+            
+            # Check if there are any errors in the GraphQL response
+            if isinstance(raw_result, dict) and "errors" in raw_result:
+                logger.error(f"GraphQL errors in response: {raw_result['errors']}")
+            
+            return {
+                "success": True,
+                "order_id": decoded_order_id,
+                "store_id": store_id,
+                "store_domain": store.shop_domain,
+                "store_name": store.shop_name,
+                "raw_graphql_response": raw_result
+            }
+            
+        except Exception as graphql_error:
+            logger.error(f"GraphQL request failed: {str(graphql_error)}")
+            logger.error(f"GraphQL error traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "GraphQL request failed",
+                    "details": str(graphql_error),
+                    "traceback": traceback.format_exc(),
+                    "order_id": decoded_order_id,
+                    "store_domain": store.shop_domain,
+                    "query": query,
+                    "variables": variables
+                }
+            )
+        
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in debug endpoint: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Unexpected error occurred",
+                "details": str(e),
+                "traceback": traceback.format_exc(),
+                "order_id": order_id,
+                "store_id": store_id,
+                "user_id": current_user.id
+            }
+        )
+
+
+@app.post("/fulfillment-orders/{fulfillment_order_id}/hold")
+async def apply_order_hold(
+    fulfillment_order_id: str,
+    store_id: int = Query(..., description="Store ID"),
+    reason: str = Query(..., description="Hold reason (e.g., HIGH_RISK_OF_FRAUD, AWAITING_PAYMENT, etc.)"),
+    reason_notes: str = Query("", description="Additional notes about the hold"),
+    notify_merchant: bool = Query(True, description="Whether to notify the merchant"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Apply a hold to a fulfillment order"""
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # Validate reason
+        valid_reasons = [
+            "AWAITING_PAYMENT",
+            "HIGH_RISK_OF_FRAUD",
+            "INCORRECT_ADDRESS",
+            "INVENTORY_OUT_OF_STOCK",
+            "AWAITING_RETURN_ITEMS",
+            "UNKNOWN_DELIVERY_DATE",
+            "OTHER"
+        ]
+        
+        if reason not in valid_reasons:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid hold reason. Must be one of: {', '.join(valid_reasons)}"
+            )
+        
+        # Apply the hold
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        result = await client.apply_fulfillment_hold(
+            fulfillment_order_id,
+            reason,
+            reason_notes,
+            notify_merchant
+        )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to apply hold: {result.get('errors', 'Unknown error')}"
+            )
+        
+        # Log the action
+        from models import OrderLog
+        log_entry = OrderLog(
+            user_id=current_user.id,
+            store_id=store.id,
+            order_id=result["fulfillment_order"]["id"] if result["fulfillment_order"] else None,
+            order_number=f"Fulfillment Order {fulfillment_order_id}",
+            action="fulfillment_hold_applied",
+            status="info",
+            details={
+                "fulfillment_order_id": fulfillment_order_id,
+                "hold_reason": reason,
+                "hold_notes": reason_notes,
+                "notify_merchant": notify_merchant,
+                "hold_id": result["hold"]["id"] if result["hold"] else None,
+                "rule_name": "Manual Hold"
+            }
+        )
+        db.add(log_entry)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Hold applied successfully to fulfillment order {fulfillment_order_id}",
+            "fulfillment_order": result["fulfillment_order"],
+            "hold": result["hold"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error applying hold to fulfillment order {fulfillment_order_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply hold: {str(e)}"
+        )
+
+
+@app.post("/fulfillment-orders/{fulfillment_order_id}/release-hold")
+async def release_order_hold(
+    fulfillment_order_id: str,
+    store_id: int = Query(..., description="Store ID"),
+    hold_ids: List[str] = Query(None, description="Specific hold IDs to release (releases all if not provided)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Release a hold from a fulfillment order"""
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # Release the hold
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        result = await client.release_fulfillment_hold(fulfillment_order_id, hold_ids)
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to release hold: {result.get('errors', 'Unknown error')}"
+            )
+        
+        # Log the action
+        from models import OrderLog
+        log_entry = OrderLog(
+            user_id=current_user.id,
+            store_id=store.id,
+            order_id=result["fulfillment_order"]["id"] if result["fulfillment_order"] else None,
+            order_number=f"Fulfillment Order {fulfillment_order_id}",
+            action="fulfillment_hold_released",
+            status="info",
+            details={
+                "fulfillment_order_id": fulfillment_order_id,
+                "hold_ids": hold_ids,
+                "rule_name": "Manual Hold Release"
+            }
+        )
+        db.add(log_entry)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Hold released successfully from fulfillment order {fulfillment_order_id}",
+            "fulfillment_order": result["fulfillment_order"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error releasing hold from fulfillment order {fulfillment_order_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to release hold: {str(e)}"
+        )
+
+
+@app.post("/fulfillment-order-hold")
+async def apply_order_hold_query(
+    fulfillment_order_id: str = Query(..., description="Fulfillment Order ID (Shopify GID)"),
+    store_id: int = Query(..., description="Store ID"),
+    reason: str = Query(..., description="Hold reason (e.g., HIGH_RISK_OF_FRAUD, AWAITING_PAYMENT, etc.)"),
+    reason_notes: str = Query("", description="Additional notes about the hold"),
+    notify_merchant: bool = Query(True, description="Whether to notify the merchant"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Apply a hold to a fulfillment order using query parameters to avoid URL encoding issues with Shopify GIDs"""
+    try:
+        # Verify store ownership
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # Validate reason
+        valid_reasons = [
+            "AWAITING_PAYMENT",
+            "HIGH_RISK_OF_FRAUD",
+            "INCORRECT_ADDRESS",
+            "INVENTORY_OUT_OF_STOCK",
+            "AWAITING_RETURN_ITEMS",
+            "UNKNOWN_DELIVERY_DATE",
+            "OTHER"
+        ]
+        
+        if reason not in valid_reasons:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid hold reason. Must be one of: {', '.join(valid_reasons)}"
+            )
+        
+        # Apply the hold
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        result = await client.apply_fulfillment_hold(
+            fulfillment_order_id,
+            reason,
+            reason_notes,
+            notify_merchant
+        )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to apply hold: {result.get('errors', 'Unknown error')}"
+            )
+        
+        # Log the action
+        from models import OrderLog
+        log_entry = OrderLog(
+            user_id=current_user.id,
+            store_id=store.id,
+            order_id=result["fulfillment_order"]["id"] if result["fulfillment_order"] else None,
+            order_number=f"Fulfillment Order {fulfillment_order_id}",
+            action="fulfillment_hold_applied",
+            status="info",
+            details={
+                "fulfillment_order_id": fulfillment_order_id,
+                "hold_reason": reason,
+                "hold_notes": reason_notes,
+                "notify_merchant": notify_merchant,
+                "hold_id": result["hold"]["id"] if result["hold"] else None,
+                "rule_name": "Manual Hold"
+            }
+        )
+        db.add(log_entry)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Hold applied successfully to fulfillment order {fulfillment_order_id}",
+            "fulfillment_order": result["fulfillment_order"],
+            "hold": result["hold"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error applying hold to fulfillment order {fulfillment_order_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply hold: {str(e)}"
+        )
+
+
+@app.get("/debug/fraud-order/{analysis_id}")
+async def debug_fraud_order(
+    analysis_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to understand fraud analysis order data"""
+    try:
+        # Get fraud analysis
+        analysis = db.query(FraudAnalysis).filter(
+            FraudAnalysis.id == analysis_id,
+            FraudAnalysis.user_id == current_user.id
+        ).first()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fraud analysis not found"
+            )
+        
+        # Get store
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == analysis.store_id,
+            ShopifyStore.user_id == current_user.id
+        ).first()
+        
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+        
+        # Try to get order by different methods
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        
+        debug_info = {
+            "analysis_id": analysis_id,
+            "stored_order_id": analysis.shopify_order_id,
+            "order_name": analysis.order_name,
+            "store_id": analysis.store_id,
+            "store_name": store.shop_name,
+            "methods_tried": []
+        }
+        
+        # Method 1: Try with stored ID as-is
+        try:
+            order_1 = await client.get_order_by_id(analysis.shopify_order_id)
+            debug_info["methods_tried"].append({
+                "method": "stored_id_as_is",
+                "id_used": analysis.shopify_order_id,
+                "success": bool(order_1),
+                "order_status": order_1.get('displayFulfillmentStatus') if order_1 else None
+            })
+        except Exception as e:
+            debug_info["methods_tried"].append({
+                "method": "stored_id_as_is",
+                "id_used": analysis.shopify_order_id,
+                "success": False,
+                "error": str(e)
+            })
+        
+        # Method 2: Try with GID format
+        gid_format = f"gid://shopify/Order/{analysis.shopify_order_id}" if not analysis.shopify_order_id.startswith('gid://') else analysis.shopify_order_id
+        try:
+            order_2 = await client.get_order_by_id(gid_format)
+            debug_info["methods_tried"].append({
+                "method": "gid_format",
+                "id_used": gid_format,
+                "success": bool(order_2),
+                "order_status": order_2.get('displayFulfillmentStatus') if order_2 else None
+            })
+        except Exception as e:
+            debug_info["methods_tried"].append({
+                "method": "gid_format",
+                "id_used": gid_format,
+                "success": False,
+                "error": str(e)
+            })
+        
+        # Method 3: Try to find by name
+        try:
+            order_3 = await client.get_order_fraud_data(analysis.order_name)
+            debug_info["methods_tried"].append({
+                "method": "by_name",
+                "name_used": analysis.order_name,
+                "success": bool(order_3),
+                "found_id": order_3.get('order_info', {}).get('id') if order_3 else None
+            })
+        except Exception as e:
+            debug_info["methods_tried"].append({
+                "method": "by_name",
+                "name_used": analysis.order_name,
+                "success": False,
+                "error": str(e)
+            })
+        
+        return debug_info
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error debugging fraud order {analysis_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to debug fraud order: {str(e)}"
+        )
+
+
+# Task Status endpoints
+@app.get("/task-status/failed", response_model=FailedTasksResponse)
+async def get_failed_tasks(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=100),
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get failed tasks for the current user with pagination"""
+    query = db.query(TaskStatus).filter(
+        TaskStatus.user_id == current_user.id,
+        TaskStatus.status == "failed"
+    )
+    
+    # Apply search filter
+    if search:
+        query = query.filter(
+            (TaskStatus.task_name.contains(search)) |
+            (TaskStatus.error_message.contains(search))
+        )
+    
+    # Apply date filters
+    if date_from:
+        try:
+            from_date = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            query = query.filter(TaskStatus.created_at >= from_date)
+        except ValueError:
+            pass
+    
+    if date_to:
+        try:
+            to_date = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            query = query.filter(TaskStatus.created_at <= to_date)
+        except ValueError:
+            pass
+    
+    # Get total count
+    total = query.count()
+    
+    # Calculate pagination
+    pages = (total + per_page - 1) // per_page
+    offset = (page - 1) * per_page
+    
+    # Get tasks with pagination
+    tasks = query.order_by(TaskStatus.created_at.desc()).offset(offset).limit(per_page).all()
+    
+    # Convert to response format with timezone handling
+    task_responses = []
+    for task in tasks:
+        task_responses.append(TaskStatusResponse(
+            id=task.id,
+            user_id=task.user_id,
+            task_id=task.task_id,
+            task_name=task.task_name,
+            status=task.status,
+            result=task.result,
+            error_message=task.error_message,
+            started_at=_format_timestamp_with_user_timezone(task.started_at, current_user.id, db) if task.started_at else None,
+            completed_at=_format_timestamp_with_user_timezone(task.completed_at, current_user.id, db) if task.completed_at else None,
+            created_at=_format_timestamp_with_user_timezone(task.created_at, current_user.id, db)
+        ))
+    
+    return FailedTasksResponse(
+        tasks=task_responses,
+        total=total,
+        page=page,
+        per_page=per_page,
+        pages=pages
+    )
+
+@app.get("/task-status/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get details for a specific task"""
+    task = db.query(TaskStatus).filter(
+        TaskStatus.id == task_id,
+        TaskStatus.user_id == current_user.id
+    ).first()
+    
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    return TaskStatusResponse(
+        id=task.id,
+        user_id=task.user_id,
+        task_id=task.task_id,
+        task_name=task.task_name,
+        status=task.status,
+        result=task.result,
+        error_message=task.error_message,
+        started_at=_format_timestamp_with_user_timezone(task.started_at, current_user.id, db) if task.started_at else None,
+        completed_at=_format_timestamp_with_user_timezone(task.completed_at, current_user.id, db) if task.completed_at else None,
+        created_at=_format_timestamp_with_user_timezone(task.created_at, current_user.id, db)
+    )
+
+
+@app.delete("/task-status/{task_id}")
+async def clear_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Clear a specific task"""
+    task = db.query(TaskStatus).filter(
+        TaskStatus.id == task_id,
+        TaskStatus.user_id == current_user.id
+    ).first()
+    
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    db.delete(task)
+    db.commit()
+    
+    return {"message": "Task cleared successfully"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

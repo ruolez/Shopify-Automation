@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -21,6 +21,9 @@ class User(Base):
     settings = relationship("Settings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     location_aliases = relationship("LocationAlias", back_populates="user", cascade="all, delete-orphan")
     excluded_skus = relationship("ExcludedSKU", back_populates="user", cascade="all, delete-orphan")
+    fraud_analyses = relationship("FraudAnalysis", back_populates="user", cascade="all, delete-orphan")
+    fraud_detection_rules = relationship("FraudDetectionRule", back_populates="user", cascade="all, delete-orphan")
+    task_statuses = relationship("TaskStatus", back_populates="user", cascade="all, delete-orphan")
 
 class ShopifyStore(Base):
     __tablename__ = "shopify_stores"
@@ -39,6 +42,7 @@ class ShopifyStore(Base):
     user = relationship("User", back_populates="stores")
     order_logs = relationship("OrderLog", back_populates="store", cascade="all, delete-orphan")
     location_mappings = relationship("LocationMapping", back_populates="store", cascade="all, delete-orphan")
+    fraud_analyses = relationship("FraudAnalysis", back_populates="store", cascade="all, delete-orphan")
 
 class ProcessingRule(Base):
     __tablename__ = "processing_rules"
@@ -57,6 +61,24 @@ class ProcessingRule(Base):
     
     # Relationships
     user = relationship("User", back_populates="rules")
+
+class FraudDetectionRule(Base):
+    __tablename__ = "fraud_detection_rules"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    conditions = Column(JSON, nullable=False)  # Rule conditions as JSON
+    actions = Column(JSON, nullable=False)     # Actions to take as JSON
+    priority = Column(Integer, default=0)     # Higher number = higher priority
+    delay_ms = Column(Integer, default=10)    # Delay in milliseconds after rule execution
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User", back_populates="fraud_detection_rules")
 
 class OrderLog(Base):
     __tablename__ = "order_logs"
@@ -80,6 +102,7 @@ class TaskStatus(Base):
     __tablename__ = "task_status"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # nullable for backward compatibility
     task_id = Column(String, unique=True, nullable=False, index=True)
     task_name = Column(String, nullable=False)
     status = Column(String, nullable=False)  # pending, running, success, failed
@@ -88,6 +111,9 @@ class TaskStatus(Base):
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    user = relationship("User", back_populates="task_statuses")
 
 class Settings(Base):
     __tablename__ = "settings"
@@ -96,8 +122,12 @@ class Settings(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
     sync_frequency_minutes = Column(Integer, default=10)  # How often to sync orders
     auto_sync_enabled = Column(Boolean, default=True)
+    fraud_sync_enabled = Column(Boolean, default=True)  # Whether to run fraud detection independently
     log_retention_days = Column(Integer, default=30)
     sync_window_days = Column(Integer, default=7)  # How many days back to fetch orders during sync
+    duplicate_detection_days = Column(Integer, default=7)  # How many days to check for duplicate orders in fraud detection
+    fraud_sync_days = Column(Integer, default=7)  # Default days to look back when manually triggering fraud analysis
+    reconciliation_batch_size = Column(Integer, default=500)  # Number of fraud analyses to process per reconciliation run
     timezone = Column(String, default="UTC")  # User's preferred timezone
     date_format = Column(String, default="MMM d, yyyy HH:mm")  # User's preferred date format
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -261,3 +291,60 @@ class SystemSettings(Base):
     is_public = Column(Boolean, default=False)  # Whether regular users can see this setting
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class FraudAnalysis(Base):
+    __tablename__ = "fraud_analyses"
+    
+    # Core identification
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id"), nullable=False)
+    order_name = Column(String, nullable=False, index=True)
+    shopify_order_id = Column(String, nullable=False, index=True)
+    
+    # ALL 11 required fraud detection data points
+    is_first_time_customer = Column(Boolean)
+    order_total = Column(Numeric(12, 2))
+    transaction_attempts_count = Column(Integer)
+    customer_name = Column(String)
+    duplicate_within_7days = Column(Boolean)
+    previous_order_delivery_status = Column(String)
+    previous_order_total = Column(Numeric(12, 2))
+    current_order_total = Column(Numeric(12, 2))  # For comparison display
+    shopify_fraud_risk_level = Column(String)  # low/medium/high
+    customer_notes = Column(Text)
+    billing_address_outside_us = Column(Boolean)
+    same_billing_shipping = Column(Boolean)  # True if billing and shipping addresses match
+    shipping_state = Column(String)  # Shipping state/province in UPPERCASE
+    additional_details = Column(Text)  # Raw additional details from customAttributes
+    current_order_delivery_status = Column(String)  # Delivery tracking status for current order
+    days_since_last_delivery = Column(Integer)  # Number of days between current order and previous delivery
+    customer_total_orders = Column(Integer)  # Total number of orders the customer has placed
+    previous_order_cancelled = Column(Boolean)  # True if previous order was cancelled
+    
+    # Supporting data for analysis and fine-tuning
+    raw_shopify_data = Column(JSON)  # Complete order data from Shopify
+    duplicate_match_details = Column(JSON)  # What matched in duplicate detection
+    transaction_details = Column(JSON)  # All transaction information
+    risk_assessment_details = Column(JSON)  # Full Shopify risk analysis
+    customer_order_history = Column(JSON)  # Customer's order history
+    delivery_analytics = Column(JSON)  # Comprehensive delivery tracking analytics
+    
+    # Fraud rule processing tracking
+    rule_triggered_ids = Column(JSON)  # List of fraud detection rule IDs that were triggered
+    rule_processing_results = Column(JSON)  # Results and details of rule processing actions
+    
+    # Analysis metadata
+    analysis_timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    processing_time_seconds = Column(Numeric(8, 4))
+    analysis_version = Column(String, default="1.0")  # For tracking logic changes
+    
+    # Relationships
+    user = relationship("User", back_populates="fraud_analyses")
+    store = relationship("ShopifyStore", back_populates="fraud_analyses")
+    
+    # Index for efficient queries
+    __table_args__ = (
+        # Index for order-based queries
+        UniqueConstraint('store_id', 'order_name', name='unique_store_order_fraud_analysis'),
+    )

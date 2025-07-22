@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { adminApi } from '../utils/adminApi';
-import { formatFullDateTime } from '../utils/dateFormat';
+import React, { useState, useEffect, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { adminApi } from "../utils/adminApi";
+import { formatFullDateTime } from "../utils/dateFormat";
 
 interface DatabaseInfo {
   exists: boolean;
@@ -25,10 +25,10 @@ const AdminDatabase: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showConfirmRestore, setShowConfirmRestore] = useState(false);
-  const [confirmText, setConfirmText] = useState('');
+  const [confirmText, setConfirmText] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
@@ -42,8 +42,8 @@ const AdminDatabase: React.FC = () => {
       const info = await adminApi.getDatabaseInfo();
       setDbInfo(info);
     } catch (error) {
-      console.error('Failed to load database info:', error);
-      setError('Failed to load database information');
+      console.error("Failed to load database info:", error);
+      setError("Failed to load database information");
     } finally {
       setLoading(false);
     }
@@ -52,13 +52,16 @@ const AdminDatabase: React.FC = () => {
   const handleBackup = async () => {
     try {
       setDownloading(true);
-      setError('');
+      setError("");
       await adminApi.backupDatabase();
-      setSuccess('Database backup downloaded successfully');
+      setSuccess("Database backup downloaded successfully");
       // Reload info to update last backup timestamp
       await loadDatabaseInfo();
     } catch (error: any) {
-      setError('Failed to download backup: ' + (error.response?.data?.detail || 'Unknown error'));
+      setError(
+        "Failed to download backup: " +
+          (error.response?.data?.detail || "Unknown error"),
+      );
     } finally {
       setDownloading(false);
     }
@@ -67,48 +70,55 @@ const AdminDatabase: React.FC = () => {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (!file.name.endsWith('.db')) {
-        setError('Please select a valid database file (.db)');
+      if (!file.name.endsWith(".db")) {
+        setError("Please select a valid database file (.db)");
         return;
       }
       setSelectedFile(file);
-      setError('');
+      setError("");
       setShowConfirmRestore(true);
     }
   };
 
   const handleRestore = async () => {
-    if (!selectedFile || confirmText !== 'RESTORE') {
+    if (!selectedFile || confirmText !== "RESTORE") {
       return;
     }
 
     try {
       setUploading(true);
-      setError('');
+      setError("");
       setUploadProgress(0);
 
-      const result = await adminApi.restoreDatabase(selectedFile, (progress) => {
-        setUploadProgress(progress);
-      });
+      const result = await adminApi.restoreDatabase(
+        selectedFile,
+        (progress) => {
+          setUploadProgress(progress);
+        },
+      );
 
-      setSuccess(`Database restored successfully! ${result.details.users_restored} users, ${result.details.stores_restored} stores, and ${result.details.rules_restored} rules restored.`);
-      
+      setSuccess(
+        `Database restored successfully! ${result.details.users_restored} users, ${result.details.stores_restored} stores, and ${result.details.rules_restored} rules restored.`,
+      );
+
       // Clear form
       setSelectedFile(null);
       setShowConfirmRestore(false);
-      setConfirmText('');
+      setConfirmText("");
       if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+        fileInputRef.current.value = "";
       }
 
       // Redirect to login after 3 seconds
       setTimeout(() => {
-        localStorage.removeItem('admin_token');
-        navigate('/admin/login');
+        localStorage.removeItem("admin_token");
+        navigate("/admin/login");
       }, 3000);
-
     } catch (error: any) {
-      setError('Failed to restore database: ' + (error.response?.data?.detail || 'Unknown error'));
+      setError(
+        "Failed to restore database: " +
+          (error.response?.data?.detail || "Unknown error"),
+      );
       setUploading(false);
     }
   };
@@ -116,12 +126,12 @@ const AdminDatabase: React.FC = () => {
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith('.db')) {
+    if (file && file.name.endsWith(".db")) {
       setSelectedFile(file);
-      setError('');
+      setError("");
       setShowConfirmRestore(true);
     } else {
-      setError('Please drop a valid database file (.db)');
+      setError("Please drop a valid database file (.db)");
     }
   };
 
@@ -130,15 +140,15 @@ const AdminDatabase: React.FC = () => {
   };
 
   const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) return "0 Bytes";
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ["Bytes", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   const formatDate = (dateString: string) => {
-    return formatFullDateTime(dateString, 'UTC', 'MMM d, yyyy HH:mm:ss');
+    return formatFullDateTime(dateString, "UTC", "MMM d, yyyy HH:mm:ss");
   };
 
   if (loading) {
@@ -156,8 +166,12 @@ const AdminDatabase: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Database Management</h1>
-              <p className="text-sm text-gray-600">Backup and restore system data</p>
+              <h1 className="text-3xl font-bold text-gray-900">
+                Database Management
+              </h1>
+              <p className="text-sm text-gray-600">
+                Backup and restore system data
+              </p>
             </div>
             <Link
               to="/admin/dashboard"
@@ -200,20 +214,29 @@ const AdminDatabase: React.FC = () => {
                   </div>
                   <div>
                     <dt className="text-sm font-medium text-gray-500">Users</dt>
-                    <dd className="text-lg font-medium text-gray-900">{dbInfo.user_count}</dd>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {dbInfo.user_count}
+                    </dd>
                   </div>
                   <div>
-                    <dt className="text-sm font-medium text-gray-500">Stores</dt>
-                    <dd className="text-lg font-medium text-gray-900">{dbInfo.store_count}</dd>
+                    <dt className="text-sm font-medium text-gray-500">
+                      Stores
+                    </dt>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {dbInfo.store_count}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-sm font-medium text-gray-500">Rules</dt>
-                    <dd className="text-lg font-medium text-gray-900">{dbInfo.rule_count}</dd>
+                    <dd className="text-lg font-medium text-gray-900">
+                      {dbInfo.rule_count}
+                    </dd>
                   </div>
                 </div>
                 {dbInfo.last_backup && (
                   <div className="mt-4 text-sm text-gray-600">
-                    Last backup: {formatDate(dbInfo.last_backup.timestamp)} by {dbInfo.last_backup.by}
+                    Last backup: {formatDate(dbInfo.last_backup.timestamp)} by{" "}
+                    {dbInfo.last_backup.by}
                   </div>
                 )}
               </div>
@@ -227,14 +250,15 @@ const AdminDatabase: React.FC = () => {
                 Backup Database
               </h3>
               <p className="text-sm text-gray-600 mb-4">
-                Download a complete backup of the database including all users, stores, rules, and settings.
+                Download a complete backup of the database including all users,
+                stores, rules, and settings.
               </p>
               <button
                 onClick={handleBackup}
                 disabled={downloading}
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {downloading ? 'Downloading...' : 'Download Backup'}
+                {downloading ? "Downloading..." : "Download Backup"}
               </button>
             </div>
           </div>
@@ -246,9 +270,10 @@ const AdminDatabase: React.FC = () => {
                 Restore Database
               </h3>
               <p className="text-sm text-gray-600 mb-4">
-                Upload a previously downloaded backup to restore the system. This will replace all current data.
+                Upload a previously downloaded backup to restore the system.
+                This will replace all current data.
               </p>
-              
+
               {/* File Upload Area */}
               <div
                 onDrop={handleDrop}
@@ -269,7 +294,7 @@ const AdminDatabase: React.FC = () => {
                   />
                 </svg>
                 <p className="mt-2 text-sm text-gray-600">
-                  Drop database file here or{' '}
+                  Drop database file here or{" "}
                   <label className="text-blue-600 hover:text-blue-500 cursor-pointer">
                     browse
                     <input
@@ -283,7 +308,8 @@ const AdminDatabase: React.FC = () => {
                 </p>
                 {selectedFile && (
                   <p className="mt-2 text-sm text-gray-900">
-                    Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})
+                    Selected: {selectedFile.name} (
+                    {formatBytes(selectedFile.size)})
                   </p>
                 )}
               </div>
@@ -295,7 +321,8 @@ const AdminDatabase: React.FC = () => {
                     ⚠️ Warning: This action will replace all current data
                   </h4>
                   <p className="text-sm text-yellow-700 mb-4">
-                    You are about to restore from: <strong>{selectedFile.name}</strong>
+                    You are about to restore from:{" "}
+                    <strong>{selectedFile.name}</strong>
                   </p>
                   <p className="text-sm text-yellow-700 mb-4">
                     Type <strong>RESTORE</strong> to confirm:
@@ -310,18 +337,20 @@ const AdminDatabase: React.FC = () => {
                   <div className="flex space-x-3">
                     <button
                       onClick={handleRestore}
-                      disabled={confirmText !== 'RESTORE' || uploading}
+                      disabled={confirmText !== "RESTORE" || uploading}
                       className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {uploading ? `Uploading... ${uploadProgress}%` : 'Restore Database'}
+                      {uploading
+                        ? `Uploading... ${uploadProgress}%`
+                        : "Restore Database"}
                     </button>
                     <button
                       onClick={() => {
                         setShowConfirmRestore(false);
                         setSelectedFile(null);
-                        setConfirmText('');
+                        setConfirmText("");
                         if (fileInputRef.current) {
-                          fileInputRef.current.value = '';
+                          fileInputRef.current.value = "";
                         }
                       }}
                       disabled={uploading}

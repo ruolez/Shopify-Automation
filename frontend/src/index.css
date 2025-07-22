@@ -10,6 +10,28 @@
   * {
     @apply transition-colors duration-200;
   }
+  
+  /* Global focus styles reset */
+  *:focus {
+    outline: none !important;
+  }
+  
+  /* Remove default focus outlines and add consistent focus indicators */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [role="button"]:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible {
+    @apply outline-none ring-2 ring-shopify-500 ring-offset-2 ring-offset-white dark:ring-shopify-400 dark:ring-offset-dark-50;
+  }
+  
+  /* Special focus styles for specific elements */
+  input[type="checkbox"]:focus-visible,
+  input[type="radio"]:focus-visible {
+    @apply outline-none ring-2 ring-shopify-500 ring-offset-2 ring-offset-white dark:ring-shopify-400 dark:ring-offset-dark-50;
+  }
 }
 
 @layer components {
@@ -26,7 +48,7 @@
   }
   
   .input {
-    @apply block w-full rounded-lg border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:border-shopify-500 focus:ring-shopify-500 dark:focus:border-shopify-400 dark:focus:ring-shopify-400 sm:text-sm transition-colors duration-200;
+    @apply block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:ring-0 focus:border-gray-300 dark:focus:border-gray-600 sm:text-sm transition-colors duration-200;
   }
   
   .label {
@@ -54,11 +76,17 @@
     color: #f4f4f5 !important; /* dark-800 */
   }
   
+  /* Remove the old focus styles that were causing issues */
+  select:focus, 
+  input:focus, 
+  textarea:focus {
+    outline: none !important;
+  }
+  
   .dark select:focus, 
   .dark input:focus, 
   .dark textarea:focus {
-    border-color: #4dd0e1 !important; /* shopify-400 */
-    box-shadow: 0 0 0 1px #4dd0e1 !important;
+    outline: none !important;
   }
   
   /* Status badges */

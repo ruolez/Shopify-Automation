@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import api from '../utils/api';
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import api from "../utils/api";
 
 interface Settings {
   id: number;
@@ -22,24 +22,32 @@ interface SettingsContextType {
   refetchSettings: () => void;
 }
 
-const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
+const SettingsContext = createContext<SettingsContextType | undefined>(
+  undefined,
+);
 
 export const useSettings = () => {
   const context = useContext(SettingsContext);
   if (!context) {
-    throw new Error('useSettings must be used within a SettingsProvider');
+    throw new Error("useSettings must be used within a SettingsProvider");
   }
   return context;
 };
 
-export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [timezone, setTimezone] = useState('UTC');
-  const [dateFormat, setDateFormat] = useState('MMM d, yyyy HH:mm');
+export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [timezone, setTimezone] = useState("UTC");
+  const [dateFormat, setDateFormat] = useState("MMM d, yyyy HH:mm");
 
-  const { data: settings, isLoading, refetch } = useQuery<Settings>({
-    queryKey: ['user-settings'],
+  const {
+    data: settings,
+    isLoading,
+    refetch,
+  } = useQuery<Settings>({
+    queryKey: ["user-settings"],
     queryFn: async () => {
-      const response = await api.get('/settings');
+      const response = await api.get("/settings");
       return response.data;
     },
     staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
@@ -48,8 +56,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Update local state when settings are fetched
   useEffect(() => {
     if (settings) {
-      setTimezone(settings.timezone || 'UTC');
-      setDateFormat(settings.date_format || 'MMM d, yyyy HH:mm');
+      setTimezone(settings.timezone || "UTC");
+      setDateFormat(settings.date_format || "MMM d, yyyy HH:mm");
     }
   }, [settings]);
 

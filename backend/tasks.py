@@ -3,14 +3,18 @@ from celery.schedules import crontab
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
+import pytz
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
-from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, FraudAnalysis
 from shopify_client import ShopifyClient
+from enhanced_shopify_client import EnhancedShopifyClient
 from rule_engine import RuleEngine
+from fraud_service import FraudAnalysisService
+from fraud_rule_processor import process_fraud_rules_for_order_async
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,9 +44,17 @@ celery.conf.beat_schedule = {
         'task': 'tasks.process_all_orders_if_enabled',
         'schedule': crontab(minute='*'),  # Check every minute if sync should run
     },
+    'process-fraud-detection': {
+        'task': 'tasks.process_fraud_detection_if_enabled',
+        'schedule': crontab(minute='*'),  # Check every minute if fraud detection should run
+    },
     'cleanup-old-logs': {
         'task': 'tasks.cleanup_old_logs',
         'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
+    'archive-fraud-analyses': {
+        'task': 'tasks.archive_fulfilled_fraud_analyses',
+        'schedule': crontab(minute=0),  # Every hour
     },
 }
 
@@ -493,17 +505,27 @@ def resolve_location_alias(alias_name: str, store_id: int, db: Session) -> str |
     
     return mapping.shopify_location_id if mapping else None
 
-def create_task_status(task_id: str, task_name: str, status: str = "pending"):
+def create_task_status(task_id: str, task_name: str, status: str = "pending", user_id: int = None):
     """Create task status record"""
     db = get_db()
     try:
-        task_status = TaskStatus(
-            task_id=task_id,
-            task_name=task_name,
-            status=status,
-            started_at=datetime.utcnow() if status == "running" else None
-        )
-        db.add(task_status)
+        # Check if task already exists
+        existing_task = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+        if existing_task:
+            logger.warning(f"Task {task_id} already exists, updating status instead")
+            existing_task.status = status
+            existing_task.started_at = datetime.utcnow() if status == "running" else None
+            if user_id and not existing_task.user_id:
+                existing_task.user_id = user_id
+        else:
+            task_status = TaskStatus(
+                task_id=task_id,
+                task_name=task_name,
+                status=status,
+                user_id=user_id,
+                started_at=datetime.utcnow() if status == "running" else None
+            )
+            db.add(task_status)
         db.commit()
     except Exception as e:
         logger.error(f"Failed to create task status: {str(e)}")
@@ -527,6 +549,169 @@ def update_task_status(task_id: str, status: str, result: Dict = None, error_mes
     finally:
         db.close()
 
+def cleanup_stale_tasks(max_age_hours: int = 24) -> Dict[str, int]:
+    """Clean up stale tasks that are stuck in running state
+    
+    Args:
+        max_age_hours: Maximum age in hours for a running task before considering it stale
+        
+    Returns:
+        Dictionary with cleanup statistics
+    """
+    db = get_db()
+    try:
+        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        
+        # Find stale running tasks
+        stale_tasks = db.query(TaskStatus).filter(
+            TaskStatus.status == "running",
+            TaskStatus.started_at < cutoff_time
+        ).all()
+        
+        stale_count = len(stale_tasks)
+        
+        # Mark stale tasks as failed
+        for task in stale_tasks:
+            task.status = "failed"
+            task.error_message = f"Task marked as stale after {max_age_hours} hours"
+            task.completed_at = datetime.utcnow()
+            logger.warning(f"Marking stale task {task.task_id} ({task.task_name}) as failed - started at {task.started_at}")
+        
+        db.commit()
+        
+        logger.info(f"Cleaned up {stale_count} stale tasks")
+        
+        return {
+            "stale_tasks_cleaned": stale_count,
+            "cutoff_time": cutoff_time.isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to cleanup stale tasks: {str(e)}")
+        db.rollback()
+        return {
+            "stale_tasks_cleaned": 0,
+            "error": str(e)
+        }
+    finally:
+        db.close()
+
+async def _process_fraud_rules_for_order(
+    order_data: Dict[str, Any], 
+    store: ShopifyStore, 
+    db: Session, 
+    shopify_client = None,
+    order_created_at: str = None
+) -> Optional[Dict[str, Any]]:
+    """Process fraud detection rules for an order.
+    
+    This function is isolated from order processing rules to ensure it doesn't
+    affect the main order processing pipeline if it fails.
+    
+    Args:
+        order_data: Raw order data from Shopify
+        store: ShopifyStore instance
+        db: Database session
+        order_created_at: Order creation timestamp
+        
+    Returns:
+        Dictionary with fraud processing results or None if failed
+    """
+    # CRITICAL: Create a new database session for fraud processing to ensure isolation
+    fraud_db = SessionLocal()
+    
+    try:
+        order_name = order_data.get('name', 'Unknown')
+        logger.info(f"Starting fraud analysis and rule processing for order {order_name}")
+        
+        # Get user and store from fraud DB session
+        fraud_store = fraud_db.query(ShopifyStore).filter(ShopifyStore.id == store.id).first()
+        if not fraud_store:
+            logger.error(f"Store not found in fraud session for store {store.id}")
+            return None
+            
+        user = fraud_db.query(User).filter(User.id == fraud_store.user_id).first()
+        if not user:
+            logger.error(f"User not found for store {fraud_store.id}")
+            return None
+        
+        # First, run fraud analysis with isolated session
+        fraud_service = FraudAnalysisService(fraud_db, fraud_store, user)
+        fraud_analysis = fraud_service.analyze_order_fraud(order_data)
+        
+        if not fraud_analysis:
+            logger.warning(f"Fraud analysis failed for order {order_name}")
+            return {
+                "fraud_analysis_completed": False,
+                "fraud_rules_processed": False,
+                "error": "Fraud analysis failed"
+            }
+        
+        logger.info(f"Fraud analysis completed for order {order_name} (ID: {fraud_analysis.id})")
+        
+        # CRITICAL: Ensure fraud analysis is fully committed and refreshed before rule processing
+        fraud_db.commit()  # Ensure all changes are committed
+        fraud_db.refresh(fraud_analysis)  # Refresh to get latest data from DB
+        
+        logger.info(f"🔄 FRAUD ANALYSIS REFRESHED before rule processing:")
+        logger.info(f"  - duplicate_within_7days: {fraud_analysis.duplicate_within_7days}")
+        logger.info(f"  - customer_name: {fraud_analysis.customer_name}")
+        logger.info(f"  - is_first_time_customer: {fraud_analysis.is_first_time_customer}")
+        
+        # Then, run fraud detection rules
+        # Create shopify_client if not provided
+        if shopify_client is None:
+            from shopify_client import ShopifyClient
+            shopify_client = ShopifyClient(store.shop_domain, store.access_token)
+        
+        fraud_results = await process_fraud_rules_for_order_async(
+            fraud_db, user, fraud_store, shopify_client, order_data, fraud_analysis
+        )
+        
+        logger.info(f"Fraud rule processing completed for order {order_name}: "
+                   f"{fraud_results.get('rules_matched', 0)} rules matched, "
+                   f"{fraud_results.get('actions_executed', 0)} actions executed")
+        
+        return {
+            "fraud_analysis_completed": True,
+            "fraud_analysis_id": fraud_analysis.id,
+            "fraud_rules_processed": True,
+            "fraud_results": fraud_results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in fraud processing for order {order_data.get('name', 'Unknown')}: {str(e)}")
+        # Log the error but don't raise it - fraud processing should not break order processing
+        
+        try:
+            # Create error log entry
+            order_name = order_data.get('name', 'Unknown')
+            # Try to log error in main session, but don't fail if it doesn't work
+            try:
+                _log_order_action(
+                    db, store.user_id, store.id, order_data.get('id', ''),
+                    order_name, "fraud_processing_error", "error",
+                    error_message=str(e),
+                    order_created_at=order_created_at
+                )
+            except Exception as inner_log_error:
+                logger.error(f"Failed to log fraud processing error to main session: {str(inner_log_error)}")
+        except Exception as log_error:
+            logger.error(f"Failed to log fraud processing error: {str(log_error)}")
+        
+        return {
+            "fraud_analysis_completed": False,
+            "fraud_rules_processed": False,
+            "error": str(e)
+        }
+    finally:
+        # CRITICAL: Always close the isolated fraud session
+        try:
+            fraud_db.close()
+            logger.info("Closed isolated fraud processing database session")
+        except Exception as close_error:
+            logger.error(f"Error closing fraud database session: {str(close_error)}")
+
 @celery.task(bind=True)
 def test_celery_connection(self):
     """Test task to verify Celery is working"""
@@ -546,7 +731,7 @@ def test_celery_connection(self):
 def process_store_orders(self, user_id: int, store_id: int):
     """Process orders for a specific store"""
     task_id = self.request.id
-    create_task_status(task_id, "process_store_orders", "running")
+    create_task_status(task_id, "process_store_orders", "running", user_id=user_id)
     
     db = get_db()
     try:
@@ -647,10 +832,12 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     try:
         while True:
             # Fetch orders using the earlier cutoff date to ensure we get all relevant orders
+            # Include fraud data since we need it for fraud analysis after rule processing
             orders_data = await client.get_orders(
                 limit=50,
                 created_at_min=api_cutoff_date,
-                cursor=cursor
+                cursor=cursor,
+                include_fraud_data=True
             )
             
             orders = orders_data["edges"]
@@ -664,9 +851,13 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 order_created_at = order["createdAt"]
                 fulfillment_status = order.get("displayFulfillmentStatus", "")
                 
-                # First check: Only process orders with "UNFULFILLED" status
+                # First check: Only process orders with "UNFULFILLED" status (skip fulfilled and cancelled)
+                # Note: Cancelled orders have fulfillment status of "CANCELLED", not "UNFULFILLED"
                 if fulfillment_status != "UNFULFILLED":
-                    logger.debug(f"Order {order_number} has fulfillment status '{fulfillment_status}', skipping (only processing UNFULFILLED orders)")
+                    if fulfillment_status == "CANCELLED":
+                        logger.debug(f"Order {order_number} is cancelled, skipping")
+                    else:
+                        logger.debug(f"Order {order_number} has fulfillment status '{fulfillment_status}', skipping (only processing UNFULFILLED orders)")
                     continue
                 
                 # Second check: Skip if order was already processed (avoid duplicates)
@@ -717,8 +908,9 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             
                             # ALWAYS re-fetch order after a rule matches and executes (regardless of success/failure)
                             # This ensures the next rule sees any changes from this rule
+                            # Include fraud data for the fraud analysis that happens after all rules
                             logger.info(f"Re-fetching order {order_number} to get updated state after rule '{rule.name}'")
-                            refreshed_order = await client.get_order_by_id(order_id)
+                            refreshed_order = await client.get_order_by_id(order_id, include_fraud_data=True)
                             
                             if refreshed_order:
                                 current_order = refreshed_order
@@ -733,6 +925,19 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             # Delay to ensure Shopify has fully processed the changes
                             logger.info(f"Waiting {delay_ms}ms before next rule...")
                             await asyncio.sleep(delay_seconds)
+                    
+                    # CRITICAL: Ensure order state is fully committed before fraud processing
+                    db.commit()
+                    logger.info(f"Committed order changes for {order_number} before fraud processing")
+                    
+                    # Add small delay to ensure database propagation
+                    await asyncio.sleep(0.2)  # 200ms delay
+                    logger.info(f"Applied 200ms delay before fraud processing for order {order_number}")
+                    
+                    # Process fraud detection rules after order processing rules
+                    await _process_fraud_rules_for_order(
+                        current_order, store, db, client, order_created_at
+                    )
                     
                     # Mark order as processed
                     processed_order = ProcessedOrder(
@@ -1169,6 +1374,11 @@ def process_all_orders_if_enabled(self):
     """Check if auto-sync is enabled and process orders if needed"""
     db = get_db()
     try:
+        # Proactively clean up stale tasks before starting new ones
+        stale_cleanup_result = cleanup_stale_tasks(max_age_hours=12)
+        if stale_cleanup_result.get("stale_tasks_cleaned", 0) > 0:
+            logger.info(f"Cleaned up {stale_cleanup_result['stale_tasks_cleaned']} stale tasks before processing orders")
+        
         # Get all users with auto-sync enabled
         users_with_settings = db.query(User).join(Settings).filter(
             Settings.auto_sync_enabled == True
@@ -1203,6 +1413,54 @@ def process_all_orders_if_enabled(self):
         
     except Exception as e:
         logger.error(f"Failed to check auto-sync: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def process_fraud_detection_if_enabled(self):
+    """Check if fraud detection is enabled and process orders if needed"""
+    db = get_db()
+    try:
+        # Proactively clean up stale tasks before starting new ones
+        stale_cleanup_result = cleanup_stale_tasks(max_age_hours=12)
+        if stale_cleanup_result.get("stale_tasks_cleaned", 0) > 0:
+            logger.info(f"Cleaned up {stale_cleanup_result['stale_tasks_cleaned']} stale tasks before fraud detection")
+        
+        # Get all users with fraud sync enabled
+        users_with_settings = db.query(User).join(Settings).filter(
+            Settings.fraud_sync_enabled == True
+        ).all()
+        
+        for user in users_with_settings:
+            settings = user.settings
+            if not settings:
+                continue
+                
+            # Check if it's time to sync based on user's frequency setting
+            stores = db.query(ShopifyStore).filter(
+                ShopifyStore.user_id == user.id,
+                ShopifyStore.is_active == True
+            ).all()
+            
+            for store in stores:
+                # Check if last sync was longer ago than sync frequency
+                should_sync = False
+                if not store.last_sync:
+                    should_sync = True
+                else:
+                    time_since_sync = datetime.utcnow() - store.last_sync
+                    if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
+                        should_sync = True
+                
+                if should_sync:
+                    logger.info(f"Queueing fraud detection for store {store.shop_domain}")
+                    process_store_fraud_detection.delay(user.id, store.id)
+        
+        return {"message": "Fraud detection check completed"}
+        
+    except Exception as e:
+        logger.error(f"Failed to check fraud detection sync: {str(e)}")
         raise
     finally:
         db.close()
@@ -1247,19 +1505,253 @@ def process_all_orders(self):
         db.close()
 
 @celery.task(bind=True)
+def process_store_fraud_detection(self, user_id: int, store_id: int):
+    """Process fraud detection for a specific store independently"""
+    task_id = self.request.id
+    create_task_status(task_id, "process_store_fraud_detection", "running", user_id=user_id)
+    
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    db = get_db()
+    try:
+        # Get the store
+        store = db.query(ShopifyStore).filter(
+            ShopifyStore.id == store_id,
+            ShopifyStore.user_id == user_id
+        ).first()
+        
+        if not store:
+            raise ValueError(f"Store {store_id} not found for user {user_id}")
+        
+        # Get user settings
+        settings = db.query(Settings).filter(Settings.user_id == user_id).first()
+        if not settings:
+            settings = Settings(user_id=user_id)
+            db.add(settings)
+            db.commit()
+            db.refresh(settings)
+        
+        # Calculate date range for fetching orders
+        # For regular syncs, use a smaller window to avoid rate limiting
+        # Only look back further if store hasn't been synced in a while
+        end_date = datetime.utcnow()
+        
+        # Determine how far back to look
+        if not store.last_sync:
+            # First sync - look back duplicate_detection_days
+            fraud_sync_days = min(settings.duplicate_detection_days, 7)  # Cap at 7 days for initial sync
+        else:
+            # Regular sync - only look back since last sync + buffer
+            time_since_sync = end_date - store.last_sync
+            fraud_sync_days = min(
+                max(time_since_sync.days + 1, 1),  # At least 1 day, or days since last sync + 1
+                7  # Cap at 7 days to avoid rate limiting
+            )
+        
+        start_date = end_date - timedelta(days=fraud_sync_days)
+        
+        # Initialize Shopify client
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        
+        # Fetch recent orders with proper pagination
+        all_orders = []
+        cursor = None
+        orders_fetched = 0
+        
+        # Format dates for Shopify query
+        start_date_str = start_date.isoformat()
+        
+        # Limit total orders to process in a single run
+        max_orders = 125  # Process up to 125 orders per sync to avoid timeouts
+        
+        logger.info(f"Starting fraud detection sync for store {store.shop_domain}, looking back {fraud_sync_days} days")
+        
+        while orders_fetched < max_orders:
+            try:
+                # Use pageInfo for proper cursor-based pagination
+                orders_data = loop.run_until_complete(
+                    client.get_orders(
+                        created_at_min=start_date_str,
+                        limit=25,  # Shopify recommends smaller page sizes for better performance
+                        cursor=cursor,
+                        include_fraud_data=True
+                    )
+                )
+                
+                if not orders_data or "edges" not in orders_data:
+                    break
+                    
+                edges = orders_data["edges"]
+                if not edges:
+                    break
+                    
+                # Extract nodes from edges
+                new_orders = [edge["node"] for edge in edges]
+                all_orders.extend(new_orders)
+                orders_fetched += len(new_orders)
+                
+                # Check PageInfo for next page
+                page_info = orders_data.get("pageInfo", {})
+                has_next_page = page_info.get("hasNextPage", False)
+                
+                if has_next_page and orders_fetched < max_orders:
+                    # Use endCursor from pageInfo for next request
+                    cursor = page_info.get("endCursor")
+                    if not cursor:
+                        logger.warning("No endCursor found despite hasNextPage=True")
+                        break
+                    
+                    # Add delay between requests to respect rate limits
+                    # Shopify allows 2 requests per second for GraphQL Admin API
+                    loop.run_until_complete(asyncio.sleep(0.6))  # ~1.6 requests per second
+                else:
+                    break
+                    
+            except Exception as e:
+                error_str = str(e)
+                if "THROTTLED" in error_str or "MAX_COST_EXCEEDED" in error_str:
+                    logger.warning(f"Rate limited while fetching orders, stopping at {orders_fetched} orders")
+                    # Wait a bit before continuing with what we have
+                    loop.run_until_complete(asyncio.sleep(2))
+                    break
+                else:
+                    logger.error(f"Error fetching orders: {error_str}")
+                    raise
+        
+        logger.info(f"Fetched {len(all_orders)} orders for fraud detection from store {store.shop_domain} (using {fraud_sync_days} day window)")
+        
+        # Process each order for fraud detection only
+        processed_count = 0
+        skipped_fulfilled = 0
+        skipped_cancelled = 0
+        for order in all_orders:
+            try:
+                # Skip fulfilled and cancelled orders - only process UNFULFILLED orders
+                fulfillment_status = order.get("displayFulfillmentStatus", "")
+                if fulfillment_status != "UNFULFILLED":
+                    if fulfillment_status == "CANCELLED":
+                        logger.debug(f"Order {order.get('name')} is cancelled, skipping fraud detection")
+                        skipped_cancelled += 1
+                    else:
+                        logger.debug(f"Order {order.get('name')} has fulfillment status '{fulfillment_status}', skipping fraud detection (only processing UNFULFILLED orders)")
+                        skipped_fulfilled += 1
+                    continue
+                
+                # Check if we already have a fraud analysis for this order
+                order_id = order.get("id")
+                existing_analysis = db.query(FraudAnalysis).filter(
+                    FraudAnalysis.shopify_order_id == order_id,
+                    FraudAnalysis.store_id == store_id
+                ).first()
+                
+                # Skip if already analyzed AND rules have been processed
+                if existing_analysis and existing_analysis.rule_processing_results:
+                    logger.debug(f"Order {order.get('name')} already has fraud analysis with processed rules, skipping")
+                    continue
+                
+                # If existing analysis but no rule processing, just process rules
+                if existing_analysis and not existing_analysis.rule_processing_results:
+                    logger.info(f"Order {order.get('name')} has fraud analysis but no rule processing, processing rules now")
+                    # Get user
+                    user = db.query(User).filter(User.id == store.user_id).first()
+                    if user:
+                        # Process fraud rules for existing analysis
+                        from fraud_rule_processor import process_fraud_rules_for_order_async
+                        fraud_results = loop.run_until_complete(
+                            process_fraud_rules_for_order_async(
+                                db, user, store, client, order, existing_analysis
+                            )
+                        )
+                        if fraud_results and fraud_results.get('rules_matched', 0) > 0:
+                            processed_count += 1
+                    continue
+                
+                # Run full fraud analysis and rule processing for new orders
+                order_created_at = order.get("createdAt")
+                result = loop.run_until_complete(
+                    _process_fraud_rules_for_order(
+                        order, store, db, client, order_created_at
+                    )
+                )
+                
+                if result and result.get("fraud_analysis_completed"):
+                    processed_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Failed to process fraud detection for order {order.get('name', 'Unknown')}: {str(e)}")
+                continue
+        
+        # Update last sync time
+        store.last_sync = datetime.utcnow()
+        db.commit()
+        
+        update_task_status(task_id, "completed", result={
+            "store_id": store_id,
+            "orders_analyzed": processed_count,
+            "unfulfilled_orders": len(all_orders) - skipped_fulfilled - skipped_cancelled,
+            "fulfilled_orders_skipped": skipped_fulfilled,
+            "cancelled_orders_skipped": skipped_cancelled,
+            "total_orders": len(all_orders)
+        })
+        
+        logger.info(f"Completed fraud detection for store {store.shop_domain}: {processed_count} orders analyzed, {skipped_fulfilled} fulfilled orders skipped, {skipped_cancelled} cancelled orders skipped, {len(all_orders)} total orders fetched")
+        
+        return {
+            "store_id": store_id,
+            "orders_analyzed": processed_count,
+            "unfulfilled_orders": len(all_orders) - skipped_fulfilled - skipped_cancelled,
+            "fulfilled_orders_skipped": skipped_fulfilled,
+            "cancelled_orders_skipped": skipped_cancelled,
+            "total_orders": len(all_orders)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to process fraud detection for store {store_id}: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        loop.close()
+        db.close()
+
+@celery.task(bind=True)
 def cleanup_old_logs(self):
-    """Clean up old order logs and task status records"""
+    """Clean up old order logs, task status records, and archived fraud analyses"""
     task_id = self.request.id
     create_task_status(task_id, "cleanup_old_logs", "running")
     
     db = get_db()
     try:
-        # Delete logs older than 30 days
+        from fraud_archive_service import FraudArchiveService
+        
+        # Get all users to check their retention settings
+        all_users = db.query(User).all()
+        deleted_archived_analyses = {}
+        
+        # Clean up archived fraud analyses based on each user's retention settings
+        for user in all_users:
+            # Get user's retention settings
+            user_settings = db.query(Settings).filter(Settings.user_id == user.id).first()
+            retention_days = user_settings.log_retention_days if user_settings else 30
+            
+            # Delete old archived analyses for this user
+            archive_service = FraudArchiveService(db)
+            deleted_count = archive_service.cleanup_old_archived_analyses(user.id, retention_days)
+            
+            if deleted_count > 0:
+                deleted_archived_analyses[user.email] = deleted_count
+        
+        # Delete logs older than 30 days (default for system logs)
         cutoff_date = datetime.utcnow() - timedelta(days=30)
         
         deleted_logs = db.query(OrderLog).filter(
             OrderLog.created_at < cutoff_date
         ).delete()
+        
+        # Clean up stale running tasks first (before deleting old tasks)
+        stale_cleanup_result = cleanup_stale_tasks(max_age_hours=24)
+        stale_tasks_cleaned = stale_cleanup_result.get("stale_tasks_cleaned", 0)
         
         # Delete task status records older than 7 days
         task_cutoff = datetime.utcnow() - timedelta(days=7)
@@ -1272,6 +1764,9 @@ def cleanup_old_logs(self):
         result = {
             "deleted_logs": deleted_logs,
             "deleted_task_records": deleted_tasks,
+            "stale_tasks_cleaned": stale_tasks_cleaned,
+            "deleted_archived_analyses": deleted_archived_analyses,
+            "total_archived_analyses_deleted": sum(deleted_archived_analyses.values()),
             "cutoff_date": cutoff_date.isoformat()
         }
         
@@ -1322,6 +1817,88 @@ def test_store_connection(self, store_id: int):
             
     except Exception as e:
         logger.error(f"Store connection test failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()
+
+@celery.task(bind=True)
+def archive_fulfilled_fraud_analyses(self):
+    """Archive fraud analyses for orders that are fulfilled or cancelled"""
+    task_id = self.request.id
+    create_task_status(task_id, "archive_fulfilled_fraud_analyses", "running")
+    
+    db = get_db()
+    try:
+        from fraud_archive_service import FraudArchiveService
+        
+        # Get all users with fraud sync enabled
+        users_with_fraud_enabled = db.query(User).join(Settings).filter(
+            Settings.fraud_sync_enabled == True
+        ).all()
+        
+        if not users_with_fraud_enabled:
+            logger.info("No users with fraud sync enabled")
+            result = {"message": "No users with fraud sync enabled"}
+            update_task_status(task_id, "success", result)
+            return result
+        
+        # Archive analyses for each user
+        total_archived = 0
+        total_failed = 0
+        user_results = []
+        
+        # Run async archival for each user
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            archive_service = FraudArchiveService(db)
+            
+            for user in users_with_fraud_enabled:
+                try:
+                    logger.info(f"Archiving fraud analyses for user {user.id}")
+                    
+                    # Archive fulfilled and cancelled analyses
+                    archive_result = loop.run_until_complete(
+                        archive_service.archive_fulfilled_and_cancelled_analyses(user.id)
+                    )
+                    
+                    total_archived += archive_result["archived"]
+                    total_failed += archive_result["failed"]
+                    
+                    user_results.append({
+                        "user_id": user.id,
+                        "email": user.email,
+                        **archive_result
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error archiving for user {user.id}: {str(e)}")
+                    total_failed += 1
+                    user_results.append({
+                        "user_id": user.id,
+                        "email": user.email,
+                        "error": str(e)
+                    })
+        
+        finally:
+            loop.close()
+        
+        result = {
+            "total_archived": total_archived,
+            "total_failed": total_failed,
+            "users_processed": len(users_with_fraud_enabled),
+            "user_results": user_results
+        }
+        
+        update_task_status(task_id, "success", result)
+        logger.info(f"Archive task completed: {result}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Archive task failed: {str(e)}")
         update_task_status(task_id, "failed", error_message=str(e))
         raise
     finally:
@@ -1454,3 +2031,337 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
         "failed_count": failed_count,
         "total_count": len(order_ids)
     }
+
+
+@celery.task(bind=True)
+def trigger_fraud_analysis_all_recent(self, user_id: int, days_back: int = 7):
+    """Trigger fraud analysis for all recent orders across all user stores"""
+    task_id = self.request.id
+    create_task_status(task_id, "trigger_fraud_analysis", "running", user_id=user_id)
+    
+    db = get_db()
+    try:
+        # Get user and their stores
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        stores = db.query(ShopifyStore).filter(
+            ShopifyStore.user_id == user_id,
+            ShopifyStore.is_active == True
+        ).all()
+        
+        if not stores:
+            update_task_status(task_id, "completed", {"message": "No active stores found"})
+            return {"message": "No active stores found", "processed_count": 0}
+        
+        # Calculate date range using user's timezone
+        
+        # Get user's timezone settings
+        user_settings = db.query(Settings).filter(Settings.user_id == user_id).first()
+        user_timezone = user_settings.timezone if user_settings and user_settings.timezone else "UTC"
+        
+        # Calculate date range using user's timezone
+        user_tz = pytz.timezone(user_timezone)
+        now_user_tz = datetime.now(user_tz)
+        since_date_user_tz = now_user_tz - timedelta(days=days_back)
+        since_date = since_date_user_tz.astimezone(timezone.utc)
+        
+        logger.info(f"Using user timezone {user_timezone}: {days_back} days back from {now_user_tz.strftime('%Y-%m-%d %H:%M:%S %Z')} = {since_date.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        
+        total_processed = 0
+        total_failed = 0
+        store_results = []
+        
+        for store in stores:
+            try:
+                logger.info(f"Processing fraud analysis for store {store.shop_domain}")
+                
+                # Run async order processing
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    client = ShopifyClient(store.shop_domain, store.access_token)
+                    
+                    # Fetch ALL recent orders with fraud data using pagination
+                    all_orders = []
+                    cursor = None
+                    page_count = 0
+                    
+                    while True:
+                        page_count += 1
+                        logger.info(f"Fetching page {page_count} of orders for store {store.shop_domain}")
+                        
+                        orders_response = loop.run_until_complete(
+                            client.get_orders(
+                                limit=20,  # Reduced from 50 to stay under GraphQL cost limit when including fraud data
+                                created_at_min=since_date.isoformat(),
+                                cursor=cursor,
+                                include_fraud_data=True
+                            )
+                        )
+                        
+                        if not orders_response or "edges" not in orders_response:
+                            logger.warning(f"No orders found for store {store.shop_domain} on page {page_count}")
+                            break
+                        
+                        # Extract orders from current page
+                        page_orders = [edge["node"] for edge in orders_response["edges"]]
+                        all_orders.extend(page_orders)
+                        
+                        logger.info(f"Fetched {len(page_orders)} orders on page {page_count} (total so far: {len(all_orders)})")
+                        
+                        # Check if there are more pages
+                        page_info = orders_response.get("pageInfo", {})
+                        has_next_page = page_info.get("hasNextPage", False)
+                        
+                        if not has_next_page:
+                            logger.info(f"Completed pagination for store {store.shop_domain} - fetched {len(all_orders)} total orders across {page_count} pages")
+                            break
+                        
+                        cursor = page_info.get("endCursor")
+                        if not cursor:
+                            logger.warning(f"No endCursor found but hasNextPage=True for store {store.shop_domain}")
+                            break
+                    
+                    if not all_orders:
+                        logger.warning(f"No orders found for store {store.shop_domain}")
+                        continue
+                    
+                    # Process all fetched orders
+                    orders = all_orders
+                    store_processed = 0
+                    store_failed = 0
+                    
+                    for order in orders:
+                        try:
+                            # Check if fraud analysis already exists
+                            existing_analysis = db.query(FraudAnalysis).filter(
+                                FraudAnalysis.shopify_order_id == order["id"],
+                                FraudAnalysis.user_id == user_id
+                            ).first()
+                            
+                            if existing_analysis:
+                                logger.info(f"Fraud analysis already exists for order {order.get('name', order['id'])} - re-analyzing with fresh data")
+                                
+                                # Delete existing analysis to force fresh analysis
+                                db.delete(existing_analysis)
+                                db.commit()
+                                logger.info(f"Deleted existing fraud analysis for order {order.get('name')} to allow fresh analysis")
+                            
+                            # Run fraud analysis
+                            result = loop.run_until_complete(
+                                _process_fraud_rules_for_order(
+                                    order, store, db, client
+                                )
+                            )
+                            
+                            if result and result.get("fraud_analysis_completed"):
+                                store_processed += 1
+                                total_processed += 1
+                            else:
+                                store_failed += 1
+                                total_failed += 1
+                        
+                        except Exception as e:
+                            logger.error(f"Error processing fraud analysis for order {order.get('id')}: {str(e)}")
+                            store_failed += 1
+                            total_failed += 1
+                    
+                    store_results.append({
+                        "store_name": store.shop_domain,
+                        "processed": store_processed,
+                        "failed": store_failed
+                    })
+                    
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                logger.error(f"Error processing store {store.shop_domain}: {str(e)}")
+                store_results.append({
+                    "store_name": store.shop_domain,
+                    "processed": 0,
+                    "failed": 1,
+                    "error": str(e)
+                })
+                total_failed += 1
+        
+        result = {
+            "message": "Fraud analysis completed",
+            "processed_count": total_processed,
+            "failed_count": total_failed,
+            "stores": store_results,
+            "days_back": days_back
+        }
+        
+        update_task_status(task_id, "success", result)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Fraud analysis task failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()
+
+
+@celery.task(bind=True) 
+def reprocess_fraud_rules_recent(self, user_id: int, days_back: int = 7):
+    """Reprocess fraud rules for recent fraud analyses"""
+    task_id = self.request.id
+    create_task_status(task_id, "reprocess_fraud_rules", "running", user_id=user_id)
+    
+    db = get_db()
+    try:
+        # Get user and their stores
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Calculate date range using user's timezone
+        
+        # Get user's timezone settings
+        user_settings = db.query(Settings).filter(Settings.user_id == user_id).first()
+        user_timezone = user_settings.timezone if user_settings and user_settings.timezone else "UTC"
+        
+        # Calculate date range using user's timezone
+        user_tz = pytz.timezone(user_timezone)
+        now_user_tz = datetime.now(user_tz)
+        since_date_user_tz = now_user_tz - timedelta(days=days_back)
+        since_date = since_date_user_tz.astimezone(timezone.utc)
+        
+        # Get recent fraud analyses
+        fraud_analyses = db.query(FraudAnalysis).filter(
+            FraudAnalysis.user_id == user_id,
+            FraudAnalysis.analysis_timestamp >= since_date
+        ).all()
+        
+        if not fraud_analyses:
+            result = {"message": "No recent fraud analyses found", "processed_count": 0}
+            update_task_status(task_id, "success", result)
+            return result
+        
+        total_processed = 0
+        total_failed = 0
+        store_results = {}
+        
+        for analysis in fraud_analyses:
+            try:
+                # Get the store for this analysis
+                store = db.query(ShopifyStore).filter(
+                    ShopifyStore.id == analysis.store_id
+                ).first()
+                
+                if not store:
+                    logger.warning(f"Store not found for fraud analysis {analysis.id}")
+                    continue
+                
+                # Get the original order data
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    client = ShopifyClient(store.shop_domain, store.access_token)
+                    # Add global ID prefix if not already present
+                    order_id = analysis.shopify_order_id
+                    if not order_id.startswith('gid://'):
+                        order_id = f"gid://shopify/Order/{order_id}"
+                    
+                    order_data = loop.run_until_complete(
+                        client.get_order_by_id(order_id, include_fraud_data=True)
+                    )
+                    
+                    if not order_data:
+                        logger.warning(f"Order data not found for fraud analysis {analysis.id}")
+                        continue
+                    
+                    # Re-calculate duplicate detection with updated settings
+                    logger.info(f"Re-calculating duplicate detection for order {analysis.order_name}")
+                    
+                    # Refresh the database session to ensure we have the latest settings
+                    db.expire_all()
+                    db.commit()
+                    
+                    # Get fresh user settings
+                    fresh_settings = db.query(Settings).filter(Settings.user_id == user.id).first()
+                    logger.info(f"Using duplicate_detection_days: {fresh_settings.duplicate_detection_days if fresh_settings else 7}")
+                    
+                    from fraud_service import FraudAnalysisService
+                    fraud_service = FraudAnalysisService(db, store, user)
+                    
+                    # Update the duplicate detection field with new settings
+                    try:
+                        old_value = analysis.duplicate_within_7days
+                        updated_duplicate = fraud_service._check_duplicate_within_configurable_days(order_data)
+                        analysis.duplicate_within_7days = updated_duplicate
+                        db.commit()
+                        logger.info(f"Updated duplicate detection for order {analysis.order_name}: {old_value} -> {updated_duplicate}")
+                        
+                        # CRITICAL: Refresh the analysis object to ensure all changes are properly loaded
+                        db.refresh(analysis)
+                        logger.info(f"🔄 REFRESHED fraud analysis after duplicate update:")
+                        logger.info(f"  - duplicate_within_7days: {analysis.duplicate_within_7days}")
+                        logger.info(f"  - customer_name: {analysis.customer_name}")
+                        logger.info(f"  - is_first_time_customer: {analysis.is_first_time_customer}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to update duplicate detection for order {analysis.order_name}: {str(e)}")
+                        # Continue processing even if duplicate detection update fails
+                    
+                    # Refresh the analysis to ensure we have the latest data
+                    db.refresh(analysis)
+                    logger.info(f"Before rule processing - duplicate_within_7days: {analysis.duplicate_within_7days}")
+                    
+                    # Reprocess fraud rules
+                    from fraud_rule_processor import process_fraud_rules_for_order_async
+                    
+                    fraud_results = loop.run_until_complete(
+                        process_fraud_rules_for_order_async(
+                            db, user, store, client, order_data, analysis
+                        )
+                    )
+                    
+                    if fraud_results:
+                        total_processed += 1
+                        store_name = store.shop_domain
+                        if store_name not in store_results:
+                            store_results[store_name] = {"processed": 0, "failed": 0}
+                        store_results[store_name]["processed"] += 1
+                    else:
+                        total_failed += 1
+                        store_name = store.shop_domain
+                        if store_name not in store_results:
+                            store_results[store_name] = {"processed": 0, "failed": 0}
+                        store_results[store_name]["failed"] += 1
+                
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                logger.error(f"Error reprocessing fraud rules for analysis {analysis.id}: {str(e)}")
+                total_failed += 1
+                if store:
+                    store_name = store.shop_domain
+                    if store_name not in store_results:
+                        store_results[store_name] = {"processed": 0, "failed": 0}
+                    store_results[store_name]["failed"] += 1
+        
+        result = {
+            "message": "Fraud rule reprocessing completed",
+            "processed_count": total_processed,
+            "failed_count": total_failed,
+            "stores": [{"store_name": k, **v} for k, v in store_results.items()],
+            "days_back": days_back
+        }
+        
+        update_task_status(task_id, "success", result)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Fraud rule reprocessing task failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+    finally:
+        db.close()

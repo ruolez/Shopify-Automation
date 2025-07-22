@@ -210,7 +210,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --production          Run in production mode (default)"
             echo "  --development         Run in development mode"
             echo "  --clean               Clean installation (remove all previous data)"
-            echo "  --keep-db             Keep existing database during reinstall"
+            echo "  --keep-db             Keep existing database during reinstall (runs migrations)"
             echo "  --help, -h            Show this help message"
             echo ""
             echo "Examples:"
@@ -416,6 +416,40 @@ if [ -n "$RESTORE_DB_PATH" ]; then
     print_status "Restoring database from backup..."
     restore_database "$RESTORE_DB_PATH"
     print_success "Database restored from backup!"
+    
+    # Run migrations after restoring database
+    print_status "Checking for database migrations..."
+    docker exec shopify_api python run_all_migrations.py --check
+    if [ $? -ne 0 ]; then
+        print_status "Running pending migrations..."
+        docker exec shopify_api python run_all_migrations.py
+        if [ $? -eq 0 ]; then
+            print_success "Database migrations completed successfully!"
+        else
+            print_error "Database migrations failed! Check logs for details."
+            print_error "This could cause features like fraud detection to malfunction."
+            exit 1
+        fi
+    else
+        print_success "Database schema is up to date!"
+    fi
+elif [ "$KEEP_DATABASE" = "true" ]; then
+    # Database was preserved, check if migrations are needed
+    print_status "Checking existing database for required migrations..."
+    docker exec shopify_api python run_all_migrations.py --check
+    if [ $? -ne 0 ]; then
+        print_warning "Database schema needs updating. Running migrations..."
+        docker exec shopify_api python run_all_migrations.py
+        if [ $? -eq 0 ]; then
+            print_success "Database migrations completed successfully!"
+        else
+            print_error "Database migrations failed! Check logs for details."
+            print_error "This could cause features like fraud detection to malfunction."
+            exit 1
+        fi
+    else
+        print_success "Existing database schema is up to date!"
+    fi
 else
     print_status "Initializing database..."
     docker exec shopify_api python -c "
@@ -431,6 +465,55 @@ except Exception as e:
 
     if [ $? -eq 0 ]; then
         print_success "Database initialized successfully!"
+        
+        # For fresh installs, migrations are not needed as SQLAlchemy creates
+        # the complete schema with all columns. Mark all migrations as applied.
+        print_status "Marking all migrations as applied for fresh install..."
+        docker exec shopify_api python -c "
+import sqlite3
+from datetime import datetime
+
+# Connect to database
+conn = sqlite3.connect('/app/data/app.db')
+cursor = conn.cursor()
+
+# Create migration tracking table
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        migration_name TEXT PRIMARY KEY,
+        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+''')
+
+# Mark all migrations as applied for fresh install
+migrations = [
+    'add_delay_ms_to_rules',
+    'add_timezone_to_settings',
+    'add_fraud_sync_enabled',
+    'add_fraud_detection_rules',
+    'add_duplicate_detection_days_column',
+    'add_delivery_analytics_column',
+    'add_days_since_last_delivery_column',
+    'add_user_id_to_task_status',
+    'add_fraud_analyses_archive'
+]
+
+for migration in migrations:
+    cursor.execute(
+        'INSERT OR IGNORE INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)',
+        (migration, datetime.now())
+    )
+
+conn.commit()
+conn.close()
+print('All migrations marked as applied for fresh install.')
+"
+        if [ $? -eq 0 ]; then
+            print_success "Fresh install schema setup completed!"
+        else
+            print_error "Failed to mark migrations as applied!"
+            # Not critical - continue installation
+        fi
     else
         print_error "Database initialization failed!"
         exit 1
@@ -498,8 +581,18 @@ echo -e "  Password: ${YELLOW}admin${NC}"
 echo -e "  ${RED}⚠️  Change the admin password immediately after first login!${NC}"
 echo
 echo -e "${BLUE}Monitor services:${NC}"
-echo -e "  View logs:    ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
+echo -e "  View logs:      ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
 echo -e "  Service status: ${YELLOW}docker compose -f $COMPOSE_FILE ps${NC}"
+echo -e "  Schema version: ${YELLOW}docker exec shopify_api python check_schema_version.py${NC}"
+
+# Verify schema is up to date
+print_status "Verifying database schema..."
+docker exec shopify_api python run_all_migrations.py --check > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ Database schema is up to date${NC}"
+else
+    echo -e "${YELLOW}⚠ Database schema may need attention. Run: docker exec shopify_api python run_all_migrations.py${NC}"
+fi
 echo
 echo -e "${BLUE}Environment:${NC} ${YELLOW}$DEPLOYMENT_MODE${NC}"
 echo -e "${BLUE}Compose file:${NC} ${YELLOW}$COMPOSE_FILE${NC}"

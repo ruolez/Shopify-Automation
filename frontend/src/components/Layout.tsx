@@ -1,6 +1,6 @@
-import React from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import React from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import {
   HomeIcon,
   BuildingStorefrontIcon,
@@ -11,9 +11,10 @@ import {
   AdjustmentsHorizontalIcon,
   MapPinIcon,
   ChartBarIcon,
-} from '@heroicons/react/24/outline';
-import { useAuth } from '../contexts/AuthContext';
-import ThemeToggle from './ThemeToggle';
+  ShieldExclamationIcon,
+} from "@heroicons/react/24/outline";
+import { useAuth } from "../contexts/AuthContext";
+import ThemeToggle from "./ThemeToggle";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -25,18 +26,27 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
 
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: HomeIcon },
-    { name: 'Stores', href: '/stores', icon: BuildingStorefrontIcon },
-    { name: 'Rules', href: '/rules', icon: CogIcon },
-    { name: 'Locations', href: '/locations', icon: MapPinIcon },
-    { name: 'Order Logs', href: '/order-logs', icon: ClipboardDocumentListIcon },
-    { name: 'Reports', href: '/reports', icon: ChartBarIcon },
-    { name: 'Settings', href: '/settings', icon: AdjustmentsHorizontalIcon },
+    { name: "Dashboard", href: "/", icon: HomeIcon },
+    {
+      name: "Orders",
+      href: "/order-logs",
+      icon: ClipboardDocumentListIcon,
+    },
+    {
+      name: "Fraud Detection",
+      href: "/fraud-detection",
+      icon: ShieldExclamationIcon,
+    },
+    { name: "Rules", href: "/rules", icon: CogIcon },
+    { name: "Stores", href: "/stores", icon: BuildingStorefrontIcon },
+    { name: "Locations", href: "/locations", icon: MapPinIcon },
+    { name: "Reports", href: "/reports", icon: ChartBarIcon },
+    { name: "Settings", href: "/settings", icon: AdjustmentsHorizontalIcon },
   ];
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate("/login");
   };
 
   return (
@@ -61,13 +71,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to={item.href}
                   className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
                     isActive
-                      ? 'bg-shopify-100 dark:bg-shopify-800/30 text-shopify-900 dark:text-shopify-300 shadow-sm'
-                      : 'text-gray-600 dark:text-dark-500 hover:bg-gray-50 dark:hover:bg-dark-200 hover:text-gray-900 dark:hover:text-dark-700'
+                      ? "bg-shopify-100 dark:bg-shopify-800/30 text-shopify-900 dark:text-shopify-300 shadow-sm"
+                      : "text-gray-600 dark:text-dark-500 hover:bg-gray-50 dark:hover:bg-dark-200 hover:text-gray-900 dark:hover:text-dark-700"
                   }`}
                 >
                   <item.icon
                     className={`mr-3 h-6 w-6 flex-shrink-0 transition-colors ${
-                      isActive ? 'text-shopify-600 dark:text-shopify-400' : 'text-gray-400 dark:text-dark-400 group-hover:text-gray-500 dark:group-hover:text-dark-500'
+                      isActive
+                        ? "text-shopify-600 dark:text-shopify-400"
+                        : "text-gray-400 dark:text-dark-400 group-hover:text-gray-500 dark:group-hover:text-dark-500"
                     }`}
                   />
                   {item.name}
@@ -86,7 +98,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <p className="text-sm font-medium text-gray-900 dark:text-dark-800">
                   {user?.full_name}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-dark-400">{user?.email}</p>
+                <p className="text-xs text-gray-500 dark:text-dark-400">
+                  {user?.email}
+                </p>
               </div>
               <button
                 onClick={handleLogout}
@@ -103,10 +117,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Main content */}
       <div className="pl-64">
         {/* Top bar with theme toggle */}
-        <div className="flex justify-end items-center px-4 sm:px-6 lg:px-8 py-4">
+        <div className="flex justify-end items-center px-4 sm:px-6 lg:px-8 py-2">
           <ThemeToggle />
         </div>
-        <main className="py-4">
+        <main className="py-2">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}

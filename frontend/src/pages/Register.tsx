@@ -1,18 +1,18 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import toast from 'react-hot-toast';
-import { useAuth } from '../contexts/AuthContext';
-import { RegisterForm } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import toast from "react-hot-toast";
+import { useAuth } from "../contexts/AuthContext";
+import { RegisterForm } from "../types";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 const registerSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
-  full_name: z.string().min(2, 'Full name must be at least 2 characters'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  email: z.string().email("Please enter a valid email address"),
+  full_name: z.string().min(2, "Full name must be at least 2 characters"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 const Register: React.FC = () => {
@@ -31,9 +31,9 @@ const Register: React.FC = () => {
     setIsLoading(true);
     try {
       await registerUser(data.email, data.full_name, data.password);
-      toast.success('Account created successfully!');
+      toast.success("Account created successfully!");
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Registration failed');
+      toast.error(error.response?.data?.detail || "Registration failed");
     } finally {
       setIsLoading(false);
     }
@@ -52,7 +52,7 @@ const Register: React.FC = () => {
             Create your account
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-dark-500">
-            Or{' '}
+            Or{" "}
             <Link
               to="/login"
               className="font-medium text-shopify-600 hover:text-shopify-500"
@@ -69,13 +69,15 @@ const Register: React.FC = () => {
                 Full Name
               </label>
               <input
-                {...register('full_name')}
+                {...register("full_name")}
                 type="text"
                 className="input"
                 placeholder="Enter your full name"
               />
               {errors.full_name && (
-                <p className="mt-1 text-sm text-red-600">{errors.full_name.message}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.full_name.message}
+                </p>
               )}
             </div>
 
@@ -84,14 +86,16 @@ const Register: React.FC = () => {
                 Email Address
               </label>
               <input
-                {...register('email')}
+                {...register("email")}
                 type="email"
                 autoComplete="email"
                 className="input"
                 placeholder="Enter your email address"
               />
               {errors.email && (
-                <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.email.message}
+                </p>
               )}
             </div>
 
@@ -100,14 +104,16 @@ const Register: React.FC = () => {
                 Password
               </label>
               <input
-                {...register('password')}
+                {...register("password")}
                 type="password"
                 autoComplete="new-password"
                 className="input"
                 placeholder="Create a password"
               />
               {errors.password && (
-                <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.password.message}
+                </p>
               )}
             </div>
           </div>
@@ -118,7 +124,7 @@ const Register: React.FC = () => {
               disabled={isLoading}
               className="btn-primary w-full"
             >
-              {isLoading ? <LoadingSpinner size="sm" /> : 'Create Account'}
+              {isLoading ? <LoadingSpinner size="sm" /> : "Create Account"}
             </button>
           </div>
         </form>

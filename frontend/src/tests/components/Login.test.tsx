@@ -1,19 +1,19 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import Login from '../../pages/Login';
-import * as api from '../../utils/api';
-import { AuthProvider } from '../../contexts/AuthContext';
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { vi, describe, it, expect, beforeEach } from "vitest";
+import { BrowserRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import Login from "../../pages/Login";
+import * as api from "../../utils/api";
+import { AuthProvider } from "../../contexts/AuthContext";
 
 // Mock the API
-vi.mock('../../utils/api');
+vi.mock("../../utils/api");
 const mockApi = vi.mocked(api.default);
 
 // Mock react-router-dom
 const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom');
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
   return {
     ...actual,
     useNavigate: () => mockNavigate,
@@ -21,7 +21,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 // Mock react-hot-toast
-vi.mock('react-hot-toast', () => ({
+vi.mock("react-hot-toast", () => ({
   default: {
     success: vi.fn(),
     error: vi.fn(),
@@ -39,40 +39,40 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <AuthProvider>{children}</AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   );
 };
 
-describe('Login Component', () => {
+describe("Login Component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders login form', () => {
+  it("renders login form", () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
-    expect(screen.getByText('Sign in to your account')).toBeInTheDocument();
+    expect(screen.getByText("Sign in to your account")).toBeInTheDocument();
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /sign in/i }),
+    ).toBeInTheDocument();
   });
 
-  it('shows validation errors for empty fields', async () => {
+  it("shows validation errors for empty fields", async () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
-    const submitButton = screen.getByRole('button', { name: /sign in/i });
+    const submitButton = screen.getByRole("button", { name: /sign in/i });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
@@ -81,17 +81,17 @@ describe('Login Component', () => {
     });
   });
 
-  it('shows validation error for invalid email', async () => {
+  it("shows validation error for invalid email", async () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
     const emailInput = screen.getByLabelText(/email/i);
-    const submitButton = screen.getByRole('button', { name: /sign in/i });
+    const submitButton = screen.getByRole("button", { name: /sign in/i });
 
-    fireEvent.change(emailInput, { target: { value: 'invalid-email' } });
+    fireEvent.change(emailInput, { target: { value: "invalid-email" } });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
@@ -99,11 +99,11 @@ describe('Login Component', () => {
     });
   });
 
-  it('handles successful login', async () => {
+  it("handles successful login", async () => {
     const mockResponse = {
       data: {
-        access_token: 'mock-token',
-        token_type: 'bearer',
+        access_token: "mock-token",
+        token_type: "bearer",
       },
     };
 
@@ -112,30 +112,30 @@ describe('Login Component', () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
     const emailInput = screen.getByLabelText(/email/i);
     const passwordInput = screen.getByLabelText(/password/i);
-    const submitButton = screen.getByRole('button', { name: /sign in/i });
+    const submitButton = screen.getByRole("button", { name: /sign in/i });
 
-    fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
-    fireEvent.change(passwordInput, { target: { value: 'password123' } });
+    fireEvent.change(emailInput, { target: { value: "test@example.com" } });
+    fireEvent.change(passwordInput, { target: { value: "password123" } });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(mockApi.post).toHaveBeenCalledWith('/auth/login', {
-        username: 'test@example.com',
-        password: 'password123',
+      expect(mockApi.post).toHaveBeenCalledWith("/auth/login", {
+        username: "test@example.com",
+        password: "password123",
       });
     });
   });
 
-  it('handles login error', async () => {
+  it("handles login error", async () => {
     const mockError = {
       response: {
         data: {
-          detail: 'Invalid credentials',
+          detail: "Invalid credentials",
         },
       },
     };
@@ -145,15 +145,15 @@ describe('Login Component', () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
     const emailInput = screen.getByLabelText(/email/i);
     const passwordInput = screen.getByLabelText(/password/i);
-    const submitButton = screen.getByRole('button', { name: /sign in/i });
+    const submitButton = screen.getByRole("button", { name: /sign in/i });
 
-    fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
-    fireEvent.change(passwordInput, { target: { value: 'wrongpassword' } });
+    fireEvent.change(emailInput, { target: { value: "test@example.com" } });
+    fireEvent.change(passwordInput, { target: { value: "wrongpassword" } });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
@@ -161,15 +161,15 @@ describe('Login Component', () => {
     });
   });
 
-  it('has link to register page', () => {
+  it("has link to register page", () => {
     render(
       <TestWrapper>
         <Login />
-      </TestWrapper>
+      </TestWrapper>,
     );
 
     const registerLink = screen.getByText(/sign up/i);
     expect(registerLink).toBeInTheDocument();
-    expect(registerLink.closest('a')).toHaveAttribute('href', '/register');
+    expect(registerLink.closest("a")).toHaveAttribute("href", "/register");
   });
 });

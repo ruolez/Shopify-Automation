@@ -15,11 +15,16 @@ from database import SessionLocal, create_tables
 from models import AdminUser
 from admin_auth import get_admin_password_hash
 
-def create_default_admin():
+def create_default_admin(ensure_tables=True):
     """Create default admin user with credentials admin/admin"""
     
-    # Ensure tables are created
-    create_tables()
+    # Only create tables if explicitly requested (e.g., when run directly)
+    if ensure_tables:
+        try:
+            create_tables()
+        except Exception as e:
+            # Tables might already exist, which is fine
+            pass
     
     db = SessionLocal()
     try:
@@ -66,7 +71,8 @@ def create_default_admin():
 
 def create_initial_admin():
     """Alias for create_default_admin for backward compatibility"""
-    create_default_admin()
+    # When called from install script, tables are already created
+    create_default_admin(ensure_tables=False)
 
 if __name__ == "__main__":
     create_default_admin()

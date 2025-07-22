@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { adminApi, AdminUser, SystemStats } from '../utils/adminApi';
+import React, { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { adminApi, AdminUser, SystemStats } from "../utils/adminApi";
 
 const AdminDashboard: React.FC = () => {
   const [stats, setStats] = useState<SystemStats | null>(null);
@@ -8,11 +8,11 @@ const AdminDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: ''
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
   });
-  const [passwordError, setPasswordError] = useState('');
+  const [passwordError, setPasswordError] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -24,38 +24,47 @@ const AdminDashboard: React.FC = () => {
       setLoading(true);
       const [statsData, userData] = await Promise.all([
         adminApi.getStats(),
-        adminApi.getMe()
+        adminApi.getMe(),
       ]);
       setStats(statsData);
       setAdminUser(userData);
     } catch (error) {
-      console.error('Failed to load dashboard data:', error);
+      console.error("Failed to load dashboard data:", error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('admin_token');
-    navigate('/admin/login');
+    localStorage.removeItem("admin_token");
+    navigate("/admin/login");
   };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPasswordError('');
+    setPasswordError("");
 
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setPasswordError('New passwords do not match');
+      setPasswordError("New passwords do not match");
       return;
     }
 
     try {
-      await adminApi.changePassword(passwordForm.currentPassword, passwordForm.newPassword);
+      await adminApi.changePassword(
+        passwordForm.currentPassword,
+        passwordForm.newPassword,
+      );
       setShowPasswordChange(false);
-      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      alert('Password changed successfully');
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      alert("Password changed successfully");
     } catch (error: any) {
-      setPasswordError(error.response?.data?.detail || 'Failed to change password');
+      setPasswordError(
+        error.response?.data?.detail || "Failed to change password",
+      );
     }
   };
 
@@ -74,7 +83,9 @@ const AdminDashboard: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
+              <h1 className="text-3xl font-bold text-gray-900">
+                Admin Dashboard
+              </h1>
               <p className="text-sm text-gray-600">Shopify Automation System</p>
             </div>
             <div className="flex items-center space-x-4">
@@ -114,7 +125,12 @@ const AdminDashboard: React.FC = () => {
                 placeholder="Current Password"
                 className="w-full p-2 border rounded"
                 value={passwordForm.currentPassword}
-                onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+                onChange={(e) =>
+                  setPasswordForm((prev) => ({
+                    ...prev,
+                    currentPassword: e.target.value,
+                  }))
+                }
                 required
               />
               <input
@@ -122,7 +138,12 @@ const AdminDashboard: React.FC = () => {
                 placeholder="New Password"
                 className="w-full p-2 border rounded"
                 value={passwordForm.newPassword}
-                onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+                onChange={(e) =>
+                  setPasswordForm((prev) => ({
+                    ...prev,
+                    newPassword: e.target.value,
+                  }))
+                }
                 required
                 minLength={8}
               />
@@ -131,7 +152,12 @@ const AdminDashboard: React.FC = () => {
                 placeholder="Confirm New Password"
                 className="w-full p-2 border rounded"
                 value={passwordForm.confirmPassword}
-                onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                onChange={(e) =>
+                  setPasswordForm((prev) => ({
+                    ...prev,
+                    confirmPassword: e.target.value,
+                  }))
+                }
                 required
               />
               <div className="flex space-x-2">
@@ -145,8 +171,12 @@ const AdminDashboard: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setShowPasswordChange(false);
-                    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                    setPasswordError('');
+                    setPasswordForm({
+                      currentPassword: "",
+                      newPassword: "",
+                      confirmPassword: "",
+                    });
+                    setPasswordError("");
                   }}
                   className="flex-1 bg-gray-300 text-gray-700 py-2 rounded hover:bg-gray-400"
                 >
@@ -168,8 +198,12 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex items-center">
                   <div className="w-0 flex-1">
                     <dl>
-                      <dt className="text-sm font-medium text-gray-500 truncate">Total Users</dt>
-                      <dd className="text-lg font-medium text-gray-900">{stats?.total_users}</dd>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Total Users
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {stats?.total_users}
+                      </dd>
                     </dl>
                   </div>
                   <div className="text-sm text-gray-500">
@@ -184,8 +218,12 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex items-center">
                   <div className="w-0 flex-1">
                     <dl>
-                      <dt className="text-sm font-medium text-gray-500 truncate">Connected Stores</dt>
-                      <dd className="text-lg font-medium text-gray-900">{stats?.total_stores}</dd>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Connected Stores
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {stats?.total_stores}
+                      </dd>
                     </dl>
                   </div>
                   <div className="text-sm text-gray-500">
@@ -200,8 +238,12 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex items-center">
                   <div className="w-0 flex-1">
                     <dl>
-                      <dt className="text-sm font-medium text-gray-500 truncate">Processing Rules</dt>
-                      <dd className="text-lg font-medium text-gray-900">{stats?.total_rules}</dd>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Processing Rules
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {stats?.total_rules}
+                      </dd>
                     </dl>
                   </div>
                   <div className="text-sm text-gray-500">
@@ -216,8 +258,12 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex items-center">
                   <div className="w-0 flex-1">
                     <dl>
-                      <dt className="text-sm font-medium text-gray-500 truncate">Processed Orders</dt>
-                      <dd className="text-lg font-medium text-gray-900">{stats?.total_processed_orders}</dd>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Processed Orders
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {stats?.total_processed_orders}
+                      </dd>
                     </dl>
                   </div>
                   <div className="text-sm text-gray-500">
@@ -231,7 +277,9 @@ const AdminDashboard: React.FC = () => {
           {/* Quick Actions */}
           <div className="bg-white shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Quick Actions</h3>
+              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
+                Quick Actions
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 <Link
                   to="/admin/users"
@@ -239,8 +287,12 @@ const AdminDashboard: React.FC = () => {
                 >
                   <div className="text-center">
                     <div className="text-2xl mb-2">👥</div>
-                    <div className="text-sm font-medium text-gray-900">Manage Users</div>
-                    <div className="text-xs text-gray-500">View and manage user accounts</div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Manage Users
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      View and manage user accounts
+                    </div>
                   </div>
                 </Link>
 
@@ -250,8 +302,12 @@ const AdminDashboard: React.FC = () => {
                 >
                   <div className="text-center">
                     <div className="text-2xl mb-2">🏪</div>
-                    <div className="text-sm font-medium text-gray-900">Store Management</div>
-                    <div className="text-xs text-gray-500">Monitor connected stores</div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Store Management
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Monitor connected stores
+                    </div>
                   </div>
                 </Link>
 
@@ -261,8 +317,12 @@ const AdminDashboard: React.FC = () => {
                 >
                   <div className="text-center">
                     <div className="text-2xl mb-2">⚙️</div>
-                    <div className="text-sm font-medium text-gray-900">Processing Rules</div>
-                    <div className="text-xs text-gray-500">View automation rules</div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Processing Rules
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      View automation rules
+                    </div>
                   </div>
                 </Link>
 
@@ -272,8 +332,12 @@ const AdminDashboard: React.FC = () => {
                 >
                   <div className="text-center">
                     <div className="text-2xl mb-2">📋</div>
-                    <div className="text-sm font-medium text-gray-900">System Logs</div>
-                    <div className="text-xs text-gray-500">Monitor system activity</div>
+                    <div className="text-sm font-medium text-gray-900">
+                      System Logs
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Monitor system activity
+                    </div>
                   </div>
                 </Link>
 
@@ -283,8 +347,12 @@ const AdminDashboard: React.FC = () => {
                 >
                   <div className="text-center">
                     <div className="text-2xl mb-2">💾</div>
-                    <div className="text-sm font-medium text-gray-900">Database Management</div>
-                    <div className="text-xs text-gray-500">Backup and restore system data</div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Database Management
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Backup and restore system data
+                    </div>
                   </div>
                 </Link>
               </div>
@@ -294,9 +362,15 @@ const AdminDashboard: React.FC = () => {
           {/* Recent Activity */}
           <div className="mt-8 bg-white shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Recent Registrations</h3>
-              <div className="text-3xl font-bold text-blue-600">{stats?.recent_registrations}</div>
-              <div className="text-sm text-gray-500">New users in the last 7 days</div>
+              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
+                Recent Registrations
+              </h3>
+              <div className="text-3xl font-bold text-blue-600">
+                {stats?.recent_registrations}
+              </div>
+              <div className="text-sm text-gray-500">
+                New users in the last 7 days
+              </div>
             </div>
           </div>
         </div>

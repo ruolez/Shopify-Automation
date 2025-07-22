@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { adminApi, UserManagement } from '../utils/adminApi';
-import { formatShortDate } from '../utils/dateFormat';
+import React, { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { adminApi, UserManagement } from "../utils/adminApi";
+import { formatShortDate } from "../utils/dateFormat";
 
 const AdminUsers: React.FC = () => {
   const [users, setUsers] = useState<UserManagement[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   useEffect(() => {
     loadUsers();
@@ -18,8 +18,8 @@ const AdminUsers: React.FC = () => {
       const userData = await adminApi.getUsers();
       setUsers(userData);
     } catch (error) {
-      console.error('Failed to load users:', error);
-      setError('Failed to load users');
+      console.error("Failed to load users:", error);
+      setError("Failed to load users");
     } finally {
       setLoading(false);
     }
@@ -30,21 +30,31 @@ const AdminUsers: React.FC = () => {
       await adminApi.toggleUserActive(userId);
       await loadUsers(); // Refresh the list
     } catch (error: any) {
-      alert('Failed to toggle user status: ' + (error.response?.data?.detail || 'Unknown error'));
+      alert(
+        "Failed to toggle user status: " +
+          (error.response?.data?.detail || "Unknown error"),
+      );
     }
   };
 
   const handleDeleteUser = async (userId: number, userEmail: string) => {
-    if (!confirm(`Are you sure you want to delete user "${userEmail}"? This action cannot be undone.`)) {
+    if (
+      !confirm(
+        `Are you sure you want to delete user "${userEmail}"? This action cannot be undone.`,
+      )
+    ) {
       return;
     }
 
     try {
       await adminApi.deleteUser(userId);
       await loadUsers(); // Refresh the list
-      alert('User deleted successfully');
+      alert("User deleted successfully");
     } catch (error: any) {
-      alert('Failed to delete user: ' + (error.response?.data?.detail || 'Unknown error'));
+      alert(
+        "Failed to delete user: " +
+          (error.response?.data?.detail || "Unknown error"),
+      );
     }
   };
 
@@ -65,8 +75,12 @@ const AdminUsers: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
-              <p className="text-sm text-gray-600">Manage user accounts and permissions</p>
+              <h1 className="text-3xl font-bold text-gray-900">
+                User Management
+              </h1>
+              <p className="text-sm text-gray-600">
+                Manage user accounts and permissions
+              </p>
             </div>
             <Link
               to="/admin/dashboard"
@@ -126,24 +140,29 @@ const AdminUsers: React.FC = () => {
                     <tr key={user.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">{user.full_name}</div>
-                          <div className="text-sm text-gray-500">{user.email}</div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {user.full_name}
+                          </div>
+                          <div className="text-sm text-gray-500">
+                            {user.email}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          user.is_active 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-red-100 text-red-800'
-                        }`}>
-                          {user.is_active ? 'Active' : 'Inactive'}
+                        <span
+                          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            user.is_active
+                              ? "bg-green-100 text-green-800"
+                              : "bg-red-100 text-red-800"
+                          }`}
+                        >
+                          {user.is_active ? "Active" : "Inactive"}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {user.last_activity 
-                          ? formatShortDate(user.last_activity, 'UTC')
-                          : 'Never'
-                        }
+                        {user.last_activity
+                          ? formatShortDate(user.last_activity, "UTC")
+                          : "Never"}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <div className="flex space-x-4">
@@ -152,7 +171,7 @@ const AdminUsers: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatShortDate(user.created_at, 'UTC')}
+                        {formatShortDate(user.created_at, "UTC")}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex space-x-2">
@@ -160,14 +179,16 @@ const AdminUsers: React.FC = () => {
                             onClick={() => handleToggleActive(user.id)}
                             className={`px-3 py-1 rounded text-xs ${
                               user.is_active
-                                ? 'bg-red-100 text-red-800 hover:bg-red-200'
-                                : 'bg-green-100 text-green-800 hover:bg-green-200'
+                                ? "bg-red-100 text-red-800 hover:bg-red-200"
+                                : "bg-green-100 text-green-800 hover:bg-green-200"
                             }`}
                           >
-                            {user.is_active ? 'Deactivate' : 'Activate'}
+                            {user.is_active ? "Deactivate" : "Activate"}
                           </button>
                           <button
-                            onClick={() => handleDeleteUser(user.id, user.email)}
+                            onClick={() =>
+                              handleDeleteUser(user.id, user.email)
+                            }
                             className="px-3 py-1 rounded text-xs bg-red-100 text-red-800 hover:bg-red-200"
                           >
                             Delete

@@ -21,7 +21,7 @@ export interface RuleCondition {
 }
 
 export interface RuleConditionGroup {
-  operator: 'AND' | 'OR';
+  operator: "AND" | "OR";
   conditions: RuleCondition[];
 }
 
@@ -121,6 +121,45 @@ export interface RuleForm {
   description?: string;
   conditions: RuleCondition[] | RuleConditionGroup;
   actions: RuleAction[];
+  priority: number;
+  delay_ms: number;
+  is_active: boolean;
+}
+
+// Fraud Rule Types
+export interface FraudRuleCondition {
+  field: string;
+  operator: string;
+  value: any;
+}
+
+export interface FraudRuleConditionGroup {
+  operator: "AND" | "OR";
+  conditions: FraudRuleCondition[];
+}
+
+export interface FraudRuleAction {
+  type: string;
+  parameters: Record<string, any>;
+}
+
+export interface FraudRule {
+  id: number;
+  name: string;
+  description?: string;
+  conditions: FraudRuleCondition[] | FraudRuleConditionGroup;
+  actions: FraudRuleAction[];
+  priority: number;
+  delay_ms: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface FraudRuleForm {
+  name: string;
+  description?: string;
+  conditions: FraudRuleCondition[] | FraudRuleConditionGroup;
+  actions: FraudRuleAction[];
   priority: number;
   delay_ms: number;
   is_active: boolean;

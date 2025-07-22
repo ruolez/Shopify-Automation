@@ -1,17 +1,17 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import toast from 'react-hot-toast';
-import { useAuth } from '../contexts/AuthContext';
-import { LoginForm } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import toast from "react-hot-toast";
+import { useAuth } from "../contexts/AuthContext";
+import { LoginForm } from "../types";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 const loginSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
-  password: z.string().min(1, 'Password is required'),
+  email: z.string().email("Please enter a valid email address"),
+  password: z.string().min(1, "Password is required"),
 });
 
 const Login: React.FC = () => {
@@ -30,9 +30,9 @@ const Login: React.FC = () => {
     setIsLoading(true);
     try {
       await login(data.email, data.password);
-      toast.success('Welcome back!');
+      toast.success("Welcome back!");
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Login failed');
+      toast.error(error.response?.data?.detail || "Login failed");
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +51,7 @@ const Login: React.FC = () => {
             Sign in to your account
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-dark-500">
-            Or{' '}
+            Or{" "}
             <Link
               to="/register"
               className="font-medium text-shopify-600 hover:text-shopify-500"
@@ -68,14 +68,16 @@ const Login: React.FC = () => {
                 Email address
               </label>
               <input
-                {...register('email')}
+                {...register("email")}
                 type="email"
                 autoComplete="email"
                 className="input rounded-t-md rounded-b-none"
                 placeholder="Email address"
               />
               {errors.email && (
-                <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.email.message}
+                </p>
               )}
             </div>
             <div>
@@ -83,14 +85,16 @@ const Login: React.FC = () => {
                 Password
               </label>
               <input
-                {...register('password')}
+                {...register("password")}
                 type="password"
                 autoComplete="current-password"
                 className="input rounded-b-md rounded-t-none"
                 placeholder="Password"
               />
               {errors.password && (
-                <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.password.message}
+                </p>
               )}
             </div>
           </div>
@@ -101,7 +105,7 @@ const Login: React.FC = () => {
               disabled={isLoading}
               className="btn-primary w-full"
             >
-              {isLoading ? <LoadingSpinner size="sm" /> : 'Sign in'}
+              {isLoading ? <LoadingSpinner size="sm" /> : "Sign in"}
             </button>
           </div>
         </form>

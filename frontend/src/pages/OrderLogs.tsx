@@ -75,7 +75,6 @@ const OrderLogs: React.FC = () => {
   const [sortField, setSortField] = useState<SortField>("latest_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [isAllResultsSelected, setIsAllResultsSelected] = useState<boolean>(false);
-  const [allResultsCount, setAllResultsCount] = useState<number>(0);
   const [showGlobalSelection, setShowGlobalSelection] = useState<boolean>(false);
 
   const queryClient = useQueryClient();
@@ -175,7 +174,6 @@ const OrderLogs: React.FC = () => {
     setSelectedOrders(new Set());
     setShowGlobalSelection(false);
     setIsAllResultsSelected(false);
-    setAllResultsCount(0);
   }, [
     searchQuery,
     statusFilter,
@@ -328,7 +326,6 @@ const OrderLogs: React.FC = () => {
       setSelectedRule("");
       setShowGlobalSelection(false);
       setIsAllResultsSelected(false);
-      setAllResultsCount(0);
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.detail || "Failed to retry orders");
@@ -355,10 +352,14 @@ const OrderLogs: React.FC = () => {
     }
   };
 
-  const getActionLabel = (action: string) => {
+  const getActionLabel = (action: string, log?: OrderLog) => {
+    const ruleName = log?.details?.rule_name;
+    
     if (action.startsWith("applied_rule_")) {
-      return "Applied Rule";
+      return ruleName ? `Applied Rule: ${ruleName}` : "Applied Rule";
     }
+    
+    // Handle actions that might have rule context
     switch (action) {
       case "no_rules_matched":
         return "No Rules Matched";
@@ -366,6 +367,16 @@ const OrderLogs: React.FC = () => {
         return "Processing Error";
       case "retry_processing":
         return "Retry Processing";
+      case "fulfillment_moved":
+        return ruleName ? `Fulfillment Moved (${ruleName})` : "Fulfillment Moved";
+      case "fulfillment_move_failed":
+        return ruleName ? `Fulfillment Move Failed (${ruleName})` : "Fulfillment Move Failed";
+      case "fulfillment_already_at_location":
+        return ruleName ? `Already at Location (${ruleName})` : "Already at Location";
+      case "tag_added":
+        return ruleName ? `Tag Added (${ruleName})` : "Tag Added";
+      case "tag_removed":
+        return ruleName ? `Tag Removed (${ruleName})` : "Tag Removed";
       default:
         return action;
     }
@@ -444,7 +455,6 @@ const OrderLogs: React.FC = () => {
       // Select all results globally
       if (allOrderIdsData) {
         setSelectedOrders(new Set(allOrderIdsData.order_ids));
-        setAllResultsCount(allOrderIdsData.total_count);
         setIsAllResultsSelected(true);
       }
     }
@@ -452,6 +462,15 @@ const OrderLogs: React.FC = () => {
 
   const handleRetryWithAllRules = () => {
     if (selectedOrders.size === 0) return;
+    
+    // Warn for large batches
+    if (selectedOrders.size > 100) {
+      const confirmed = window.confirm(
+        `You're about to retry ${selectedOrders.size} orders. This may take a while. Continue?`
+      );
+      if (!confirmed) return;
+    }
+    
     retryOrders.mutate({
       order_ids: Array.from(selectedOrders),
     });
@@ -459,6 +478,15 @@ const OrderLogs: React.FC = () => {
 
   const handleRetryWithSpecificRule = () => {
     if (selectedOrders.size === 0 || !selectedRule) return;
+    
+    // Warn for large batches
+    if (selectedOrders.size > 100) {
+      const confirmed = window.confirm(
+        `You're about to retry ${selectedOrders.size} orders. This may take a while. Continue?`
+      );
+      if (!confirmed) return;
+    }
+    
     retryOrders.mutate({
       order_ids: Array.from(selectedOrders),
       rule_id: parseInt(selectedRule),
@@ -514,6 +542,7 @@ const OrderLogs: React.FC = () => {
               <div className="space-y-1">
                 <select
                   id="date-filter"
+                  className="w-full rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm"
                   value={dateFilter}
                   onChange={(e) => {
                     setDateFilter(e.target.value);
@@ -523,7 +552,6 @@ const OrderLogs: React.FC = () => {
                     }
                     setPage(1);
                   }}
-                  className="input"
                 >
                   <option value="">All Time</option>
                   <option value="today">Today</option>
@@ -590,12 +618,12 @@ const OrderLogs: React.FC = () => {
               </label>
               <select
                 id="status-filter"
+                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
                 value={statusFilter}
                 onChange={(e) => {
                   setStatusFilter(e.target.value);
                   setPage(1);
                 }}
-                className="input"
               >
                 <option value="">All Statuses</option>
                 <option value="match">Match</option>
@@ -613,12 +641,12 @@ const OrderLogs: React.FC = () => {
               </label>
               <select
                 id="store-filter"
+                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
                 value={storeFilter}
                 onChange={(e) => {
                   setStoreFilter(e.target.value);
                   setPage(1);
                 }}
-                className="input"
               >
                 <option value="">All Stores</option>
                 {stores?.map((store: any) => (
@@ -638,12 +666,12 @@ const OrderLogs: React.FC = () => {
               </label>
               <select
                 id="rule-filter"
+                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
                 value={ruleFilter}
                 onChange={(e) => {
                   setRuleFilter(e.target.value);
                   setPage(1);
                 }}
-                className="input"
               >
                 <option value="">All Rules</option>
                 {rules?.map((rule: any) => (
@@ -677,25 +705,18 @@ const OrderLogs: React.FC = () => {
                             isAllResultsSelected
                           }
                           onChange={handleSelectAll}
-                          className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-shopify-600 border-gray-300 rounded focus:outline-none"
                         />
                         
                         {/* Compact selection display */}
-                        {showGlobalSelection && data?.pagination.total > groupedLogs.length ? (
+                        {showGlobalSelection && data?.pagination?.total && data.pagination.total > groupedLogs.length ? (
                           <div className="flex items-center space-x-1">
-                            <span className="text-xs text-gray-700 dark:text-dark-600">
-                              {isAllResultsSelected ? (
-                                <span>Select All ({allResultsCount})</span>
-                              ) : (
-                                <span>Select All ({groupedLogs.length})</span>
-                              )}
-                            </span>
                             {!isAllResultsSelected && (
                               <button
                                 onClick={handleGlobalSelection}
                                 className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
                               >
-                                All {data.pagination.total}
+                                All {data?.pagination?.total || 0}
                               </button>
                             )}
                             {isAllResultsSelected && (
@@ -707,11 +728,7 @@ const OrderLogs: React.FC = () => {
                               </button>
                             )}
                           </div>
-                        ) : (
-                          <span className="text-xs text-gray-700 dark:text-dark-600">
-                            Select All ({data?.pagination.total || 0})
-                          </span>
-                        )}
+                        ) : null}
                       </div>
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-dark-400 uppercase tracking-wider">
@@ -774,7 +791,7 @@ const OrderLogs: React.FC = () => {
                             type="checkbox"
                             checked={selectedOrders.has(group.order_id)}
                             onChange={() => handleSelectOrder(group.order_id)}
-                            className="h-4 w-4 text-shopify-600 focus:ring-shopify-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-shopify-600 border-gray-300 rounded focus:outline-none"
                           />
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-dark-800">
@@ -840,7 +857,7 @@ const OrderLogs: React.FC = () => {
                               -
                             </td>
                             <td className="px-6 py-2 text-xs text-gray-500 dark:text-dark-400">
-                              {getActionLabel(log.action)}
+                              {getActionLabel(log.action, log)}
                             </td>
                             <td className="px-6 py-2">
                               <div className="flex items-center">
@@ -903,7 +920,7 @@ const OrderLogs: React.FC = () => {
                   <button
                     onClick={handleRetryWithAllRules}
                     disabled={retryOrders.isPending}
-                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700 focus:outline-none disabled:opacity-50"
                   >
                     {retryOrders.isPending ? (
                       <LoadingSpinner size="sm" className="mr-2" />
@@ -918,7 +935,7 @@ const OrderLogs: React.FC = () => {
                   <select
                     value={selectedRule}
                     onChange={(e) => setSelectedRule(e.target.value)}
-                    className="block w-48 text-sm border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 rounded-md shadow-sm focus:border-shopify-500 focus:ring-shopify-500"
+                    className="block w-48 text-sm border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 rounded-md shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600"
                   >
                     <option value="">Select a specific rule...</option>
                     {rules?.map((rule: any) => (
@@ -931,7 +948,7 @@ const OrderLogs: React.FC = () => {
                   <button
                     onClick={handleRetryWithSpecificRule}
                     disabled={retryOrders.isPending || !selectedRule}
-                    className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm leading-4 font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-shopify-500 disabled:opacity-50"
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-dark-300 text-sm leading-4 font-medium rounded-md text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 focus:outline-none disabled:opacity-50"
                   >
                     {retryOrders.isPending ? (
                       <LoadingSpinner size="sm" className="mr-2" />

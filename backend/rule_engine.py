@@ -2,14 +2,17 @@ from typing import Dict, List, Any, Union
 import re
 import logging
 from datetime import datetime
-from models import ProcessingRule
+from decimal import Decimal
+from models import ProcessingRule, FraudAnalysis
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 class RuleEngine:
     """Engine for evaluating and applying order processing rules"""
     
-    def __init__(self):
+    def __init__(self, db_session: Session = None):
+        self.db_session = db_session
         self.operators = {
             "equals": self._equals,
             "not_equals": self._not_equals,
@@ -25,7 +28,14 @@ class RuleEngine:
             "not_in_list": self._not_in_list,
             "regex_match": self._regex_match,
             "is_empty": self._is_empty,
-            "is_not_empty": self._is_not_empty
+            "is_not_empty": self._is_not_empty,
+            # Fraud-specific operators
+            "risk_level_equals": self._risk_level_equals,
+            "delivery_status_contains": self._delivery_status_contains,
+            "fraud_boolean_equals": self._fraud_boolean_equals,
+            "fraud_ratio_greater_than": self._fraud_ratio_greater_than,
+            "fraud_ratio_less_than": self._fraud_ratio_less_than,
+            "multiple_greater_than": self._multiple_greater_than
         }
     
     def evaluate_rule(self, rule: ProcessingRule, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> bool:
@@ -100,8 +110,21 @@ class RuleEngine:
             # Get the actual value from the order
             actual_value = self._get_order_field_value(field, order, excluded_skus, store_context)
             
+            # CRITICAL DEBUG: Log condition evaluation for duplicate detection
+            if field == "duplicate_within_7days":
+                logger.info(f"🎯 CONDITION EVALUATION DEBUG - duplicate_within_7days:")
+                logger.info(f"  - Field: {field}")
+                logger.info(f"  - Operator: {operator}")
+                logger.info(f"  - Expected value: {expected_value} (type: {type(expected_value)})")
+                logger.info(f"  - Actual value: {actual_value} (type: {type(actual_value)})")
+                
+                # Fix boolean comparison for duplicate field
+                if isinstance(expected_value, str) and expected_value.lower() in ('true', 'false'):
+                    expected_value = expected_value.lower() == 'true'
+                    logger.info(f"  - Converted expected to boolean: {expected_value}")
+            
             # Convert expected value to uppercase for province/state/country fields to make comparison case-insensitive
-            if field in ["shipping_province", "shipping_country", "billing_province", "billing_country"]:
+            if field in ["shipping_province", "shipping_country", "billing_province", "billing_country", "shipping_state"]:
                 if isinstance(expected_value, str):
                     expected_value = expected_value.upper()
                 elif isinstance(expected_value, list):
@@ -133,7 +156,44 @@ class RuleEngine:
     def _get_order_field_value(self, field: str, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> Any:
         """Extract field value from order data"""
         try:
-            # Handle nested field access with dot notation
+            # Check if this is a fraud analysis field
+            fraud_fields = [
+                "first_time_customer", "transaction_attempts", "customer_name", "duplicate_within_7days",
+                "previous_order_delivery_status", "previous_order_total", "current_order_total",
+                "fraud_risk_level", "customer_notes", "billing_outside_us",
+                "same_billing_shipping", "shipping_state", "current_delivery_status",
+                "delivery_success_rate", "average_delivery_days", "total_orders", "delivered_orders",
+                "failed_deliveries", "fraud_analysis_id", "analysis_timestamp", "fraud_order_total_multiple",
+                "order_total", "order_name", "days_since_last_delivery", "customer_total_orders",
+                "previous_order_cancelled"  # Added new field for previous order cancellation status
+            ]
+            
+            if field in fraud_fields:
+                # This is fraud rule evaluation - order data is actually fraud analysis data
+                value = order.get(field)
+                
+                # CRITICAL DEBUG: Log duplicate detection field access
+                if field == "duplicate_within_7days":
+                    logger.info(f"🔍 RULE ENGINE DEBUG - Accessing duplicate_within_7days:")
+                    logger.info(f"  - Raw value from order data: {value}")
+                    logger.info(f"  - Type: {type(value)}")
+                    logger.info(f"  - Order name: {order.get('order_name', 'Unknown')}")
+                
+                if field == "shipping_state":
+                    logger.info(f"🔍 RULE ENGINE DEBUG - Accessing shipping_state:")
+                    logger.info(f"  - Raw value from order data: {value}")
+                    logger.info(f"  - Type: {type(value)}")
+                    logger.info(f"  - Order name: {order.get('order_name', 'Unknown')}")
+                
+                if field == "fraud_order_total_multiple":
+                    logger.info(f"Retrieved fraud_order_total_multiple: {value}")
+                
+                if field == "days_since_last_delivery":
+                    logger.info(f"Retrieved days_since_last_delivery: {value}")
+                
+                return value
+            
+            # Handle nested field access with dot notation for regular order fields
             parts = field.split(".")
             value = order
             
@@ -375,6 +435,10 @@ class RuleEngine:
                     total_qty += quantity
                 return total_qty
             
+            # Fraud-specific field extractors
+            elif field.startswith("fraud_"):
+                return self._get_fraud_field_value(field, order, store_context)
+            
             return value
             
         except Exception as e:
@@ -383,15 +447,48 @@ class RuleEngine:
     
     # Operator implementations
     def _equals(self, actual: Any, expected: Any) -> bool:
-        return actual == expected
+        # Special handling for boolean comparisons with string values
+        if isinstance(actual, bool) and isinstance(expected, str):
+            # Convert string boolean to actual boolean for comparison
+            if expected.lower() in ('true', '1', 'yes'):
+                expected = True
+            elif expected.lower() in ('false', '0', 'no'):
+                expected = False
+        elif isinstance(actual, str) and isinstance(expected, bool):
+            # Convert string boolean to actual boolean for comparison
+            if actual.lower() in ('true', '1', 'yes'):
+                actual = True
+            elif actual.lower() in ('false', '0', 'no'):
+                actual = False
+        
+        result = actual == expected
+        logger.info(f"Equals comparison: {actual} (type: {type(actual).__name__}) == {expected} (type: {type(expected).__name__}) = {result}")
+        return result
     
     def _not_equals(self, actual: Any, expected: Any) -> bool:
+        # Use the same boolean conversion logic as _equals
+        if isinstance(actual, bool) and isinstance(expected, str):
+            if expected.lower() in ('true', '1', 'yes'):
+                expected = True
+            elif expected.lower() in ('false', '0', 'no'):
+                expected = False
+        elif isinstance(actual, str) and isinstance(expected, bool):
+            if actual.lower() in ('true', '1', 'yes'):
+                actual = True
+            elif actual.lower() in ('false', '0', 'no'):
+                actual = False
+        
         return actual != expected
     
     def _greater_than(self, actual: Any, expected: Any) -> bool:
         try:
-            return float(actual) > float(expected)
-        except (TypeError, ValueError):
+            actual_value = float(actual)
+            expected_value = float(expected)
+            result = actual_value > expected_value
+            logger.info(f"Greater than comparison: {actual_value} > {expected_value} = {result}")
+            return result
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Greater than comparison failed: actual={actual}, expected={expected}, error={e}")
             return False
     
     def _less_than(self, actual: Any, expected: Any) -> bool:
@@ -462,9 +559,264 @@ class RuleEngine:
     def _is_not_empty(self, actual: Any, expected: Any) -> bool:
         return not self._is_empty(actual, expected)
 
+    # Fraud-specific operators
+    def _risk_level_equals(self, actual: Any, expected: str) -> bool:
+        """Compare fraud risk levels (case-insensitive)"""
+        if actual is None:
+            return False
+        return str(actual).upper() == str(expected).upper()
+    
+    def _delivery_status_contains(self, actual: Any, expected: str) -> bool:
+        """Check if delivery status contains a specific string (case-insensitive)"""
+        if actual is None:
+            return False
+        return str(expected).lower() in str(actual).lower()
+    
+    def _fraud_boolean_equals(self, actual: Any, expected: Any) -> bool:
+        """Compare boolean values with null safety"""
+        if actual is None:
+            return expected is None or expected == False
+        return bool(actual) == bool(expected)
+    
+    def _fraud_ratio_greater_than(self, actual: Any, expected: Any) -> bool:
+        """Compare ratios with null safety and decimal precision"""
+        try:
+            if actual is None:
+                return False
+            actual_decimal = Decimal(str(actual))
+            expected_decimal = Decimal(str(expected))
+            return actual_decimal > expected_decimal
+        except (TypeError, ValueError):
+            return False
+    
+    def _fraud_ratio_less_than(self, actual: Any, expected: Any) -> bool:
+        """Compare ratios with null safety and decimal precision"""
+        try:
+            if actual is None:
+                return False
+            actual_decimal = Decimal(str(actual))
+            expected_decimal = Decimal(str(expected))
+            return actual_decimal < expected_decimal
+        except (TypeError, ValueError):
+            return False
+
+    def _multiple_greater_than(self, actual: Any, expected: Any) -> bool:
+        """Compare order total multiple with null safety - returns False if no previous order"""
+        try:
+            if actual is None:
+                # No previous order or unable to calculate multiple - return False (ignore condition)
+                return False
+            actual_decimal = Decimal(str(actual))
+            expected_decimal = Decimal(str(expected))
+            return actual_decimal > expected_decimal
+        except (TypeError, ValueError):
+            return False
+
+    def _get_fraud_field_value(self, field: str, order: Dict[str, Any], store_context: Any = None) -> Any:
+        """Extract fraud analysis field values with null-safe fallbacks"""
+        try:
+            if not self.db_session:
+                logger.warning("No database session available for fraud field extraction")
+                return None
+            
+            # Get order information
+            order_info = order.get('order_info', {})
+            order_name = order_info.get('name', '') or order.get('name', '')
+            
+            if not order_name:
+                logger.warning("No order name found for fraud analysis lookup")
+                return None
+            
+            # Look up fraud analysis record
+            fraud_analysis = None
+            try:
+                fraud_analysis = self.db_session.query(FraudAnalysis).filter(
+                    FraudAnalysis.order_name == order_name
+                ).first()
+                
+                if not fraud_analysis:
+                    logger.warning(f"No fraud analysis found for order {order_name}")
+                    return self._get_fraud_field_fallback(field, order)
+                    
+            except Exception as e:
+                logger.error(f"Error querying fraud analysis for order {order_name}: {str(e)}")
+                return self._get_fraud_field_fallback(field, order)
+            
+            # Extract specific fraud fields with null-safe handling
+            try:
+                if field == "fraud_is_first_time_customer":
+                    return fraud_analysis.is_first_time_customer if fraud_analysis.is_first_time_customer is not None else True
+                
+                elif field == "fraud_duplicate_within_7days":
+                    return fraud_analysis.duplicate_within_7days if fraud_analysis.duplicate_within_7days is not None else False
+                
+                elif field == "fraud_billing_address_outside_us":
+                    return fraud_analysis.billing_address_outside_us if fraud_analysis.billing_address_outside_us is not None else False
+                
+                elif field == "fraud_shopify_fraud_risk_level":
+                    return fraud_analysis.shopify_fraud_risk_level or "UNKNOWN"
+                
+                elif field == "fraud_transaction_attempts_count":
+                    return fraud_analysis.transaction_attempts_count if fraud_analysis.transaction_attempts_count is not None else 0
+                
+                elif field == "fraud_age_checker_detected":
+                    return fraud_analysis.age_checker_detected if fraud_analysis.age_checker_detected is not None else False
+                
+                elif field == "fraud_same_billing_shipping":
+                    return fraud_analysis.same_billing_shipping if fraud_analysis.same_billing_shipping is not None else True
+                
+                elif field == "fraud_shipping_state":
+                    return fraud_analysis.shipping_state or None
+                
+                elif field == "fraud_previous_order_delivery_status":
+                    return fraud_analysis.previous_order_delivery_status or "Unknown"
+                
+                elif field == "fraud_current_order_total":
+                    if fraud_analysis.current_order_total is not None:
+                        return float(fraud_analysis.current_order_total)
+                    return 0.0
+                
+                elif field == "fraud_previous_order_total":
+                    if fraud_analysis.previous_order_total is not None:
+                        return float(fraud_analysis.previous_order_total)
+                    return 0.0
+                
+                elif field == "fraud_order_total_ratio":
+                    # Calculate ratio of current to previous order total
+                    current = fraud_analysis.current_order_total
+                    previous = fraud_analysis.previous_order_total
+                    
+                    if current is None or previous is None or previous == 0:
+                        return 1.0  # Default ratio when no comparison possible
+                    
+                    try:
+                        return float(current) / float(previous)
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        return 1.0
+
+                elif field == "fraud_order_total_multiple":
+                    # Calculate multiple of current order total vs previous order total
+                    current = fraud_analysis.current_order_total
+                    previous = fraud_analysis.previous_order_total
+                    
+                    # Return None if no previous order or previous order is 0/None
+                    # This will cause the condition to be ignored (return False)
+                    if previous is None or previous == 0 or current is None:
+                        logger.info(f"Order total multiple: No valid previous order total (current: {current}, previous: {previous})")
+                        return None
+                    
+                    try:
+                        multiple = float(current) / float(previous)
+                        logger.info(f"Order total multiple: {current} / {previous} = {multiple}")
+                        return multiple
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        logger.warning(f"Error calculating order total multiple (current: {current}, previous: {previous})")
+                        return None
+                
+                else:
+                    logger.warning(f"Unknown fraud field: {field}")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"Error extracting fraud field {field}: {str(e)}")
+                return self._get_fraud_field_fallback(field, order)
+            
+        except Exception as e:
+            logger.error(f"Error in fraud field extraction for {field}: {str(e)}")
+            return self._get_fraud_field_fallback(field, order)
+    
+    def _get_fraud_field_fallback(self, field: str, order: Dict[str, Any]) -> Any:
+        """Provide fallback values for fraud fields when fraud analysis is not available"""
+        try:
+            # Return safe default values that won't break rule evaluation
+            fallback_values = {
+                "fraud_is_first_time_customer": True,  # Conservative default
+                "fraud_duplicate_within_7days": False,
+                "fraud_billing_address_outside_us": False,
+                "fraud_shopify_fraud_risk_level": "UNKNOWN",
+                "fraud_transaction_attempts_count": 1,  # Assume at least one attempt
+                "fraud_age_checker_detected": False,
+                "fraud_same_billing_shipping": True,  # Conservative default
+                "fraud_shipping_state": None,
+                "fraud_previous_order_delivery_status": "Unknown",
+                "fraud_current_order_total": 0.0,
+                "fraud_previous_order_total": 0.0,
+                "fraud_order_total_ratio": 1.0,
+                "fraud_order_total_multiple": None  # No previous order data available
+            }
+            
+            fallback = fallback_values.get(field)
+            logger.info(f"Using fallback value for {field}: {fallback}")
+            return fallback
+            
+        except Exception as e:
+            logger.error(f"Error in fraud field fallback for {field}: {str(e)}")
+            return None
+
+    def process_fraud_actions(self, actions: List[Dict[str, Any]], order: Dict[str, Any], store_context: Any = None) -> List[Dict[str, Any]]:
+        """Process fraud-specific actions and return action results"""
+        try:
+            results = []
+            
+            for action in actions:
+                action_type = action.get("type")
+                action_value = action.get("value", "")
+                
+                try:
+                    if action_type == "flag_high_risk":
+                        # Add high-risk fraud tag
+                        tag_result = {
+                            "type": "add_tag",
+                            "value": action_value or "HIGH_FRAUD_RISK",
+                            "status": "success",
+                            "message": f"Added fraud flag tag: {action_value or 'HIGH_FRAUD_RISK'}"
+                        }
+                        results.append(tag_result)
+                    
+                    elif action_type == "add_custom_tag":
+                        # Add custom fraud-related tag
+                        if action_value:
+                            tag_result = {
+                                "type": "add_tag", 
+                                "value": action_value,
+                                "status": "success",
+                                "message": f"Added custom fraud tag: {action_value}"
+                            }
+                            results.append(tag_result)
+                        else:
+                            results.append({
+                                "type": "add_custom_tag",
+                                "status": "error", 
+                                "message": "Custom tag value cannot be empty"
+                            })
+                    
+                    else:
+                        # Pass through non-fraud actions unchanged
+                        results.append({
+                            "type": action_type,
+                            "value": action_value,
+                            "status": "passthrough",
+                            "message": f"Non-fraud action: {action_type}"
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing fraud action {action_type}: {str(e)}")
+                    results.append({
+                        "type": action_type,
+                        "status": "error",
+                        "message": f"Error processing action: {str(e)}"
+                    })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error processing fraud actions: {str(e)}")
+            return []
+
     def get_available_fields(self) -> List[Dict[str, str]]:
         """Get list of available order fields for rule creation"""
         return [
+            # Standard order fields
             {"field": "order_total", "label": "Order Total", "type": "number"},
             {"field": "order_weight", "label": "Total Weight (grams)", "type": "number"},
             {"field": "shipping_province", "label": "Shipping Province/State", "type": "string"},
@@ -480,13 +832,30 @@ class RuleEngine:
             {"field": "order_created_at", "label": "Order Created Date", "type": "datetime"},
             {"field": "line_item_count", "label": "Number of Line Items", "type": "number"},
             {"field": "total_quantity", "label": "Total Quantity", "type": "number"},
+            
+            # Fraud analysis fields
+            {"field": "fraud_is_first_time_customer", "label": "Fraud: Is First Time Customer", "type": "boolean"},
+            {"field": "fraud_duplicate_within_7days", "label": "Fraud: Duplicate Within 7 Days", "type": "boolean"},
+            {"field": "fraud_billing_address_outside_us", "label": "Fraud: Billing Address Outside US", "type": "boolean"},
+            {"field": "fraud_shopify_fraud_risk_level", "label": "Fraud: Shopify Risk Level", "type": "string"},
+            {"field": "fraud_transaction_attempts_count", "label": "Fraud: Transaction Attempts Count", "type": "number"},
+            {"field": "fraud_age_checker_detected", "label": "Fraud: Age Checker Detected", "type": "boolean"},
+            {"field": "fraud_same_billing_shipping", "label": "Fraud: Same Billing/Shipping Address", "type": "boolean"},
+            {"field": "fraud_shipping_state", "label": "Fraud: Shipping State", "type": "string"},
+            {"field": "fraud_previous_order_delivery_status", "label": "Fraud: Previous Order Delivery Status", "type": "string"},
+            {"field": "fraud_current_order_total", "label": "Fraud: Current Order Total", "type": "number"},
+            {"field": "fraud_previous_order_total", "label": "Fraud: Previous Order Total", "type": "number"},
+            {"field": "fraud_order_total_ratio", "label": "Fraud: Order Total Ratio (Current/Previous)", "type": "number"},
+            {"field": "fraud_order_total_multiple", "label": "Order Total Multiple (vs Previous Order)", "type": "number"},
+            {"field": "customer_total_orders", "label": "Customer Total Orders", "type": "number"},
         ]
     
     def get_available_operators(self) -> List[Dict[str, str]]:
         """Get list of available operators"""
         return [
-            {"operator": "equals", "label": "Equals", "types": ["string", "number"]},
-            {"operator": "not_equals", "label": "Not Equals", "types": ["string", "number"]},
+            # Standard operators
+            {"operator": "equals", "label": "Equals", "types": ["string", "number", "boolean"]},
+            {"operator": "not_equals", "label": "Not Equals", "types": ["string", "number", "boolean"]},
             {"operator": "greater_than", "label": "Greater Than", "types": ["number"]},
             {"operator": "less_than", "label": "Less Than", "types": ["number"]},
             {"operator": "greater_than_or_equal", "label": "Greater Than or Equal", "types": ["number"]},
@@ -500,4 +869,11 @@ class RuleEngine:
             {"operator": "regex_match", "label": "Regex Match", "types": ["string"]},
             {"operator": "is_empty", "label": "Is Empty", "types": ["string", "array"]},
             {"operator": "is_not_empty", "label": "Is Not Empty", "types": ["string", "array"]},
+            
+            # Fraud-specific operators
+            {"operator": "risk_level_equals", "label": "Risk Level Equals", "types": ["fraud_risk"]},
+            {"operator": "delivery_status_contains", "label": "Delivery Status Contains", "types": ["fraud_delivery"]},
+            {"operator": "fraud_ratio_greater_than", "label": "Fraud Ratio Greater Than", "types": ["fraud_ratio"]},
+            {"operator": "fraud_ratio_less_than", "label": "Fraud Ratio Less Than", "types": ["fraud_ratio"]},
+            {"operator": "multiple_greater_than", "label": "Multiple Greater Than", "types": ["number"]},
         ]

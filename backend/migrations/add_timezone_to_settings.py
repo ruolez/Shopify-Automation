@@ -41,6 +41,17 @@ def migrate_database():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # First check if settings table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='settings'
+        """)
+        if not cursor.fetchone():
+            logger.info("Settings table does not exist yet. This must be a fresh install.")
+            logger.info("Table will be created with timezone columns by SQLAlchemy.")
+            conn.close()
+            return True
+        
         # Check if columns already exist
         cursor.execute("PRAGMA table_info(settings)")
         columns = [row[1] for row in cursor.fetchall()]

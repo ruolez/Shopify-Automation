@@ -1,21 +1,26 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Dialog, Switch } from '@headlessui/react';
-import { PlusIcon, TrashIcon, XMarkIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import toast from 'react-hot-toast';
-import api from '../utils/api';
-import { Store, StoreForm } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
-import { formatShortDate } from '../utils/dateFormat';
-import { useTimezone } from '../contexts/TimezoneContext';
+import React, { useState } from "react";
+import { motion } from "framer-motion";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Dialog, Switch } from "@headlessui/react";
+import {
+  PlusIcon,
+  TrashIcon,
+  XMarkIcon,
+  ArrowPathIcon,
+} from "@heroicons/react/24/outline";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import toast from "react-hot-toast";
+import api from "../utils/api";
+import { Store, StoreForm } from "../types";
+import LoadingSpinner from "../components/LoadingSpinner";
+import { formatShortDate } from "../utils/dateFormat";
+import { useTimezone } from "../contexts/TimezoneContext";
 
 const storeSchema = z.object({
-  shop_domain: z.string().min(1, 'Shop domain is required'),
-  access_token: z.string().min(1, 'Access token is required'),
+  shop_domain: z.string().min(1, "Store name is required"),
+  access_token: z.string().min(1, "Access token is required"),
 });
 
 const Stores: React.FC = () => {
@@ -24,27 +29,27 @@ const Stores: React.FC = () => {
   const { timezone } = useTimezone();
 
   const { data: stores, isLoading } = useQuery<Store[]>({
-    queryKey: ['stores'],
+    queryKey: ["stores"],
     queryFn: async () => {
-      const response = await api.get('/stores');
+      const response = await api.get("/stores");
       return response.data;
     },
   });
 
   const createStoreMutation = useMutation({
     mutationFn: async (data: StoreForm) => {
-      const response = await api.post('/stores', data);
+      const response = await api.post("/stores", data);
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stores'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ["stores"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setIsModalOpen(false);
       reset();
-      toast.success('Store connected successfully!');
+      toast.success("Store connected successfully!");
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to connect store');
+      toast.error(error.response?.data?.detail || "Failed to connect store");
     },
   });
 
@@ -53,12 +58,12 @@ const Stores: React.FC = () => {
       await api.delete(`/stores/${storeId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stores'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
-      toast.success('Store removed successfully');
+      queryClient.invalidateQueries({ queryKey: ["stores"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      toast.success("Store removed successfully");
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to remove store');
+      toast.error(error.response?.data?.detail || "Failed to remove store");
     },
   });
 
@@ -71,7 +76,7 @@ const Stores: React.FC = () => {
       toast.success(`Sync started for ${data.store_name}`);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to start sync');
+      toast.error(error.response?.data?.detail || "Failed to start sync");
     },
   });
 
@@ -81,12 +86,14 @@ const Stores: React.FC = () => {
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['stores'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ["stores"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       toast.success(data.message);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to toggle store status');
+      toast.error(
+        error.response?.data?.detail || "Failed to toggle store status",
+      );
     },
   });
 
@@ -100,11 +107,29 @@ const Stores: React.FC = () => {
   });
 
   const onSubmit = (data: StoreForm) => {
-    createStoreMutation.mutate(data);
+    // Clean the store name and ensure proper format
+    let storeName = data.shop_domain.trim().toLowerCase();
+    
+    // If user accidentally included .myshopify.com, remove it
+    if (storeName.endsWith('.myshopify.com')) {
+      storeName = storeName.replace('.myshopify.com', '');
+    }
+    
+    // If user included any dots, show error
+    if (storeName.includes('.')) {
+      toast.error("Please enter only the store name without the domain");
+      return;
+    }
+    
+    // Submit with cleaned store name
+    createStoreMutation.mutate({
+      ...data,
+      shop_domain: storeName
+    });
   };
 
   const handleDeleteStore = (storeId: number) => {
-    if (window.confirm('Are you sure you want to remove this store?')) {
+    if (window.confirm("Are you sure you want to remove this store?")) {
       deleteStoreMutation.mutate(storeId);
     }
   };
@@ -121,7 +146,9 @@ const Stores: React.FC = () => {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800">Stores</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-dark-800">
+            Stores
+          </h1>
           <p className="mt-2 text-gray-600 dark:text-dark-500">
             Manage your connected Shopify stores
           </p>
@@ -150,16 +177,18 @@ const Stores: React.FC = () => {
                   <h3 className="text-lg font-medium text-gray-900 dark:text-dark-800">
                     {store.shop_name}
                   </h3>
-                  <p className="text-sm text-gray-500 dark:text-dark-400">{store.shop_domain}</p>
+                  <p className="text-sm text-gray-500 dark:text-dark-400">
+                    {store.shop_domain}
+                  </p>
                   <div className="mt-3 flex items-center">
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         store.is_active
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
-                          : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
+                          ? "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400"
+                          : "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400"
                       }`}
                     >
-                      {store.is_active ? 'Active' : 'Inactive'}
+                      {store.is_active ? "Active" : "Inactive"}
                     </span>
                   </div>
                   {store.last_sync && (
@@ -174,14 +203,16 @@ const Stores: React.FC = () => {
                     onChange={() => toggleStoreMutation.mutate(store.id)}
                     disabled={toggleStoreMutation.isPending}
                     className={`${
-                      store.is_active ? 'bg-shopify-600' : 'bg-gray-200'
-                    } relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-shopify-500 focus:ring-offset-2 disabled:opacity-50`}
-                    title={store.is_active ? 'Deactivate store' : 'Activate store'}
+                      store.is_active ? "bg-shopify-600" : "bg-gray-200"
+                    } relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50`}
+                    title={
+                      store.is_active ? "Deactivate store" : "Activate store"
+                    }
                   >
                     <span className="sr-only">Toggle store active status</span>
                     <span
                       className={`${
-                        store.is_active ? 'translate-x-6' : 'translate-x-1'
+                        store.is_active ? "translate-x-6" : "translate-x-1"
                       } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
                     />
                   </Switch>
@@ -191,7 +222,9 @@ const Stores: React.FC = () => {
                     className="text-shopify-600 hover:text-shopify-700 p-1"
                     title="Sync orders"
                   >
-                    <ArrowPathIcon className={`h-5 w-5 ${syncStoreMutation.isPending ? 'animate-spin' : ''}`} />
+                    <ArrowPathIcon
+                      className={`h-5 w-5 ${syncStoreMutation.isPending ? "animate-spin" : ""}`}
+                    />
                   </button>
                   <button
                     onClick={() => handleDeleteStore(store.id)}
@@ -222,7 +255,9 @@ const Stores: React.FC = () => {
                 />
               </svg>
             </div>
-            <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">No stores</h3>
+            <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-dark-800">
+              No stores
+            </h3>
             <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
               Get started by connecting your first Shopify store.
             </p>
@@ -262,24 +297,27 @@ const Stores: React.FC = () => {
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <div>
-                <label className="label">Shop Domain</label>
+                <label className="label">Store Name</label>
                 <input
-                  {...register('shop_domain')}
+                  {...register("shop_domain")}
                   type="text"
                   className="input"
-                  placeholder="your-shop.myshopify.com"
+                  placeholder="your-shop"
                 />
                 {errors.shop_domain && (
                   <p className="mt-1 text-sm text-red-600">
                     {errors.shop_domain.message}
                   </p>
                 )}
+                <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                  Enter only the store name. We'll add .myshopify.com automatically.
+                </p>
               </div>
 
               <div>
                 <label className="label">Admin API Access Token</label>
                 <input
-                  {...register('access_token')}
+                  {...register("access_token")}
                   type="password"
                   className="input"
                   placeholder="Enter your access token"
@@ -293,8 +331,8 @@ const Stores: React.FC = () => {
 
               <div className="text-sm text-gray-500 dark:text-dark-400">
                 <p>
-                  To get an access token, create a private app in your Shopify admin
-                  and copy the Admin API access token.
+                  To get an access token, create a private app in your Shopify
+                  admin and copy the Admin API access token.
                 </p>
               </div>
 
@@ -314,7 +352,7 @@ const Stores: React.FC = () => {
                   {createStoreMutation.isPending ? (
                     <LoadingSpinner size="sm" />
                   ) : (
-                    'Connect Store'
+                    "Connect Store"
                   )}
                 </button>
               </div>

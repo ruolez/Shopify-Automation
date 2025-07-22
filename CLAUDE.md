@@ -12,20 +12,23 @@ This is a Shopify Multi-Store Order Management System - a comprehensive automate
 
 **Backend (FastAPI + SQLAlchemy + Celery)**
 - `backend/main.py` - FastAPI application with REST endpoints and debugging endpoints
-- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU)
+- `backend/models.py` - SQLAlchemy models (User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, FraudAnalysis, FraudDetectionRule, AdminUser, AdminAuditLog, TaskStatus)
 - `backend/rule_engine.py` - Rule evaluation engine with 15+ operators and field extraction
 - `backend/tasks.py` - Celery background tasks for order processing and store synchronization
 - `backend/shopify_client.py` - Shopify Admin API GraphQL client with order management and fulfillment operations
+- `backend/fraud_service.py` - Fraud detection and analysis service
+- `backend/fraud_rule_processor.py` - Processes fraud detection rules
 - `backend/database.py` - Database configuration and session management
 - `backend/auth.py` - JWT authentication and user management
+- `backend/admin_auth.py` - Separate admin authentication system
 
 **Frontend (React + TypeScript + Tailwind)**
-- `frontend/src/pages/` - Main application pages (Dashboard, Stores, Rules, RuleBuilder, Settings, OrderLogs, Reports)
+- `frontend/src/pages/` - Main application pages (Dashboard, Stores, Rules, RuleBuilder, Settings, OrderLogs, Reports, FraudDetection, Admin pages)
 - `frontend/src/components/` - Reusable UI components
 - `frontend/src/contexts/` - React Context providers for global state management
   - `AuthContext.tsx` - Authentication state management
   - `TimezoneContext.tsx` - Centralized timezone and date formatting state
-  - `SettingsContext.tsx` - User settings management (legacy, superseded by TimezoneContext)
+  - `SettingsContext.tsx` - User settings management (works alongside TimezoneContext)
 - `frontend/src/utils/` - Utility functions and API clients
   - `api.ts` - Axios API client with interceptors
   - `dateFormat.ts` - Centralized date formatting with timezone support
@@ -52,74 +55,57 @@ The rule engine supports complex conditional logic:
 - **Field Extraction**: Handles nested GraphQL response structures from Shopify API
 - **Action Processing**: Sequential execution of multiple actions per rule
 
-## Common Development Commands
+## Development Commands
 
-### Full Application
+### Docker Services
 ```bash
 # Start all services
 docker-compose up -d
 
-# View logs for all services
-docker-compose logs -f
+# View logs
+docker-compose logs -f              # All services
+docker-compose logs -f worker       # Background processing
+docker-compose logs -f api          # API requests and rule evaluation
 
-# Restart specific service
-docker-compose restart api
-docker-compose restart worker
+# Restart services
+docker-compose restart api worker scheduler
+
+# Production deployment
+docker-compose up -d --build
 ```
 
 ### Backend Development
 ```bash
-# Start backend services only
-docker-compose up -d redis api worker scheduler
-
-# Run backend locally for development
+# Local development
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-# Run backend tests (uses Pytest framework)
-cd backend
+# Testing (Pytest)
 pytest                    # Run all tests
 pytest -m "not slow"      # Skip slow integration tests
-pytest -m unit           # Run only unit tests
-pytest -m integration    # Run only integration tests
-pytest -v                # Verbose output
-pytest --cov=.           # Generate coverage report
-
-# Access database via container
-docker exec shopify_api python -c "from database import engine; print('DB accessible')"
+pytest -m unit           # Unit tests only
+pytest -m integration    # Integration tests only
+pytest --cov=.           # Coverage report
 ```
 
 ### Frontend Development
-
-**Hot Reload Setup (Recommended)**
-The Docker setup is configured for development mode with hot reload and volume mounting:
 ```bash
-# Start all services with hot reload enabled
-docker-compose up -d
+# Docker with hot reload (default)
+docker-compose up -d    # Hot reload enabled automatically
 
-# Frontend automatically runs in development mode with hot reload
-# Changes to React/CSS files are instantly visible without rebuilds
-```
-
-**Local Development (Alternative)**
-```bash
-# Start backend services then run frontend locally
-docker-compose up -d redis api worker scheduler
+# Local development
 cd frontend
 npm install
 npm run dev
 
-# Build for production
-npm run build
-
-# Run tests (uses Vitest framework)
+# Testing (Vitest)
 npm test                # Run all tests
-npm run test:ui         # Interactive test UI
-npm run test:coverage   # Generate coverage report
-npm run test:watch      # Watch mode for development
+npm run test:ui         # Interactive UI
+npm run test:coverage   # Coverage report
 
-# Lint code
+# Build & lint
+npm run build
 npm run lint
 ```
 
@@ -238,209 +224,17 @@ For schema changes, use `update-with-migration.sh`:
 
 This system handles complex real-time order processing with proper error handling, logging, and user isolation - critical for production Shopify automation.
 
-### Recent Feature Additions
+## Recent Feature Highlights
 
-#### Server-Side Sorting & Date Filtering for Order Logs (2025-07-08)
-**Purpose**: Complete overhaul of Order Logs page with global sorting and comprehensive date filtering capabilities.
+See [CHANGELOG.md](./CHANGELOG.md) for detailed feature history and updates.
 
-**Server-Side Sorting Implementation**:
-- **Database-Level Sorting**: All sorting now performed at database level before pagination
-- **Supported Sort Fields**: 
-  - `order_number` - Direct field sorting
-  - `store_name` - JOIN with ShopifyStore table  
-  - `latest_date` - Aggregated max(created_at) sorting
-  - `status` - Complex priority-based sorting (error=0, match=1, skipped=2)
-  - `action_count` - COUNT-based sorting for number of actions per order
-- **Order Preservation Fix**: Added CASE statement to maintain backend sort order when retrieving logs
-- **API Changes**: Added `sort_field` and `sort_direction` parameters to `/order-logs` endpoint
-- **Result**: Sorting now works globally across all pages, not just current page data
-
-**Comprehensive Date Filtering System**:
-- **Quick Date Presets**:
-  - All Time (default) - No date filtering
-  - Today - Orders from current day only
-  - This Week - Orders from start of current week (Sunday) to now
-  - This Month - Orders from start of current month to now  
-  - This Year - Orders from start of current year to now
-  - Custom Range - User-selectable date range with from/to inputs
-- **Custom Date Selection**: 
-  - Date input fields appear when "Custom Range" selected
-  - Proper timezone-aware boundary calculations
-  - End date automatically includes full day (23:59:59)
-- **Backend Integration**:
-  - Added `date_from` and `date_to` parameters to API
-  - Timezone-aware ISO date parsing with proper UTC handling
-  - Applied across all sorting query branches using helper function
-- **UI Enhancements**:
-  - Date filter positioned as first column for better UX
-  - Enhanced filter headers with better visual hierarchy (`font-semibold`, darker colors)  
-  - Responsive 4-column filter grid layout
-  - Compact single-line design maintained
-
-**Critical Timezone Fixes**:
-- **Date Boundary Issues Resolved**: Fixed problem where selecting "7th to 7th" included entries from 6th
-- **Proper Timezone Handling**: Date objects now created with timezone awareness using `T00:00:00` suffixes
-- **Week Calculation Fix**: "This Week" now correctly calculates from Sunday in user's timezone
-- **Consistent Behavior**: Same timezone logic applied across OrderLogs and Reports pages
-
-**Technical Implementation**:
-- **Frontend**: `getDateRange()` function with smart timezone-aware calculations
-- **Backend**: Helper function `apply_filters()` ensures consistent filtering across all query branches  
-- **API**: Proper query invalidation when sort or date parameters change
-- **State Management**: Page reset to 1 when any filter changes
-
-**Performance Improvements**:
-- Database-optimized queries with proper indexing considerations
-- Reduced client-side processing by moving sorting to backend
-- Efficient pagination that respects global sort order
-
-#### Comprehensive Timezone Management System (2025-07-06)
-**Purpose**: Provides global timezone management with real-time updates across the entire application.
-- **Key Features**:
-  - User-configurable timezone and date format settings in Settings page
-  - Centralized `TimezoneContext` for global state management across all components
-  - Proper UTC timestamp storage with client-side timezone conversion
-  - Real-time timezone updates without page refresh using custom events
-  - Grouped timezone selector with current time preview
-- **Database Changes**:
-  - Added `timezone` and `date_format` columns to Settings model
-  - Fixed OrderLog timestamp storage to use actual Shopify order creation times instead of processing times
-  - Proper timezone-aware datetime handling with UTC storage
-- **API Enhancements**:
-  - `GET /settings/timezones` - Returns grouped timezone list with pytz integration
-  - `GET /settings/date-formats` - Returns available date format options with examples
-  - Updated OrderLog API responses to include proper UTC timezone markers (`Z` suffix)
-- **Frontend Architecture**:
-  - `TimezoneContext.tsx` - Centralized timezone state management with custom event handling
-  - `dateFormat.ts` - Unified date formatting utilities using date-fns-tz
-  - All components updated to use centralized date formatting (`useTimezone()` hook)
-  - Cross-window timezone sync using localStorage and custom events
-- **UI Improvements**:
-  - Removed timezone search field (simplified to dropdown only)
-  - Added current time preview in selected timezone
-  - Removed non-functional "Generate" button from Reports page
-- **Technical Implementation**:
-  - Uses `date-fns-tz` for proper timezone conversion
-  - Backend stores all timestamps in UTC with timezone-aware handling
-  - API serializes timestamps with 'Z' suffix to indicate UTC
-  - Frontend converts UTC times to user's selected timezone for display
-- **Fixes Critical Issue**: Resolved 5-hour timezone discrepancy where OrderLog entries showed processing time instead of actual order creation time
-
-**Migration Notes**: 
-- Added `pytz==2024.1` and `date-fns-tz` dependencies
-- Existing timestamps are treated as UTC for proper conversion
-- Hot reload enabled for frontend development workflow
-
-#### SKU Exclusion System (2025-06-25)
-**Purpose**: Allows users to exclude specific SKU patterns from weight calculations and OOS reporting while preserving fulfillment functionality.
-- **Location**: Settings page → Excluded SKUs section
-- **Key Features**:
-  - Case-insensitive substring pattern matching (e.g., "TEST", "SAMPLE", "_EXCLUDED")
-  - User-scoped exclusion patterns with optional descriptions
-  - Active/inactive toggle for temporary exclusions
-  - Comprehensive CRUD operations via UI and API
-- **Database**: New `ExcludedSKU` model with automatic table creation
-- **API Endpoints**: 
-  - `GET /settings/excluded-skus` - List all patterns
-  - `POST /settings/excluded-skus` - Create new pattern
-  - `PUT /settings/excluded-skus/{id}` - Update pattern
-  - `DELETE /settings/excluded-skus/{id}` - Delete pattern
-- **Frontend Integration**: Uses centralized date formatting with timezone support for creation dates
-- **Behavior**:
-  - Excluded SKUs are filtered from weight calculations in rule conditions
-  - Excluded SKUs don't generate OOS incidents when unavailable
-  - **Critical**: Excluded SKUs still participate in fulfillment location moves
-  - Extensive logging for debugging and visibility
-
-**Security Hardening (2025-06-25)**:
-- **Critical vulnerability fixed**: Partial fulfillment scenarios where Shopify API returned incomplete SKU data
-- **SKU lookup fallback**: Automatically retrieves missing SKU data from original order when API fails
-- **Enhanced monitoring**: Comprehensive logging with `✅ EXCLUDED:` markers for tracking effectiveness
-- **Parameter validation**: All OOS recording functions include exclusion checks with warnings for compromised data
-- **100% coverage**: Both normal processing and retry processing properly exclude SKUs
-
-#### OOS Reports Deduplication System (2025-06-25)
-**Purpose**: Prevents duplicate orders from appearing in reports when multiple retries or rules affect the same order.
-- **Key Improvements**:
-  - **Order-Level Deduplication**: OOS orders report now shows each order only once (keeps most recent entry)
-  - **Product-Level Deduplication**: OOS products report uses composite key deduplication for accurate incident counts
-  - **Transparent Metrics**: Reports show both `unique_incidents` (deduplicated) and `total_records` (raw count)
-  - **Prevention Logic**: Database-level checks prevent duplicate OOS incident creation
-- **Implementation**: 
-  - `backend/main.py` - Updated report endpoints with deduplication queries
-  - `backend/tasks.py` - Added existence checks before creating OOS incidents
-  - Applied to all three OOS recording functions: `_record_oos_incident`, `_record_oos_incident_for_failed_items`
-- **Result**: Accurate reporting regardless of how many times orders are retried or processed by multiple rules
-
-#### Order Logs Status Classification (2025-06-25)
-**Purpose**: Provides clear, meaningful status classification that distinguishes rule matching from action outcomes.
-- **New Status Logic**:
-  - **"Match"** = Rule matched and was applied (even if fulfillment failed due to inventory issues)
-  - **"Skipped"** = No rules matched the order
-  - **"Error"** = System errors or Shopify API errors (non-inventory issues)
-- **Key Changes**:
-  - Rule matching always shows "Match" status regardless of action success/failure
-  - `fulfillment_move_failed` logs use "info" status (don't affect main order status)
-  - Frontend updated with new status icons and filter options
-  - Backward compatibility maintained for historical data
-- **Implementation**:
-  - `backend/tasks.py` - Updated rule processing and retry logic status assignment
-  - `frontend/src/pages/OrderLogs.tsx` - New status icons, filters, and grouping logic
-- **Benefits**:
-  - Clear distinction between "rule matched" vs "actions succeeded"
-  - Out-of-stock fulfillment failures don't mask successful rule application
-  - Better user understanding of order processing outcomes
-
-#### Order Logs Search Enhancement (2025-07-08)
-**Purpose**: Adds search functionality to the Order Logs page for easier order lookup.
-- **Key Features**:
-  - Search input field for order number filtering
-  - Debounced search with 500ms delay to reduce API calls
-  - Search state preserved during pagination
-  - Automatic page reset to 1 when search changes
-- **Implementation**:
-  - `backend/main.py`: Added `search` parameter to `/order-logs` endpoint
-  - `frontend/src/pages/OrderLogs.tsx`: Added search input with debouncing logic
-- **API**: `GET /order-logs?search=PW110446` filters logs by order number substring match
-
-#### Configurable Order Sync Window (2025-07-08)  
-**Purpose**: Allows users to configure how many days back to fetch orders during sync operations.
-- **Key Features**:
-  - New `sync_window_days` setting (default: 7 days)
-  - Configurable from 1-365 days in Settings page
-  - Replaces hardcoded 24-hour sync window
-  - Helps recover older missed orders when needed
-- **Implementation**:
-  - `backend/models.py`: Added `sync_window_days` column to Settings model
-  - `backend/tasks.py`: Updated order sync logic to use configurable window
-  - `frontend/src/pages/Settings.tsx`: Added UI control for sync window configuration
-- **Use Cases**:
-  - Set to 1 day for normal operations (recent orders only)
-  - Set to 7-30 days for recovering missed orders after system downtime
-  - Adjust based on order volume and processing needs
-
-#### Previous Features (2025-06-24)
-
-#### Enhanced Order Logs Page
-- **Grouped View**: Orders now grouped by order number with expand/collapse functionality
-- **Sorting**: All columns (Order, Store, Actions, Status, Latest Activity) are sortable
-- **Space Efficiency**: One line per order by default, expandable to show all log entries
-- **Status Indicators**: Visual badges showing Match, Error, Skipped status for each order (updated in 2025-06-25)
-- **Action Count**: Badge showing number of events per order
-- **Timezone Integration**: All timestamps display in user's selected timezone with proper conversion
-
-#### Data Reset Feature
-**Purpose**: Allows users to purge operational data while preserving configuration.
-- **Location**: Settings page → Data Management section
-- **Safety Features**: Two-factor confirmation with "RESET" typing requirement
-- **Selective Reset**: Checkboxes for order logs, processed orders, OOS incidents, task status
-- **Preserves**: User accounts, store connections, rules, settings, location aliases
-- **Endpoint**: `POST /settings/reset-data` with confirmation validation
-
-#### Dashboard Simplification
-- **Removed Redundancy**: Eliminated "Recent Activity" section that duplicated Order Logs functionality
-- **Focused Design**: Dashboard now focuses on essential metrics (stores, rules) and quick actions
-- **Improved UX**: Users directed to enhanced Order Logs page for detailed order processing information
+### Key Recent Additions
+- **Fraud Detection System** (2025-07-14): Automated fraud analysis with custom rules and configurable duplicate detection
+- **Server-Side Sorting & Filtering** (2025-07-08): Complete overhaul of Order Logs with global sorting and date filtering
+- **Timezone Management** (2025-07-06): Global timezone support with real-time updates across the application
+- **Admin Panel** (2025-07-03): Comprehensive admin system with role-based access and audit trails
+- **SKU Exclusion System** (2025-06-25): Exclude specific SKUs from weight calculations and OOS reporting
+- **Enhanced Order Logs** (2025-06-24): Grouped view, sorting, and improved status classification
 
 ## Critical Bug Fixes & Known Issues
 
@@ -493,17 +287,6 @@ docker-compose logs api worker --tail=50 | grep -A20 -B5 "order_weight\|Weight\|
 - **Workaround**: Manually reset store's `last_sync` to time before problem order was created
 - **Long-term Fix**: Use sync start time instead of completion time for date filtering
 
-### Frontend Docker Cache Issues (CRITICAL)
-**Problem**: Docker caches frontend builds, preventing new React changes from appearing in the browser.
-**Solution**: ALWAYS purge Docker cache when frontend changes don't appear:
-```bash
-# REQUIRED process for frontend changes
-docker-compose down
-docker system prune -f  # Purges all cache including build cache
-docker-compose up -d
-```
-**When to use**: Every time frontend changes aren't visible after container restart.
-**Note**: Simple `docker-compose restart frontend` is NOT sufficient - cache persists.
 
 ### All-or-Nothing Fulfillment Policy (Added 2025-06-24)
 **Feature**: Fulfillment location changes only proceed if ALL products in an order can be fulfilled at the target location.
@@ -552,71 +335,9 @@ docker-compose up -d
 className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-shopify-600 hover:bg-shopify-700"
 ```
 
-## Docker Development Workflow
 
-### Development vs Production
-- **Development**: Uses volume mounting for hot reload (Vite polling enabled for Docker compatibility)
-- **Production**: Frontend built into static files, served by Nginx with security headers and rate limiting
 
-### Hot Reload Configuration (Fixed 2025-06-25)
-**Important**: The Docker setup now includes proper hot reload configuration that persists across new installations:
 
-**Frontend Dockerfile** - Configured for development mode:
-```dockerfile
-# Start in development mode with hot reload
-CMD ["npm", "run", "dev"]
-```
-
-**docker-compose.yml** - Volume mounting enabled:
-```yaml
-frontend:
-  volumes:
-    - ./frontend:/app
-    - /app/node_modules
-```
-
-**For New Installations**: Hot reload is automatically enabled. No manual configuration needed.
-**Benefits**: 
-- CSS/React changes instantly visible without rebuilds
-- No more Docker cache purging required for UI updates
-- Consistent development experience across all environments
-
-### Timezone Display Issues (Fixed 2025-07-06)
-**Issue**: 5-hour timezone discrepancy where OrderLog entries showed processing time instead of actual order creation time.
-- **Root Cause**: OrderLog was storing Celery task execution time instead of Shopify order creation timestamp
-- **Symptoms**: Order created at 10:53 AM displayed as 15:53 in system (5-hour difference)
-- **Fix**: Updated `_log_order_action()` to accept and use actual Shopify `createdAt` timestamp
-- **Technical Solution**:
-  - Parse Shopify ISO timestamps with proper timezone awareness
-  - Store as UTC in database with timezone information preserved
-  - API returns timestamps with 'Z' suffix for proper frontend interpretation
-  - Frontend uses TimezoneContext for proper local timezone conversion
-- **Implementation**: `backend/tasks.py` - Added `order_created_at` parameter to logging functions
-- **Result**: All timestamps now accurately reflect actual order creation times in user's selected timezone
-
-### Critical Frontend Cache Issues (Legacy - Now Fixed)
-**Previous Problem**: Docker aggressively cached builds, preventing new React changes from appearing.
-**Fixed**: Hot reload now eliminates the need for cache purging in most cases.
-**Legacy Solution** (only if hot reload fails):
-```bash
-# REQUIRED process - simple restart is NOT enough
-docker-compose down
-docker system prune -f  # Purges build cache
-docker-compose up -d
-```
-
-### Service Management
-```bash
-# Restart individual services (preserves cache)
-docker-compose restart api worker scheduler
-
-# View logs for debugging
-docker-compose logs -f worker  # Background processing
-docker-compose logs -f api     # API requests and rule evaluation
-
-# Production deployment with build
-docker-compose up -d --build
-```
 
 ## Testing Framework Details
 
@@ -682,43 +403,14 @@ Comprehensive configuration via `.env.example`:
 - Role-based permissions with dependency injection
 - Secure password change functionality with current password verification
 
-**Admin API Endpoints** (`backend/main.py` - 13 new endpoints)
-```python
-# Authentication
-POST /admin/auth/login              # Admin login with audit logging
-GET  /admin/auth/me                 # Get current admin user
-PUT  /admin/auth/change-password    # Change admin password
-
-# Dashboard & Statistics  
-GET  /admin/stats                   # System overview statistics
-
-# User Management
-GET  /admin/users                   # List all users with activity metrics
-PUT  /admin/users/{id}/toggle-active  # Activate/deactivate users
-DELETE /admin/users/{id}            # Delete users (with cascade)
-
-# Resource Monitoring
-GET  /admin/stores                  # All connected stores across users
-GET  /admin/rules                   # All processing rules across users
-GET  /admin/order-logs              # System-wide order processing logs
-
-# Audit & Compliance
-GET  /admin/audit-logs              # Admin action audit trail
-POST /admin/users                   # Create additional admin users
-```
+**Admin API**: 13 endpoints for authentication, user management, monitoring, and audit trails
 
 **Admin Frontend Components**
-- `AdminLogin.tsx` - Dedicated admin authentication page
+- `AdminLogin.tsx` - Dedicated admin authentication page  
 - `AdminDashboard.tsx` - System metrics and quick actions with password change
 - `AdminUsers.tsx` - User management interface with activate/deactivate/delete
 - `adminApi.ts` - Admin API client with token management
-
-**Admin Routes** (`frontend/src/App.tsx`)
-```
-/admin/login      # Admin authentication
-/admin/dashboard  # Main admin dashboard  
-/admin/users      # User management
-```
+- Routes: `/admin/login`, `/admin/dashboard`, `/admin/users`
 
 ### Key Admin Features
 
@@ -777,26 +469,12 @@ docker exec shopify_api python init_admin.py
 - Admin audit logs provide complete compliance trail
 - Role-based permissions allow delegation of admin tasks
 
-### Security Features
+### Security & Compliance
 
-**Authentication Isolation**
-- Completely separate authentication system from user accounts
-- Admin tokens stored separately with different expiration
-- No cross-contamination between user and admin sessions
-
-**Audit Compliance**
-- Every admin action logged with full context
-- IP address and user agent tracking
-- JSON metadata for detailed action parameters
-- Immutable audit trail for compliance requirements
-
-**Role-Based Access**
-- `super_admin`: Full system access
-- `admin`: Standard admin operations
-- `support`: Read-only with limited actions
-- `read_only`: View-only access to system data
-
-This admin panel provides complete platform management capabilities while maintaining security isolation and comprehensive audit trails for production use.
+- **Authentication Isolation**: Separate admin and user auth systems with different token expiration
+- **Audit Trail**: Complete logging of all admin actions with IP/user agent tracking
+- **Role-Based Access**: Four roles (super_admin, admin, support, read_only) for granular permissions
+- **Compliance Ready**: Immutable audit logs with JSON metadata for regulatory requirements
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

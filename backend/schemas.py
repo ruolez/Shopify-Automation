@@ -175,18 +175,44 @@ class TaskStatusResponse(BaseModel):
 class SettingsBase(BaseModel):
     sync_frequency_minutes: int = 10
     auto_sync_enabled: bool = True
+    fraud_sync_enabled: bool = True
     log_retention_days: int = 30
     sync_window_days: int = 7
+    duplicate_detection_days: int = 7
+    fraud_sync_days: int = 7
+    reconciliation_batch_size: int = 500
     timezone: str = "UTC"
     date_format: str = "MMM d, yyyy HH:mm"
 
 class SettingsUpdate(BaseModel):
     sync_frequency_minutes: Optional[int] = None
     auto_sync_enabled: Optional[bool] = None
+    fraud_sync_enabled: Optional[bool] = None
     log_retention_days: Optional[int] = None
     sync_window_days: Optional[int] = None
+    duplicate_detection_days: Optional[int] = None
+    fraud_sync_days: Optional[int] = None
+    reconciliation_batch_size: Optional[int] = None
     timezone: Optional[str] = None
     date_format: Optional[str] = None
+    
+    @validator('duplicate_detection_days')
+    def validate_duplicate_detection_days(cls, v):
+        if v is not None and (v < 1 or v > 365):
+            raise ValueError('Duplicate detection days must be between 1 and 365')
+        return v
+    
+    @validator('fraud_sync_days')
+    def validate_fraud_sync_days(cls, v):
+        if v is not None and (v < 1 or v > 365):
+            raise ValueError('Fraud sync days must be between 1 and 365')
+        return v
+    
+    @validator('reconciliation_batch_size')
+    def validate_reconciliation_batch_size(cls, v):
+        if v is not None and (v < 100 or v > 2000):
+            raise ValueError('Reconciliation batch size must be between 100 and 2000')
+        return v
 
 class SettingsResponse(SettingsBase):
     id: int
@@ -421,3 +447,91 @@ class UserManagementResponse(BaseModel):
     stores_count: int
     rules_count: int
     last_activity: Optional[datetime]
+
+# Fraud Detection Rule schemas
+class FraudRuleCondition(BaseModel):
+    field: str  # first_time_customer, order_total, fraud_risk_level, etc.
+    operator: str  # equals, greater_than, less_than, contains, etc.
+    value: Any
+
+class FraudRuleAction(BaseModel):
+    type: str  # log_fraud, flag_order, add_note, etc.
+    parameters: Dict[str, Any]
+
+class FraudRuleConditionGroup(BaseModel):
+    operator: str = "AND"  # AND or OR
+    conditions: List[FraudRuleCondition]
+    
+    @validator('operator')
+    def validate_operator(cls, v):
+        if v.upper() not in ["AND", "OR"]:
+            raise ValueError('Operator must be AND or OR')
+        return v.upper()
+
+class FraudRuleCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    conditions: Union[List[FraudRuleCondition], FraudRuleConditionGroup]  # Support both formats
+    actions: List[FraudRuleAction]
+    priority: int = 0
+    delay_ms: int = 10  # Delay in milliseconds after rule execution
+    is_active: bool = True
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if len(v.strip()) < 3:
+            raise ValueError('Fraud rule name must be at least 3 characters long')
+        return v.strip()
+    
+    @validator('delay_ms')
+    def validate_delay_ms(cls, v):
+        if v < 0:
+            raise ValueError('Delay must be non-negative')
+        if v > 60000:  # Max 60 seconds
+            raise ValueError('Delay must be no more than 60 seconds (60000ms)')
+        return v
+    
+    @validator('conditions', pre=True)
+    def normalize_conditions(cls, v):
+        """Convert list format to object format for consistency"""
+        if isinstance(v, list):
+            return FraudRuleConditionGroup(conditions=v)
+        return v
+
+class FraudRuleResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    conditions: Dict[str, Any]
+    actions: List[Dict[str, Any]]
+    priority: int
+    delay_ms: int
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+# Task Status Schemas
+class TaskStatusResponse(BaseModel):
+    id: int
+    user_id: Optional[int]
+    task_id: str
+    task_name: str
+    status: str
+    result: Optional[Dict[str, Any]]
+    error_message: Optional[str]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class FailedTasksResponse(BaseModel):
+    tasks: List[TaskStatusResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int

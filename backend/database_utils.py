@@ -201,6 +201,150 @@ def cleanup_old_backups(backup_dir: str, keep_count: int = 10):
         logger.error(f"Error cleaning up backups: {str(e)}")
 
 
+def migrate_fraud_analysis_customer_name():
+    """
+    Migrate the fraud_analyses table to rename card_holder_name to customer_name.
+    """
+    import sqlite3
+    
+    try:
+        # Get database path from environment or default
+        db_path = os.getenv('DATABASE_PATH', '/app/data/database.db')
+        
+        # Connect directly to SQLite for schema changes
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Check if migration is needed
+        cursor.execute("PRAGMA table_info(fraud_analyses)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'card_holder_name' in columns and 'customer_name' not in columns:
+            logger.info("Migrating fraud_analyses table: renaming card_holder_name to customer_name")
+            
+            # SQLite doesn't support ALTER COLUMN, so we need to recreate the table
+            # First, get all existing data
+            cursor.execute("SELECT * FROM fraud_analyses")
+            existing_data = cursor.fetchall()
+            
+            # Get the current table schema but replace card_holder_name with customer_name
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fraud_analyses'")
+            create_sql = cursor.fetchone()[0]
+            
+            # Replace card_holder_name with customer_name in the schema
+            new_create_sql = create_sql.replace('card_holder_name', 'customer_name')
+            
+            # Drop and recreate table with new schema
+            cursor.execute("DROP TABLE IF EXISTS fraud_analyses_backup")
+            cursor.execute("CREATE TABLE fraud_analyses_backup AS SELECT * FROM fraud_analyses")
+            cursor.execute("DROP TABLE fraud_analyses")
+            cursor.execute(new_create_sql)
+            
+            # Restore data with updated column names
+            if existing_data:
+                # Get column names from backup table
+                cursor.execute("PRAGMA table_info(fraud_analyses_backup)")
+                backup_columns = [column[1] for column in cursor.fetchall()]
+                
+                # Insert data back, mapping card_holder_name to customer_name
+                placeholders = ','.join(['?' for _ in backup_columns])
+                columns_list = ','.join(col.replace('card_holder_name', 'customer_name') for col in backup_columns)
+                
+                cursor.execute(f"INSERT INTO fraud_analyses ({columns_list}) SELECT * FROM fraud_analyses_backup")
+            
+            # Clean up backup table
+            cursor.execute("DROP TABLE fraud_analyses_backup")
+            conn.commit()
+            
+            logger.info("Successfully migrated fraud_analyses table")
+        elif 'customer_name' in columns:
+            logger.info("fraud_analyses table already has customer_name column - no migration needed")
+        else:
+            logger.info("fraud_analyses table doesn't exist yet - will be created with correct schema")
+            
+    except Exception as e:
+        logger.error(f"Error during fraud_analyses migration: {str(e)}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def migrate_fraud_analysis_shipping_state():
+    """
+    Migrate restricted_state column to shipping_state in the fraud_analyses table.
+    """
+    import sqlite3
+    
+    try:
+        # Get database path from environment or default
+        db_path = os.getenv('DATABASE_PATH', '/app/data/database.db')
+        
+        # Connect directly to SQLite for schema changes
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Check if table exists first
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fraud_analyses'")
+        if not cursor.fetchone():
+            logger.info("fraud_analyses table doesn't exist yet - will be created with correct schema")
+            return
+        
+        # Check current columns
+        cursor.execute("PRAGMA table_info(fraud_analyses)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        # If we have restricted_state but not shipping_state, rename the column
+        if 'restricted_state' in columns and 'shipping_state' not in columns:
+            logger.info("Renaming restricted_state column to shipping_state in fraud_analyses table")
+            
+            # SQLite doesn't support ALTER TABLE RENAME COLUMN in older versions
+            # So we need to recreate the table
+            
+            # First, create a temporary table with the new schema
+            cursor.execute("""
+                CREATE TABLE fraud_analyses_new AS 
+                SELECT 
+                    id, user_id, store_id, order_name, shopify_order_id,
+                    is_first_time_customer, order_total, transaction_attempts_count,
+                    customer_name, duplicate_within_7days, previous_order_delivery_status,
+                    previous_order_total, current_order_total, shopify_fraud_risk_level,
+                    age_checker_detected, customer_notes, billing_address_outside_us,
+                    same_billing_shipping, 
+                    restricted_state as shipping_state,  -- Rename the column
+                    additional_details, current_order_delivery_status, days_since_last_delivery,
+                    raw_shopify_data, duplicate_match_details, transaction_details,
+                    risk_assessment_details, customer_order_history, delivery_analytics,
+                    rule_triggered_ids, rule_processing_results, analysis_timestamp,
+                    processing_time_seconds, analysis_version
+                FROM fraud_analyses
+            """)
+            
+            # Drop the old table
+            cursor.execute("DROP TABLE fraud_analyses")
+            
+            # Rename the new table
+            cursor.execute("ALTER TABLE fraud_analyses_new RENAME TO fraud_analyses")
+            
+            conn.commit()
+            logger.info("Successfully renamed restricted_state to shipping_state")
+            
+        elif 'shipping_state' in columns:
+            logger.info("fraud_analyses table already has shipping_state column - no migration needed")
+            
+        elif 'restricted_state' not in columns and 'shipping_state' not in columns:
+            logger.info("Adding shipping_state column to fraud_analyses table")
+            # Add the new column if neither exists
+            cursor.execute("ALTER TABLE fraud_analyses ADD COLUMN shipping_state TEXT")
+            conn.commit()
+            logger.info("Successfully added shipping_state column to fraud_analyses table")
+            
+    except Exception as e:
+        logger.error(f"Error during fraud_analyses shipping_state migration: {str(e)}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
 def migrate_rules_to_new_format():
     """
     Migrate existing rules from legacy array format to new object format with logical operator.
@@ -238,3 +382,42 @@ def migrate_rules_to_new_format():
         db.rollback()
     finally:
         db.close()
+
+def migrate_settings_duplicate_detection_days():
+    """
+    Add duplicate_detection_days column to the settings table if it doesn't exist.
+    """
+    import sqlite3
+    
+    try:
+        db_path = os.getenv('DATABASE_URL', 'sqlite:///./shopify_automation.db').replace('sqlite:///', '')
+        
+        # Connect to database
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Check if column already exists
+        cursor.execute("PRAGMA table_info(settings)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'duplicate_detection_days' in columns:
+            logger.info("duplicate_detection_days column already exists")
+            return
+            
+        # Add the new column with default value
+        logger.info("Adding duplicate_detection_days column to settings table...")
+        cursor.execute("""
+            ALTER TABLE settings 
+            ADD COLUMN duplicate_detection_days INTEGER DEFAULT 7
+        """)
+        
+        # Commit the changes
+        conn.commit()
+        logger.info("Successfully added duplicate_detection_days column")
+        
+    except Exception as e:
+        logger.error(f"Error adding duplicate_detection_days column: {str(e)}")
+        
+    finally:
+        if 'conn' in locals():
+            conn.close()

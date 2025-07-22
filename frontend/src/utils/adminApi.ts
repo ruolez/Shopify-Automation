@@ -1,17 +1,18 @@
-import axios from 'axios';
+import axios from "axios";
 
-const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL =
+  (import.meta as any).env?.VITE_API_URL || "http://localhost:8000";
 
 const adminApiClient = axios.create({
   baseURL: `${API_BASE_URL}/admin`,
   headers: {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   },
 });
 
 // Add auth interceptor
 adminApiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('admin_token');
+  const token = localStorage.getItem("admin_token");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -23,11 +24,11 @@ adminApiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('admin_token');
-      window.location.href = '/admin/login';
+      localStorage.removeItem("admin_token");
+      window.location.href = "/admin/login";
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 export interface AdminUser {
@@ -81,32 +82,37 @@ export interface AdminAuditLog {
 export const adminApi = {
   // Auth
   login: async (username: string, password: string) => {
-    const response = await adminApiClient.post('/auth/login', { username, password });
+    const response = await adminApiClient.post("/auth/login", {
+      username,
+      password,
+    });
     return response.data;
   },
 
   getMe: async (): Promise<AdminUser> => {
-    const response = await adminApiClient.get('/auth/me');
+    const response = await adminApiClient.get("/auth/me");
     return response.data;
   },
 
   changePassword: async (currentPassword: string, newPassword: string) => {
-    const response = await adminApiClient.put('/auth/change-password', {
+    const response = await adminApiClient.put("/auth/change-password", {
       current_password: currentPassword,
-      new_password: newPassword
+      new_password: newPassword,
     });
     return response.data;
   },
 
   // Dashboard
   getStats: async (): Promise<SystemStats> => {
-    const response = await adminApiClient.get('/stats');
+    const response = await adminApiClient.get("/stats");
     return response.data;
   },
 
   // User Management
   getUsers: async (skip = 0, limit = 100): Promise<UserManagement[]> => {
-    const response = await adminApiClient.get(`/users?skip=${skip}&limit=${limit}`);
+    const response = await adminApiClient.get(
+      `/users?skip=${skip}&limit=${limit}`,
+    );
     return response.data;
   },
 
@@ -122,13 +128,17 @@ export const adminApi = {
 
   // Stores
   getStores: async (skip = 0, limit = 100) => {
-    const response = await adminApiClient.get(`/stores?skip=${skip}&limit=${limit}`);
+    const response = await adminApiClient.get(
+      `/stores?skip=${skip}&limit=${limit}`,
+    );
     return response.data;
   },
 
   // Rules
   getRules: async (skip = 0, limit = 100) => {
-    const response = await adminApiClient.get(`/rules?skip=${skip}&limit=${limit}`);
+    const response = await adminApiClient.get(
+      `/rules?skip=${skip}&limit=${limit}`,
+    );
     return response.data;
   },
 
@@ -143,7 +153,11 @@ export const adminApi = {
   },
 
   // Audit Logs
-  getAuditLogs: async (skip = 0, limit = 50, action?: string): Promise<AdminAuditLog[]> => {
+  getAuditLogs: async (
+    skip = 0,
+    limit = 50,
+    action?: string,
+  ): Promise<AdminAuditLog[]> => {
     let url = `/audit-logs?skip=${skip}&limit=${limit}`;
     if (action) {
       url += `&action=${action}`;
@@ -160,59 +174,66 @@ export const adminApi = {
     password: string;
     role: string;
   }): Promise<AdminUser> => {
-    const response = await adminApiClient.post('/users', userData);
+    const response = await adminApiClient.post("/users", userData);
     return response.data;
   },
 
   // Database Management
   getDatabaseInfo: async () => {
-    const response = await adminApiClient.get('/database/info');
+    const response = await adminApiClient.get("/database/info");
     return response.data;
   },
 
   backupDatabase: async () => {
-    const response = await adminApiClient.get('/database/backup', {
-      responseType: 'blob'
+    const response = await adminApiClient.get("/database/backup", {
+      responseType: "blob",
     });
-    
+
     // Create download link
     const url = window.URL.createObjectURL(new Blob([response.data]));
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.href = url;
-    
+
     // Extract filename from content-disposition header or use default
-    const contentDisposition = response.headers['content-disposition'];
-    let filename = 'shopify_automation_backup.db';
+    const contentDisposition = response.headers["content-disposition"];
+    let filename = "shopify_automation_backup.db";
     if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      const filenameMatch = contentDisposition.match(
+        /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/,
+      );
       if (filenameMatch && filenameMatch[1]) {
-        filename = filenameMatch[1].replace(/['"]/g, '');
+        filename = filenameMatch[1].replace(/['"]/g, "");
       }
     }
-    
-    link.setAttribute('download', filename);
+
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
   },
 
-  restoreDatabase: async (file: File, onProgress?: (progress: number) => void) => {
+  restoreDatabase: async (
+    file: File,
+    onProgress?: (progress: number) => void,
+  ) => {
     const formData = new FormData();
-    formData.append('file', file);
-    
-    const response = await adminApiClient.post('/database/restore', formData, {
+    formData.append("file", file);
+
+    const response = await adminApiClient.post("/database/restore", formData, {
       headers: {
-        'Content-Type': 'multipart/form-data',
+        "Content-Type": "multipart/form-data",
       },
       onUploadProgress: (progressEvent) => {
         if (onProgress && progressEvent.total) {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          const progress = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total,
+          );
           onProgress(progress);
         }
-      }
+      },
     });
-    
+
     return response.data;
   },
 };
