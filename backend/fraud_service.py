@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import re
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func
 
@@ -87,7 +88,15 @@ class FraudAnalysisService:
                 logger.debug(f"Order data keys: {list(order_data.keys())}")
                 return None
             
-            # Always perform fresh analysis (no caching)
+            # Check if fraud analysis already exists
+            existing_analysis = self.db.query(FraudAnalysis).filter(
+                FraudAnalysis.store_id == self.store.id,
+                FraudAnalysis.order_name == order_name
+            ).first()
+            
+            if existing_analysis:
+                logger.info(f"Fraud analysis already exists for order {order_name}, returning existing analysis")
+                return existing_analysis
             
             # Extract all fraud indicators using structured data
             is_first_time = self._check_first_time_customer(order_data)
@@ -186,9 +195,23 @@ class FraudAnalysisService:
             # CRITICAL DEBUG: Log the risk level being saved
             logger.info(f"🔍 FRAUD SERVICE DEBUG - Order {order_name}: Saving fraud analysis with risk level: {fraud_analysis.shopify_fraud_risk_level}")
             
-            self.db.add(fraud_analysis)
-            self.db.commit()
-            self.db.refresh(fraud_analysis)
+            try:
+                self.db.add(fraud_analysis)
+                self.db.commit()
+                self.db.refresh(fraud_analysis)
+            except IntegrityError as e:
+                self.db.rollback()
+                # Check if it's a duplicate order (race condition between workers)
+                existing_analysis = self.db.query(FraudAnalysis).filter(
+                    FraudAnalysis.store_id == self.store.id,
+                    FraudAnalysis.order_name == order_name
+                ).first()
+                if existing_analysis:
+                    logger.info(f"Fraud analysis already created by another worker for order {order_name}")
+                    return existing_analysis
+                else:
+                    # Re-raise if it's a different integrity error
+                    raise
             
             # CRITICAL DEBUG: Verify the saved risk level
             logger.info(f"🔍 FRAUD SERVICE DEBUG - Order {order_name}: Saved fraud analysis {fraud_analysis.id} with risk level: {fraud_analysis.shopify_fraud_risk_level}")

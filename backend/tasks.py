@@ -65,11 +65,8 @@ celery.conf.beat_schedule = {
 }
 
 def get_db():
-    db = SessionLocal()
-    try:
-        return db
-    finally:
-        db.close()
+    """Get a database session. Note: caller is responsible for closing it."""
+    return SessionLocal()
 
 def _combine_product_and_variant_title(product_title: str, variant_title: str) -> str:
     """Combine product title and variant title for display"""
@@ -605,7 +602,7 @@ def cleanup_stale_tasks(max_age_hours: int = 24) -> Dict[str, int]:
 async def _process_fraud_rules_for_order(
     order_data: Dict[str, Any], 
     store: ShopifyStore, 
-    db: Session, 
+    db: Session = None, 
     shopify_client = None,
     order_created_at: str = None
 ) -> Optional[Dict[str, Any]]:
@@ -617,7 +614,8 @@ async def _process_fraud_rules_for_order(
     Args:
         order_data: Raw order data from Shopify
         store: ShopifyStore instance
-        db: Database session
+        db: Database session (optional - only used for error logging)
+        shopify_client: Shopify API client (optional - will be created if not provided)
         order_created_at: Order creation timestamp
         
     Returns:
@@ -678,31 +676,38 @@ async def _process_fraud_rules_for_order(
                    f"{fraud_results.get('rules_matched', 0)} rules matched, "
                    f"{fraud_results.get('actions_executed', 0)} actions executed")
         
+        # Capture the fraud analysis ID before any potential session issues
+        fraud_analysis_id = fraud_analysis.id
+        
         # Create ProcessedFraudOrder record to prevent reprocessing
         try:
             order_id = order_data.get('id', '')
             processed_fraud_order = ProcessedFraudOrder(
                 store_id=fraud_store.id,
                 order_id=order_id,
-                fraud_analysis_id=fraud_analysis.id,
+                fraud_analysis_id=fraud_analysis_id,
                 rules_applied=fraud_results.get('rules_matched', 0)
             )
             fraud_db.add(processed_fraud_order)
             fraud_db.commit()
             logger.info(f"Created ProcessedFraudOrder record for order {order_name}")
         except Exception as e:
+            # CRITICAL: Always rollback on any error to clear session state
+            try:
+                fraud_db.rollback()
+            except:
+                pass  # Session might be in a bad state
+            
             # If there's a duplicate key error, it means the order was already processed
             # This is fine - just log and continue
             if "UNIQUE constraint failed" in str(e) or "duplicate key" in str(e).lower():
                 logger.info(f"Order {order_name} already has ProcessedFraudOrder record (concurrent processing detected)")
             else:
                 logger.error(f"Failed to create ProcessedFraudOrder record: {str(e)}")
-                # Don't fail the whole process, but rollback just this transaction
-                fraud_db.rollback()
         
         return {
             "fraud_analysis_completed": True,
-            "fraud_analysis_id": fraud_analysis.id,
+            "fraud_analysis_id": fraud_analysis_id,
             "fraud_rules_processed": True,
             "fraud_results": fraud_results
         }
@@ -714,16 +719,17 @@ async def _process_fraud_rules_for_order(
         try:
             # Create error log entry
             order_name = order_data.get('name', 'Unknown')
-            # Try to log error in main session, but don't fail if it doesn't work
-            try:
-                _log_order_action(
-                    db, store.user_id, store.id, order_data.get('id', ''),
-                    order_name, "fraud_processing_error", "error",
-                    error_message=str(e),
-                    order_created_at=order_created_at
-                )
-            except Exception as inner_log_error:
-                logger.error(f"Failed to log fraud processing error to main session: {str(inner_log_error)}")
+            # Try to log error in main session if db is provided, but don't fail if it doesn't work
+            if db is not None:
+                try:
+                    _log_order_action(
+                        db, store.user_id, store.id, order_data.get('id', ''),
+                        order_name, "fraud_processing_error", "error",
+                        error_message=str(e),
+                        order_created_at=order_created_at
+                    )
+                except Exception as inner_log_error:
+                    logger.error(f"Failed to log fraud processing error to main session: {str(inner_log_error)}")
         except Exception as log_error:
             logger.error(f"Failed to log fraud processing error: {str(log_error)}")
         
@@ -808,6 +814,8 @@ def process_store_orders(self, user_id: int, store_id: int):
             loop.close()
             
     except Exception as e:
+        # Rollback any pending transactions
+        db.rollback()
         logger.error(f"Failed to process store orders: {str(e)}")
         update_task_status(task_id, "failed", error_message=str(e))
         raise
@@ -1022,6 +1030,8 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
             cursor = page_info["endCursor"]
     
     except Exception as e:
+        # Ensure session is rolled back on any error
+        db.rollback()
         logger.error(f"Error fetching orders from {store.shop_domain}: {str(e)}")
         raise
     
@@ -1610,7 +1620,14 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
             fraud_sync_days = min(settings.duplicate_detection_days, 7)  # Cap at 7 days for initial sync
         else:
             # Regular sync - only look back since last sync + buffer
-            time_since_sync = end_date - store.last_sync
+            # Handle both timezone-aware and naive datetimes
+            if store.last_sync.tzinfo is None:
+                # Convert naive datetime to UTC
+                last_sync_utc = store.last_sync.replace(tzinfo=timezone.utc)
+            else:
+                last_sync_utc = store.last_sync
+                
+            time_since_sync = end_date - last_sync_utc
             fraud_sync_days = min(
                 max(time_since_sync.days + 1, 1),  # At least 1 day, or days since last sync + 1
                 7  # Cap at 7 days to avoid rate limiting
@@ -1693,6 +1710,8 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
         skipped_fulfilled = 0
         skipped_cancelled = 0
         for order in all_orders:
+            # Create a fresh session for each order to prevent session contamination
+            order_db = SessionLocal()
             try:
                 # Skip fulfilled and cancelled orders - only process UNFULFILLED orders
                 fulfillment_status = order.get("displayFulfillmentStatus", "")
@@ -1707,7 +1726,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                 
                 # Check if we already processed fraud detection for this order
                 order_id = order.get("id")
-                processed_fraud_order = db.query(ProcessedFraudOrder).filter(
+                processed_fraud_order = order_db.query(ProcessedFraudOrder).filter(
                     ProcessedFraudOrder.store_id == store_id,
                     ProcessedFraudOrder.order_id == order_id
                 ).first()
@@ -1721,7 +1740,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                 order_created_at = order.get("createdAt")
                 result = loop.run_until_complete(
                     _process_fraud_rules_for_order(
-                        order, store, db, client, order_created_at
+                        order, store, order_db, client, order_created_at
                     )
                 )
                 
@@ -1730,7 +1749,18 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                     
             except Exception as e:
                 logger.error(f"Failed to process fraud detection for order {order.get('name', 'Unknown')}: {str(e)}")
+                # Rollback the session to clear any error state
+                try:
+                    order_db.rollback()
+                except:
+                    pass  # Session might already be closed
                 continue
+            finally:
+                # Always close the order-specific session
+                try:
+                    order_db.close()
+                except Exception as close_error:
+                    logger.error(f"Error closing order database session: {str(close_error)}")
         
         # Update last sync time
         store.last_sync = datetime.now(timezone.utc)
