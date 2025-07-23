@@ -1428,7 +1428,14 @@ def process_all_orders_if_enabled(self):
                 if not store.last_sync:
                     should_sync = True
                 else:
-                    time_since_sync = datetime.now(timezone.utc) - store.last_sync
+                    # Handle both timezone-aware and naive datetimes
+                    if store.last_sync.tzinfo is None:
+                        # Convert naive datetime to UTC
+                        last_sync_utc = store.last_sync.replace(tzinfo=timezone.utc)
+                    else:
+                        last_sync_utc = store.last_sync
+                    
+                    time_since_sync = datetime.now(timezone.utc) - last_sync_utc
                     if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
                         should_sync = True
                 
@@ -1476,7 +1483,14 @@ def process_fraud_detection_if_enabled(self):
                 if not store.last_sync:
                     should_sync = True
                 else:
-                    time_since_sync = datetime.now(timezone.utc) - store.last_sync
+                    # Handle both timezone-aware and naive datetimes
+                    if store.last_sync.tzinfo is None:
+                        # Convert naive datetime to UTC
+                        last_sync_utc = store.last_sync.replace(tzinfo=timezone.utc)
+                    else:
+                        last_sync_utc = store.last_sync
+                    
+                    time_since_sync = datetime.now(timezone.utc) - last_sync_utc
                     if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
                         should_sync = True
                 
@@ -1699,7 +1713,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                 continue
         
         # Update last sync time
-        store.last_sync = datetime.utcnow()
+        store.last_sync = datetime.now(timezone.utc)
         db.commit()
         
         update_task_status(task_id, "completed", result={
