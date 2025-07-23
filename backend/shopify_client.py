@@ -1,5 +1,6 @@
 import httpx
 import json
+import asyncio
 from typing import Dict, List, Optional, Any
 import logging
 
@@ -22,89 +23,151 @@ class ShopifyClient:
         self._auto_optimization_enabled = True
         self._current_optimization_level = "balanced"
     
-    async def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make authenticated request to Shopify API"""
-        async with httpx.AsyncClient() as client:
-            url = f"{self.base_url}/{endpoint}"
-            
+    async def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, retry_count: int = 3) -> Dict:
+        """Make authenticated request to Shopify API with retry logic"""
+        # Configure timeout: 60 seconds for connection/read, 120 seconds total
+        timeout = httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=120.0)
+        
+        last_exception = None
+        for attempt in range(retry_count):
             try:
-                if method.upper() == "GET":
-                    response = await client.get(url, headers=self.headers, params=data)
-                elif method.upper() == "POST":
-                    response = await client.post(url, headers=self.headers, json=data)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
-                
-                response.raise_for_status()
-                return response.json()
-                
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    url = f"{self.base_url}/{endpoint}"
+                    
+                    if method.upper() == "GET":
+                        response = await client.get(url, headers=self.headers, params=data)
+                    elif method.upper() == "POST":
+                        response = await client.post(url, headers=self.headers, json=data)
+                    else:
+                        raise ValueError(f"Unsupported HTTP method: {method}")
+                    
+                    response.raise_for_status()
+                    return response.json()
+                    
             except httpx.HTTPStatusError as e:
                 logger.error(f"Shopify API error: {e.response.status_code} - {e.response.text}")
+                # Don't retry on HTTP errors (4xx, 5xx) except for 429 (rate limit) and 5xx errors
+                if e.response.status_code == 429 or e.response.status_code >= 500:
+                    last_exception = Exception(f"Shopify API error: {e.response.status_code}")
+                    if attempt < retry_count - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        logger.info(f"Retrying after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                        await asyncio.sleep(wait_time)
+                        continue
                 raise Exception(f"Shopify API error: {e.response.status_code}")
+            except httpx.ReadTimeout as e:
+                logger.error(f"Shopify API timeout after 60 seconds: {str(e)}")
+                last_exception = Exception(f"Shopify API timeout: Request took too long to complete")
+                if attempt < retry_count - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.info(f"Retrying after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                    await asyncio.sleep(wait_time)
+                    continue
             except Exception as e:
                 logger.error(f"Request failed: {str(e)}")
-                raise
+                last_exception = e
+                if attempt < retry_count - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.info(f"Retrying after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                    await asyncio.sleep(wait_time)
+                    continue
+        
+        # If we've exhausted all retries, raise the last exception
+        if last_exception:
+            raise last_exception
+        raise Exception("Request failed after all retry attempts")
     
-    async def _make_graphql_request(self, query: str, variables: Optional[Dict] = None) -> Dict:
-        """Make GraphQL request to Shopify Admin API with cost tracking"""
-        async with httpx.AsyncClient() as client:
-            url = f"{self.base_url}/graphql.json"
-            
-            payload = {
-                "query": query,
-                "variables": variables or {}
-            }
-            
+    async def _make_graphql_request(self, query: str, variables: Optional[Dict] = None, retry_count: int = 3) -> Dict:
+        """Make GraphQL request to Shopify Admin API with cost tracking and retry logic"""
+        # Configure timeout: 60 seconds for connection/read, 120 seconds total
+        timeout = httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=120.0)
+        
+        last_exception = None
+        for attempt in range(retry_count):
             try:
-                response = await client.post(url, headers=self.headers, json=payload)
-                response.raise_for_status()
-                result = response.json()
-                
-                # Track GraphQL query costs
-                if "extensions" in result and "cost" in result["extensions"]:
-                    cost_data = result["extensions"]["cost"]
-                    actual_cost = cost_data.get("actualQueryCost", 0)
-                    requested_cost = cost_data.get("requestedQueryCost", 0)
-                    throttle_status = cost_data.get("throttleStatus", {})
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    url = f"{self.base_url}/graphql.json"
                     
-                    self._last_query_cost = actual_cost
-                    self._total_query_cost += actual_cost
-                    self._query_count += 1
+                    payload = {
+                        "query": query,
+                        "variables": variables or {}
+                    }
                     
-                    # Log cost information
-                    logger.info(f"GraphQL Query Cost: {actual_cost}/{requested_cost} "
-                               f"(Available: {throttle_status.get('currentlyAvailable', 'N/A')}/{throttle_status.get('maximumAvailable', 'N/A')})")
+                    response = await client.post(url, headers=self.headers, json=payload)
+                    response.raise_for_status()
+                    result = response.json()
                     
-                    # Warn if approaching rate limit
-                    if throttle_status.get("currentlyAvailable", float('inf')) < 500:
-                        logger.warning(f"Low GraphQL quota remaining: {throttle_status.get('currentlyAvailable')} points")
-                    
-                    # Log high-cost queries for optimization
-                    if actual_cost > 500:
-                        logger.warning(f"High-cost GraphQL query detected: {actual_cost} points. Consider optimizing query structure.")
-                        self._high_cost_query_count += 1
+                    # Track GraphQL query costs
+                    if "extensions" in result and "cost" in result["extensions"]:
+                        cost_data = result["extensions"]["cost"]
+                        actual_cost = cost_data.get("actualQueryCost", 0)
+                        requested_cost = cost_data.get("requestedQueryCost", 0)
+                        throttle_status = cost_data.get("throttleStatus", {})
                         
-                        # Auto-adjust optimization level if enabled
-                        if self._auto_optimization_enabled and self._high_cost_query_count > 3:
-                            if self._current_optimization_level == "full":
-                                self._current_optimization_level = "balanced"
-                                logger.info("Auto-adjusting optimization level from 'full' to 'balanced' due to high query costs")
-                            elif self._current_optimization_level == "balanced":
-                                self._current_optimization_level = "minimal"
-                                logger.info("Auto-adjusting optimization level from 'balanced' to 'minimal' due to high query costs")
-                
-                if "errors" in result:
-                    logger.error(f"GraphQL errors: {result['errors']}")
-                    raise Exception(f"GraphQL errors: {result['errors']}")
-                
-                return result
-                
+                        self._last_query_cost = actual_cost
+                        self._total_query_cost += actual_cost
+                        self._query_count += 1
+                        
+                        # Log cost information
+                        logger.info(f"GraphQL Query Cost: {actual_cost}/{requested_cost} "
+                                   f"(Available: {throttle_status.get('currentlyAvailable', 'N/A')}/{throttle_status.get('maximumAvailable', 'N/A')})")
+                        
+                        # Warn if approaching rate limit
+                        if throttle_status.get("currentlyAvailable", float('inf')) < 500:
+                            logger.warning(f"Low GraphQL quota remaining: {throttle_status.get('currentlyAvailable')} points")
+                        
+                        # Log high-cost queries for optimization
+                        if actual_cost > 500:
+                            logger.warning(f"High-cost GraphQL query detected: {actual_cost} points. Consider optimizing query structure.")
+                            self._high_cost_query_count += 1
+                            
+                            # Auto-adjust optimization level if enabled
+                            if self._auto_optimization_enabled and self._high_cost_query_count > 3:
+                                if self._current_optimization_level == "full":
+                                    self._current_optimization_level = "balanced"
+                                    logger.info("Auto-adjusting optimization level from 'full' to 'balanced' due to high query costs")
+                                elif self._current_optimization_level == "balanced":
+                                    self._current_optimization_level = "minimal"
+                                    logger.info("Auto-adjusting optimization level from 'balanced' to 'minimal' due to high query costs")
+                    
+                    if "errors" in result:
+                        logger.error(f"GraphQL errors: {result['errors']}")
+                        raise Exception(f"GraphQL errors: {result['errors']}")
+                    
+                    return result
+                    
             except httpx.HTTPStatusError as e:
                 logger.error(f"Shopify GraphQL error: {e.response.status_code} - {e.response.text}")
+                # Don't retry on HTTP errors (4xx) except for 429 (rate limit) and 5xx errors
+                if e.response.status_code == 429 or e.response.status_code >= 500:
+                    last_exception = Exception(f"Shopify GraphQL error: {e.response.status_code}")
+                    if attempt < retry_count - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        logger.info(f"Retrying GraphQL request after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                        await asyncio.sleep(wait_time)
+                        continue
                 raise Exception(f"Shopify GraphQL error: {e.response.status_code}")
+            except httpx.ReadTimeout as e:
+                logger.error(f"Shopify GraphQL timeout after 60 seconds: {str(e)}")
+                last_exception = Exception(f"Shopify GraphQL timeout: Request took too long to complete")
+                if attempt < retry_count - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.info(f"Retrying GraphQL request after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                    await asyncio.sleep(wait_time)
+                    continue
             except Exception as e:
                 logger.error(f"GraphQL request failed: {str(e)}")
-                raise
+                last_exception = e
+                if attempt < retry_count - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.info(f"Retrying GraphQL request after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
+                    await asyncio.sleep(wait_time)
+                    continue
+        
+        # If we've exhausted all retries, raise the last exception
+        if last_exception:
+            raise last_exception
+        raise Exception("GraphQL request failed after all retry attempts")
     
     def get_query_cost_stats(self) -> Dict[str, Any]:
         """Get GraphQL query cost statistics"""
