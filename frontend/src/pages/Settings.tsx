@@ -12,6 +12,7 @@ import {
   MoonIcon,
   PlayIcon,
   ArrowPathIcon,
+  CircleStackIcon,
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import api from "../utils/api";
@@ -673,6 +674,187 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({
         </div>
       </Dialog>
     </>
+  );
+};
+
+const DatabaseCompaction: React.FC = () => {
+  const [isCompacting, setIsCompacting] = useState(false);
+  const queryClient = useQueryClient();
+
+  const { data: dbStats, isLoading, refetch } = useQuery({
+    queryKey: ["database-stats"],
+    queryFn: async () => {
+      const response = await api.get("/settings/database-stats");
+      return response.data;
+    },
+  });
+
+  const compactMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post("/settings/compact-database");
+      return response.data;
+    },
+    onMutate: () => {
+      setIsCompacting(true);
+    },
+    onSuccess: (data) => {
+      toast.success(
+        `Database compacted successfully! Saved ${data.space_saved_mb} MB (${data.space_saved_percent}%)`,
+        { duration: 5000 }
+      );
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["database-stats"] });
+    },
+    onError: (error: any) => {
+      toast.error(
+        error.response?.data?.detail || "Failed to compact database"
+      );
+    },
+    onSettled: () => {
+      setIsCompacting(false);
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-4">
+        <LoadingSpinner size="sm" />
+      </div>
+    );
+  }
+
+  if (!dbStats) {
+    return (
+      <div className="text-sm text-gray-500 dark:text-dark-400">
+        Unable to load database statistics
+      </div>
+    );
+  }
+
+  const getFragmentationColor = (percent: number) => {
+    if (percent < 10) return "text-green-600 dark:text-green-400";
+    if (percent < 30) return "text-yellow-600 dark:text-yellow-400";
+    return "text-red-600 dark:text-red-400";
+  };
+
+  const getFragmentationBgColor = (percent: number) => {
+    if (percent < 10) return "bg-green-100 dark:bg-green-900/20";
+    if (percent < 30) return "bg-yellow-100 dark:bg-yellow-900/20";
+    return "bg-red-100 dark:bg-red-900/20";
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-500 dark:text-dark-400">
+        Reclaim unused space and optimize database performance by compacting.
+      </p>
+
+      {/* Database Statistics */}
+      <div className="bg-gray-50 dark:bg-dark-200 rounded-lg p-4 space-y-3">
+        <div className="flex items-center space-x-2 mb-3">
+          <CircleStackIcon className="h-5 w-5 text-gray-600 dark:text-dark-500" />
+          <h5 className="text-sm font-medium text-gray-900 dark:text-dark-800">
+            Database Statistics
+          </h5>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-xs text-gray-500 dark:text-dark-400">
+              Total Size
+            </div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-dark-800">
+              {dbStats.file_size_mb} MB
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 dark:text-dark-400">
+              Used Space
+            </div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-dark-800">
+              {dbStats.used_size_mb} MB
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 dark:text-dark-400">
+              Free Space
+            </div>
+            <div className="text-lg font-semibold text-gray-600 dark:text-dark-500">
+              {dbStats.free_size_mb} MB
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 dark:text-dark-400">
+              Fragmentation
+            </div>
+            <div
+              className={`text-lg font-semibold ${getFragmentationColor(
+                dbStats.fragmentation_percent
+              )}`}
+            >
+              {dbStats.fragmentation_percent}%
+            </div>
+          </div>
+        </div>
+
+        {/* Fragmentation indicator */}
+        {dbStats.fragmentation_percent > 10 && (
+          <div
+            className={`mt-3 px-3 py-2 rounded-md text-sm ${getFragmentationBgColor(
+              dbStats.fragmentation_percent
+            )}`}
+          >
+            <p className={`font-medium ${getFragmentationColor(
+              dbStats.fragmentation_percent
+            )}`}>
+              {dbStats.fragmentation_percent > 30
+                ? "High fragmentation detected!"
+                : "Moderate fragmentation detected."}
+            </p>
+            <p className="text-xs mt-1 text-gray-600 dark:text-dark-500">
+              {dbStats.fragmentation_percent > 30
+                ? "Compacting is highly recommended to reclaim space."
+                : "Consider compacting to optimize performance."}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Compact Button */}
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-gray-500 dark:text-dark-400">
+          {dbStats.can_compact ? (
+            <>
+              <span className="font-medium">{dbStats.free_size_mb} MB</span> can be
+              reclaimed
+            </>
+          ) : (
+            "Database is already optimized"
+          )}
+        </div>
+        <button
+          onClick={() => compactMutation.mutate()}
+          disabled={!dbStats.can_compact || isCompacting}
+          className={`inline-flex items-center px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            dbStats.can_compact && !isCompacting
+              ? "text-white bg-shopify-600 hover:bg-shopify-700"
+              : "text-gray-400 dark:text-dark-400 bg-gray-200 dark:bg-dark-300 cursor-not-allowed"
+          }`}
+        >
+          {isCompacting ? (
+            <>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+              Compacting...
+            </>
+          ) : (
+            <>
+              <CircleStackIcon className="h-4 w-4 mr-2" />
+              Compact Database
+            </>
+          )}
+        </button>
+      </div>
+    </div>
   );
 };
 
@@ -1385,6 +1567,14 @@ const Settings: React.FC = () => {
                 <option value={90}>90 days</option>
                 <option value={180}>180 days</option>
               </select>
+            </div>
+
+            {/* Database Compaction */}
+            <div className="border-t pt-6">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-dark-600 mb-3">
+                Database Compaction
+              </h4>
+              <DatabaseCompaction />
             </div>
 
             {/* Reset Data */}

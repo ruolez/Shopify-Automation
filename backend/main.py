@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
-from database import engine, get_db, create_tables
+from database import engine, get_db, create_tables, SessionLocal
 from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, AdminUser, AdminAuditLog, SystemSettings, FraudAnalysis, FraudDetectionRule, TaskStatus
 from auth import get_current_user, create_access_token, verify_password, get_password_hash
 from admin_auth import get_current_admin_user, create_admin_access_token, verify_admin_password, get_admin_password_hash, log_admin_action, require_admin_role
@@ -2728,6 +2728,146 @@ async def delete_excluded_sku(
         logger.error(f"Error deleting excluded SKU: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete excluded SKU")
+
+# Database compaction endpoints
+@app.get("/settings/database-stats")
+async def get_database_statistics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get database size and fragmentation statistics"""
+    import os
+    
+    try:
+        # Get the database file path
+        db_url = os.getenv("DATABASE_URL", "sqlite:///./shopify_automation.db")
+        if db_url.startswith("sqlite:///"):
+            db_path = db_url.replace("sqlite:///", "")
+            # Handle relative paths
+            if not db_path.startswith("/"):
+                db_path = os.path.join(os.getcwd(), db_path)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Database compaction is only available for SQLite databases"
+            )
+        
+        # Get file size
+        if not os.path.exists(db_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Database file not found at {db_path}"
+            )
+        
+        file_size_bytes = os.path.getsize(db_path)
+        
+        # Get database statistics using SQLite pragmas
+        page_count = db.execute(text("PRAGMA page_count")).scalar()
+        page_size = db.execute(text("PRAGMA page_size")).scalar()
+        freelist_count = db.execute(text("PRAGMA freelist_count")).scalar()
+        
+        # Calculate statistics
+        total_size_bytes = page_count * page_size
+        free_size_bytes = freelist_count * page_size
+        used_size_bytes = total_size_bytes - free_size_bytes
+        fragmentation_percent = (freelist_count / page_count * 100) if page_count > 0 else 0
+        
+        return {
+            "file_size_bytes": file_size_bytes,
+            "file_size_mb": round(file_size_bytes / 1024 / 1024, 2),
+            "total_pages": page_count,
+            "free_pages": freelist_count,
+            "page_size": page_size,
+            "used_size_bytes": used_size_bytes,
+            "used_size_mb": round(used_size_bytes / 1024 / 1024, 2),
+            "free_size_bytes": free_size_bytes,
+            "free_size_mb": round(free_size_bytes / 1024 / 1024, 2),
+            "fragmentation_percent": round(fragmentation_percent, 2),
+            "can_compact": freelist_count > 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting database statistics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get database statistics: {str(e)}"
+        )
+
+@app.post("/settings/compact-database")
+async def compact_database(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Compact the database by running VACUUM to reclaim unused space"""
+    import os
+    
+    try:
+        # Get initial statistics
+        initial_stats = await get_database_statistics(current_user, db)
+        
+        # Close the current session to allow VACUUM to run
+        db.close()
+        
+        # Run VACUUM command
+        # Note: VACUUM cannot be run inside a transaction
+        engine = db.get_bind()
+        with engine.connect() as conn:
+            # Set isolation level to allow VACUUM
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            conn.execute(text("VACUUM"))
+            conn.commit()
+        
+        # Get new statistics after compaction
+        # Create a new session for this
+        new_db = SessionLocal()
+        try:
+            final_stats = await get_database_statistics(current_user, new_db)
+            
+            # Calculate space saved
+            space_saved_bytes = initial_stats["file_size_bytes"] - final_stats["file_size_bytes"]
+            space_saved_mb = round(space_saved_bytes / 1024 / 1024, 2)
+            
+            # Log the compaction
+            log_entry = OrderLog(
+                user_id=current_user.id,
+                store_id=0,  # System action
+                order_id="SYSTEM_COMPACT",
+                order_number="SYSTEM",
+                action="database_compacted",
+                status="success",
+                details={
+                    "initial_size_mb": initial_stats["file_size_mb"],
+                    "final_size_mb": final_stats["file_size_mb"],
+                    "space_saved_mb": space_saved_mb,
+                    "initial_fragmentation": initial_stats["fragmentation_percent"],
+                    "final_fragmentation": final_stats["fragmentation_percent"]
+                }
+            )
+            new_db.add(log_entry)
+            new_db.commit()
+            
+            return {
+                "message": "Database compacted successfully",
+                "initial_size_mb": initial_stats["file_size_mb"],
+                "final_size_mb": final_stats["file_size_mb"],
+                "space_saved_mb": space_saved_mb,
+                "space_saved_percent": round((space_saved_bytes / initial_stats["file_size_bytes"] * 100) if initial_stats["file_size_bytes"] > 0 else 0, 2),
+                "initial_fragmentation": initial_stats["fragmentation_percent"],
+                "final_fragmentation": final_stats["fragmentation_percent"]
+            }
+        finally:
+            new_db.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error compacting database: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to compact database: {str(e)}"
+        )
 
 # ==================== FRAUD DETECTION ENDPOINTS ====================
 
