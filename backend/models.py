@@ -149,6 +149,21 @@ class ProcessedOrder(Base):
         UniqueConstraint('store_id', 'order_id', name='unique_store_order'),
     )
 
+class ProcessedFraudOrder(Base):
+    __tablename__ = "processed_fraud_orders"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id"), nullable=False)
+    order_id = Column(String, nullable=False, index=True)  # Shopify order ID
+    fraud_analysis_id = Column(Integer, ForeignKey("fraud_analyses.id"))  # Link to analysis
+    rules_applied = Column(Integer, default=0)  # Count of rules that matched
+    processed_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Unique constraint to prevent duplicate processing
+    __table_args__ = (
+        UniqueConstraint('store_id', 'order_id', name='unique_store_fraud_order'),
+    )
+
 class LocationAlias(Base):
     __tablename__ = "location_aliases"
     

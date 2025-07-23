@@ -1364,7 +1364,7 @@ const Settings: React.FC = () => {
                 <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="bg-gray-50 dark:bg-dark-200 px-4 py-3 rounded-lg">
                     <div className="text-sm font-medium text-gray-500 dark:text-dark-600">
-                      Recent Analyses (7d)
+                      Recent Analyses
                     </div>
                     <div className="text-lg font-bold text-gray-900 dark:text-dark-800">
                       {fraudSyncStatus.recent_analyses_count}
@@ -1411,7 +1411,7 @@ const Settings: React.FC = () => {
                       {fraudSyncStatus.running_tasks.map((task) => (
                         <div key={task.task_id}>
                           {task.task_type === "trigger_fraud_analysis" ? "Analyzing fraud" : "Reprocessing rules"}
-                          {" "}- Started {formatDate(new Date(task.started_at), {
+                          {" "}- Started {formatDate(task.started_at, {
                             timezone: settings?.timezone || "UTC",
                             dateFormat: settings?.date_format || "MMM d, yyyy HH:mm"
                           })}

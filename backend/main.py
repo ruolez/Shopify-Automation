@@ -2549,7 +2549,7 @@ async def analyze_selected_oos_orders(
                 }
             
             product_data[key]["total_incidents"] += 1
-            product_data[key]["total_quantity_affected"] += incident.quantity_attempted
+            product_data[key]["total_quantity_affected"] += incident.quantity_attempted or 0
             product_data[key]["affected_orders"].add(incident.order_number)
             if incident.attempted_location_alias:
                 product_data[key]["locations_affected"].add(incident.attempted_location_alias)
@@ -2557,7 +2557,7 @@ async def analyze_selected_oos_orders(
             product_data[key]["incidents"].append({
                 "order_number": incident.order_number,
                 "incident_date": incident.incident_date.isoformat(),
-                "quantity_attempted": incident.quantity_attempted,
+                "quantity_attempted": incident.quantity_attempted or 0,
                 "attempted_location_alias": incident.attempted_location_alias,
                 "rule_name": incident.rule_name
             })
@@ -4846,7 +4846,7 @@ async def get_fraud_sync_status(
                 {
                     "task_id": task.task_id,
                     "task_type": task.task_name,
-                    "started_at": task.created_at,
+                    "started_at": task.started_at.replace(tzinfo=timezone.utc).isoformat() if task.started_at else None,
                     "status": task.status
                 }
                 for task in running_fraud_tasks
@@ -4903,7 +4903,7 @@ async def trigger_fraud_analysis(
             task_id=task.id,
             task_name="trigger_fraud_analysis",
             status="running",
-            started_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc)
         )
         db.add(task_status)
         db.commit()
@@ -5041,7 +5041,7 @@ async def reprocess_fraud_rules(
             task_id=task.id,
             task_name="reprocess_fraud_rules",
             status="running",
-            started_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc)
         )
         db.add(task_status)
         db.commit()

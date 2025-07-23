@@ -1,6 +1,7 @@
 from celery import Celery
 from celery.schedules import crontab
 import os
+import sys
 import asyncio
 import logging
 import pytz
@@ -8,13 +9,17 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
+# Add the app directory to Python path
+sys.path.insert(0, '/app')
+
 from database import SessionLocal, engine
-from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, FraudAnalysis
+from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, FraudAnalysis, ProcessedFraudOrder
 from shopify_client import ShopifyClient
 from enhanced_shopify_client import EnhancedShopifyClient
 from rule_engine import RuleEngine
 from fraud_service import FraudAnalysisService
 from fraud_rule_processor import process_fraud_rules_for_order_async
+from fraud_archive_service import FraudArchiveService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -89,7 +94,7 @@ def _record_oos_incident(
     try:
         order_id = order["id"]
         order_number = order.get("name", "Unknown")
-        incident_date = datetime.utcnow()
+        incident_date = datetime.now(timezone.utc)
         
         # Get line items from the order
         line_items = order.get("lineItems", {}).get("edges", [])
@@ -183,7 +188,7 @@ def _record_oos_incident_for_failed_items(
     try:
         order_id = order["id"]
         order_number = order.get("name", "Unknown")
-        incident_date = datetime.utcnow()
+        incident_date = datetime.now(timezone.utc)
         
         if not failed_items:
             logger.warning(f"No failed items provided for OOS incident recording for order {order_number}")
@@ -290,7 +295,7 @@ def _record_oos_incident_for_unavailable_items(
     try:
         order_id = order["id"]
         order_number = order.get("name", "Unknown")
-        incident_date = datetime.utcnow()
+        incident_date = datetime.now(timezone.utc)
         
         if not unavailable_items:
             logger.warning(f"No unavailable items provided for OOS incident recording for order {order_number}")
@@ -514,7 +519,7 @@ def create_task_status(task_id: str, task_name: str, status: str = "pending", us
         if existing_task:
             logger.warning(f"Task {task_id} already exists, updating status instead")
             existing_task.status = status
-            existing_task.started_at = datetime.utcnow() if status == "running" else None
+            existing_task.started_at = datetime.now(timezone.utc) if status == "running" else None
             if user_id and not existing_task.user_id:
                 existing_task.user_id = user_id
         else:
@@ -523,7 +528,7 @@ def create_task_status(task_id: str, task_name: str, status: str = "pending", us
                 task_name=task_name,
                 status=status,
                 user_id=user_id,
-                started_at=datetime.utcnow() if status == "running" else None
+                started_at=datetime.now(timezone.utc) if status == "running" else None
             )
             db.add(task_status)
         db.commit()
@@ -542,7 +547,7 @@ def update_task_status(task_id: str, status: str, result: Dict = None, error_mes
             task_status.result = result
             task_status.error_message = error_message
             if status in ["success", "failed"]:
-                task_status.completed_at = datetime.utcnow()
+                task_status.completed_at = datetime.now(timezone.utc)
             db.commit()
     except Exception as e:
         logger.error(f"Failed to update task status: {str(e)}")
@@ -560,7 +565,7 @@ def cleanup_stale_tasks(max_age_hours: int = 24) -> Dict[str, int]:
     """
     db = get_db()
     try:
-        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         
         # Find stale running tasks
         stale_tasks = db.query(TaskStatus).filter(
@@ -574,7 +579,7 @@ def cleanup_stale_tasks(max_age_hours: int = 24) -> Dict[str, int]:
         for task in stale_tasks:
             task.status = "failed"
             task.error_message = f"Task marked as stale after {max_age_hours} hours"
-            task.completed_at = datetime.utcnow()
+            task.completed_at = datetime.now(timezone.utc)
             logger.warning(f"Marking stale task {task.task_id} ({task.task_name}) as failed - started at {task.started_at}")
         
         db.commit()
@@ -671,6 +676,28 @@ async def _process_fraud_rules_for_order(
         logger.info(f"Fraud rule processing completed for order {order_name}: "
                    f"{fraud_results.get('rules_matched', 0)} rules matched, "
                    f"{fraud_results.get('actions_executed', 0)} actions executed")
+        
+        # Create ProcessedFraudOrder record to prevent reprocessing
+        try:
+            order_id = order_data.get('id', '')
+            processed_fraud_order = ProcessedFraudOrder(
+                store_id=fraud_store.id,
+                order_id=order_id,
+                fraud_analysis_id=fraud_analysis.id,
+                rules_applied=fraud_results.get('rules_matched', 0)
+            )
+            fraud_db.add(processed_fraud_order)
+            fraud_db.commit()
+            logger.info(f"Created ProcessedFraudOrder record for order {order_name}")
+        except Exception as e:
+            # If there's a duplicate key error, it means the order was already processed
+            # This is fine - just log and continue
+            if "UNIQUE constraint failed" in str(e) or "duplicate key" in str(e).lower():
+                logger.info(f"Order {order_name} already has ProcessedFraudOrder record (concurrent processing detected)")
+            else:
+                logger.error(f"Failed to create ProcessedFraudOrder record: {str(e)}")
+                # Don't fail the whole process, but rollback just this transaction
+                fraud_db.rollback()
         
         return {
             "fraud_analysis_completed": True,
@@ -771,7 +798,7 @@ def process_store_orders(self, user_id: int, store_id: int):
             update_task_status(task_id, "success", result)
             
             # Update store last sync time
-            store.last_sync = datetime.utcnow()
+            store.last_sync = datetime.now(timezone.utc)
             db.commit()
             
             return result
@@ -808,7 +835,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     sync_window_days = settings.sync_window_days if settings and settings.sync_window_days else 7
     
     # Use configurable sync window instead of hardcoded 24 hours
-    sync_cutoff = datetime.utcnow() - timedelta(days=sync_window_days)
+    sync_cutoff = datetime.now(timezone.utc) - timedelta(days=sync_window_days)
     sync_cutoff_date = sync_cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     
     # Also use last sync for efficiency (if available)
@@ -1401,7 +1428,7 @@ def process_all_orders_if_enabled(self):
                 if not store.last_sync:
                     should_sync = True
                 else:
-                    time_since_sync = datetime.utcnow() - store.last_sync
+                    time_since_sync = datetime.now(timezone.utc) - store.last_sync
                     if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
                         should_sync = True
                 
@@ -1449,7 +1476,7 @@ def process_fraud_detection_if_enabled(self):
                 if not store.last_sync:
                     should_sync = True
                 else:
-                    time_since_sync = datetime.utcnow() - store.last_sync
+                    time_since_sync = datetime.now(timezone.utc) - store.last_sync
                     if time_since_sync.total_seconds() >= settings.sync_frequency_minutes * 60:
                         should_sync = True
                 
@@ -1516,6 +1543,8 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
     
     db = get_db()
     try:
+        logger.info(f"Starting fraud detection task for store_id={store_id}, user_id={user_id}")
+        
         # Get the store
         store = db.query(ShopifyStore).filter(
             ShopifyStore.id == store_id,
@@ -1523,7 +1552,10 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
         ).first()
         
         if not store:
-            raise ValueError(f"Store {store_id} not found for user {user_id}")
+            error_msg = f"Store {store_id} not found for user {user_id}"
+            logger.error(error_msg)
+            update_task_status(task_id, "failed", error_message=error_msg)
+            raise ValueError(error_msg)
         
         # Get user settings
         settings = db.query(Settings).filter(Settings.user_id == user_id).first()
@@ -1536,7 +1568,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
         # Calculate date range for fetching orders
         # For regular syncs, use a smaller window to avoid rate limiting
         # Only look back further if store hasn't been synced in a while
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         
         # Determine how far back to look
         if not store.last_sync:
@@ -1639,33 +1671,16 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                         skipped_fulfilled += 1
                     continue
                 
-                # Check if we already have a fraud analysis for this order
+                # Check if we already processed fraud detection for this order
                 order_id = order.get("id")
-                existing_analysis = db.query(FraudAnalysis).filter(
-                    FraudAnalysis.shopify_order_id == order_id,
-                    FraudAnalysis.store_id == store_id
+                processed_fraud_order = db.query(ProcessedFraudOrder).filter(
+                    ProcessedFraudOrder.store_id == store_id,
+                    ProcessedFraudOrder.order_id == order_id
                 ).first()
                 
-                # Skip if already analyzed AND rules have been processed
-                if existing_analysis and existing_analysis.rule_processing_results:
-                    logger.debug(f"Order {order.get('name')} already has fraud analysis with processed rules, skipping")
-                    continue
-                
-                # If existing analysis but no rule processing, just process rules
-                if existing_analysis and not existing_analysis.rule_processing_results:
-                    logger.info(f"Order {order.get('name')} has fraud analysis but no rule processing, processing rules now")
-                    # Get user
-                    user = db.query(User).filter(User.id == store.user_id).first()
-                    if user:
-                        # Process fraud rules for existing analysis
-                        from fraud_rule_processor import process_fraud_rules_for_order_async
-                        fraud_results = loop.run_until_complete(
-                            process_fraud_rules_for_order_async(
-                                db, user, store, client, order, existing_analysis
-                            )
-                        )
-                        if fraud_results and fraud_results.get('rules_matched', 0) > 0:
-                            processed_count += 1
+                # Skip if already processed
+                if processed_fraud_order:
+                    logger.debug(f"Order {order.get('name')} already processed for fraud detection, skipping")
                     continue
                 
                 # Run full fraud analysis and rule processing for new orders
@@ -1708,12 +1723,23 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
         }
         
     except Exception as e:
-        logger.error(f"Failed to process fraud detection for store {store_id}: {str(e)}")
-        update_task_status(task_id, "failed", error_message=str(e))
+        error_msg = f"Failed to process fraud detection for store {store_id}: {str(e)}"
+        logger.error(error_msg, exc_info=True)  # Add full traceback to logs
+        try:
+            # Ensure error is properly saved to task status
+            update_task_status(task_id, "failed", error_message=error_msg)
+        except Exception as update_error:
+            logger.error(f"Failed to update task status: {str(update_error)}")
         raise
     finally:
-        loop.close()
-        db.close()
+        try:
+            loop.close()
+        except Exception as loop_error:
+            logger.error(f"Failed to close event loop: {str(loop_error)}")
+        try:
+            db.close()
+        except Exception as db_error:
+            logger.error(f"Failed to close database: {str(db_error)}")
 
 @celery.task(bind=True)
 def cleanup_old_logs(self):
@@ -1743,7 +1769,7 @@ def cleanup_old_logs(self):
                 deleted_archived_analyses[user.email] = deleted_count
         
         # Delete logs older than 30 days (default for system logs)
-        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=30)
         
         deleted_logs = db.query(OrderLog).filter(
             OrderLog.created_at < cutoff_date
@@ -1754,7 +1780,7 @@ def cleanup_old_logs(self):
         stale_tasks_cleaned = stale_cleanup_result.get("stale_tasks_cleaned", 0)
         
         # Delete task status records older than 7 days
-        task_cutoff = datetime.utcnow() - timedelta(days=7)
+        task_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         deleted_tasks = db.query(TaskStatus).filter(
             TaskStatus.created_at < task_cutoff
         ).delete()
@@ -1830,8 +1856,6 @@ def archive_fulfilled_fraud_analyses(self):
     
     db = get_db()
     try:
-        from fraud_archive_service import FraudArchiveService
-        
         # Get all users with fraud sync enabled
         users_with_fraud_enabled = db.query(User).join(Settings).filter(
             Settings.fraud_sync_enabled == True
