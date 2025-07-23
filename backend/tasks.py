@@ -8,6 +8,7 @@ import pytz
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 # Add the app directory to Python path
 sys.path.insert(0, '/app')
@@ -966,13 +967,23 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                         current_order, store, db, client, order_created_at
                     )
                     
-                    # Mark order as processed
-                    processed_order = ProcessedOrder(
-                        store_id=store.id,
-                        order_id=order_id
-                    )
-                    db.add(processed_order)
-                    db.commit()
+                    # Mark order as processed with race condition handling
+                    try:
+                        processed_order = ProcessedOrder(
+                            store_id=store.id,
+                            order_id=order_id
+                        )
+                        db.add(processed_order)
+                        db.commit()
+                    except IntegrityError as e:
+                        db.rollback()
+                        # This is expected in race conditions between workers
+                        logger.info(f"Order {order_number} already marked as processed by another worker")
+                        # Continue processing since the order is already marked
+                    except Exception as e:
+                        db.rollback()
+                        # Re-raise other exceptions to be handled by outer try-except
+                        raise
                     
                     # Log if no rules were applied
                     if not rules_applied:
@@ -985,7 +996,16 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     
                     processed_orders += 1
                     
+                except IntegrityError as e:
+                    # Rollback the session if there's any database error
+                    db.rollback()
+                    # This can happen if the order was processed between our check and insert
+                    logger.info(f"Order {order_number} was already processed by another worker (race condition)")
+                    continue
                 except Exception as e:
+                    # Rollback the session if there's any database error
+                    db.rollback()
+                    
                     logger.error(f"Error processing order {order_number}: {str(e)}")
                     _log_order_action(
                         db, store.user_id, store.id, order_id, 
