@@ -130,6 +130,7 @@ class Settings(Base):
     reconciliation_batch_size = Column(Integer, default=500)  # Number of fraud analyses to process per reconciliation run
     timezone = Column(String, default="UTC")  # User's preferred timezone
     date_format = Column(String, default="MMM d, yyyy HH:mm")  # User's preferred date format
+    inventory_verification_excluded_tag = Column(String(255), nullable=True)  # Tag to exclude from inventory verification
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

@@ -183,6 +183,7 @@ class SettingsBase(BaseModel):
     reconciliation_batch_size: int = 500
     timezone: str = "UTC"
     date_format: str = "MMM d, yyyy HH:mm"
+    inventory_verification_excluded_tag: Optional[str] = None
 
 class SettingsUpdate(BaseModel):
     sync_frequency_minutes: Optional[int] = None
@@ -195,6 +196,7 @@ class SettingsUpdate(BaseModel):
     reconciliation_batch_size: Optional[int] = None
     timezone: Optional[str] = None
     date_format: Optional[str] = None
+    inventory_verification_excluded_tag: Optional[str] = None
     
     @validator('duplicate_detection_days')
     def validate_duplicate_detection_days(cls, v):
@@ -535,3 +537,62 @@ class FailedTasksResponse(BaseModel):
     page: int
     per_page: int
     pages: int
+
+# Inventory Management Schemas
+class InventorySearchRequest(BaseModel):
+    barcode: str
+    
+class ProductVariantInfo(BaseModel):
+    variant_id: str
+    title: str
+    sku: Optional[str]
+    barcode: Optional[str]
+    product_id: str
+    product_title: str
+    inventory_item_id: str
+
+class InventoryQuantities(BaseModel):
+    available: int
+    on_hand: int
+    committed: int
+    # Optional verification fields - backward compatible
+    verification_quantity: Optional[int] = None
+    verification_metadata: Optional[Dict[str, Any]] = None
+    
+class InventoryLocationLevel(BaseModel):
+    store_id: int
+    store_name: str
+    location_id: str
+    location_name: str
+    location_alias: Optional[str]
+    quantities: InventoryQuantities
+    inventory_item_id: Optional[str] = None  # Store-specific inventory item ID
+    
+class InventorySearchResponse(BaseModel):
+    barcode: str
+    variants: List[ProductVariantInfo]
+    inventory_levels: List[InventoryLocationLevel]
+    # Optional verification summary - backward compatible
+    verification_summary: Optional[Dict[str, Any]] = None
+    
+class InventoryUpdateItem(BaseModel):
+    store_id: int
+    location_id: str
+    inventory_item_id: str
+    available: Optional[int] = None
+    on_hand: Optional[int] = None
+    
+class InventoryUpdateRequest(BaseModel):
+    updates: List[InventoryUpdateItem]
+    
+class InventoryUpdateResult(BaseModel):
+    store_id: int
+    location_id: str
+    success: bool
+    error: Optional[str] = None
+    changes: Optional[Dict[str, Any]] = None
+    
+class InventoryUpdateResponse(BaseModel):
+    results: List[InventoryUpdateResult]
+    total: int
+    successful: int

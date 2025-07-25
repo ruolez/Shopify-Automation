@@ -16,7 +16,11 @@ import {
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import api from "../utils/api";
-import { fraudApi, type FraudAnalysisResult, type FraudAnalysisFilters } from "../utils/fraudApi";
+import {
+  fraudApi,
+  type FraudAnalysisResult,
+  type FraudAnalysisFilters,
+} from "../utils/fraudApi";
 import { fraudRuleApi, type FraudRule } from "../utils/fraudRuleApi";
 import { Store } from "../types";
 import LoadingSpinner from "../components/LoadingSpinner";
@@ -24,13 +28,18 @@ import FraudRuleBuilder from "../components/FraudRuleBuilder";
 import { useTimezone } from "../contexts/TimezoneContext";
 import { formatDate } from "../utils/dateFormat";
 
-type SortField = "order_name" | "risk_level" | "customer_name" | "order_total" | "analysis_timestamp";
+type SortField =
+  | "order_name"
+  | "risk_level"
+  | "customer_name"
+  | "order_total"
+  | "analysis_timestamp";
 type SortDirection = "asc" | "desc";
 
 const FraudDetection: React.FC = () => {
   const queryClient = useQueryClient();
   const { dateFormat, timezone } = useTimezone();
-  
+
   // State for manual analysis
   const [selectedStoreId, setSelectedStoreId] = useState<number | "">("");
   const [orderName, setOrderName] = useState("");
@@ -93,7 +102,7 @@ const FraudDetection: React.FC = () => {
 
   // Update filters when sorting changes
   React.useEffect(() => {
-    setFraudFilters(prev => ({
+    setFraudFilters((prev) => ({
       ...prev,
       sort_field: sortField,
       sort_direction: sortDirection,
@@ -108,7 +117,10 @@ const FraudDetection: React.FC = () => {
   // Handle click outside rule filter
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (ruleFilterRef.current && !ruleFilterRef.current.contains(event.target as Node)) {
+      if (
+        ruleFilterRef.current &&
+        !ruleFilterRef.current.contains(event.target as Node)
+      ) {
         setShowRuleFilter(false);
       }
     };
@@ -124,7 +136,14 @@ const FraudDetection: React.FC = () => {
 
   // Fetch fraud analysis results
   const { data: fraudResults, isLoading: resultsLoading } = useQuery({
-    queryKey: ["fraud-analyses", fraudFilters, sortField, sortDirection, selectedRules, showArchived],
+    queryKey: [
+      "fraud-analyses",
+      fraudFilters,
+      sortField,
+      sortDirection,
+      selectedRules,
+      showArchived,
+    ],
     queryFn: () => {
       if (showArchived) {
         return fraudApi.getArchivedFraudAnalyses({
@@ -137,7 +156,8 @@ const FraudDetection: React.FC = () => {
           ...fraudFilters,
           sort_field: sortField,
           sort_direction: sortDirection,
-          matched_rules: selectedRules.length > 0 ? selectedRules.join(',') : undefined,
+          matched_rules:
+            selectedRules.length > 0 ? selectedRules.join(",") : undefined,
         });
       }
     },
@@ -158,11 +178,14 @@ const FraudDetection: React.FC = () => {
     queryKey: ["fraud-rule-intersection-counts", selectedRules],
     queryFn: async () => {
       if (selectedRules.length === 0) return null;
-      const response = await api.get("/fraud-detection/rule-intersection-counts", {
-        params: {
-          selected_rules: selectedRules.join(',')
-        }
-      });
+      const response = await api.get(
+        "/fraud-detection/rule-intersection-counts",
+        {
+          params: {
+            selected_rules: selectedRules.join(","),
+          },
+        },
+      );
       console.log("Intersection counts response:", response.data);
       return response.data;
     },
@@ -180,13 +203,18 @@ const FraudDetection: React.FC = () => {
       if (!selectedStoreId || !orderName.trim()) {
         throw new Error("Please select a store and enter an order name");
       }
-      
+
       // First, trigger the analysis
-      const createResponse = await fraudApi.analyzeOrder(Number(selectedStoreId), orderName.trim());
-      
+      const createResponse = await fraudApi.analyzeOrder(
+        Number(selectedStoreId),
+        orderName.trim(),
+      );
+
       // Then fetch the detailed analysis
-      const detailedAnalysis = await fraudApi.getFraudAnalysis(createResponse.analysis_id);
-      
+      const detailedAnalysis = await fraudApi.getFraudAnalysis(
+        createResponse.analysis_id,
+      );
+
       return detailedAnalysis;
     },
     onSuccess: (data) => {
@@ -212,7 +240,9 @@ const FraudDetection: React.FC = () => {
       toast.success("Fraud rule deleted successfully");
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Failed to delete fraud rule");
+      toast.error(
+        error.response?.data?.detail || "Failed to delete fraud rule",
+      );
     },
   });
 
@@ -224,21 +254,30 @@ const FraudDetection: React.FC = () => {
       toast.success("Fraud rule status updated");
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Failed to update fraud rule");
+      toast.error(
+        error.response?.data?.detail || "Failed to update fraud rule",
+      );
     },
   });
 
   // Manual archive mutation
   const manualArchiveMutation = useMutation({
-    mutationFn: ({ analysisId, archiveReason }: { analysisId: number; archiveReason: string }) =>
-      fraudApi.manuallyArchiveAnalysis(analysisId, archiveReason),
+    mutationFn: ({
+      analysisId,
+      archiveReason,
+    }: {
+      analysisId: number;
+      archiveReason: string;
+    }) => fraudApi.manuallyArchiveAnalysis(analysisId, archiveReason),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["fraud-analyses"] });
       queryClient.invalidateQueries({ queryKey: ["fraud-analyses-archived"] });
       toast.success(`Order ${data.order_name} archived successfully`);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Failed to archive fraud analysis");
+      toast.error(
+        error.response?.data?.detail || "Failed to archive fraud analysis",
+      );
     },
   });
 
@@ -255,10 +294,10 @@ const FraudDetection: React.FC = () => {
       } else {
         // react-hot-toast doesn't have toast.info, so we use the default toast with a custom icon
         toast(data.message, {
-          icon: 'ℹ️',
+          icon: "ℹ️",
           style: {
-            background: '#3B82F6',
-            color: '#fff',
+            background: "#3B82F6",
+            color: "#fff",
           },
         });
       }
@@ -266,9 +305,14 @@ const FraudDetection: React.FC = () => {
     onError: (error: any) => {
       // Check if it's a 403 error
       if (error.response?.status === 403) {
-        toast.error("Authentication error. Please refresh the page and try again.");
+        toast.error(
+          "Authentication error. Please refresh the page and try again.",
+        );
       } else {
-        const errorMessage = error.response?.data?.detail || error.message || "Failed to run bulk archive process";
+        const errorMessage =
+          error.response?.data?.detail ||
+          error.message ||
+          "Failed to run bulk archive process";
         toast.error(errorMessage);
       }
     },
@@ -279,7 +323,12 @@ const FraudDetection: React.FC = () => {
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !analyzeOrderMutation.isPending && selectedStoreId && orderName.trim()) {
+    if (
+      e.key === "Enter" &&
+      !analyzeOrderMutation.isPending &&
+      selectedStoreId &&
+      orderName.trim()
+    ) {
       handleAnalyze();
     }
   };
@@ -354,7 +403,6 @@ const FraudDetection: React.FC = () => {
     );
   };
 
-
   const getBillingOutsideUSBadge = (value: boolean | null) => {
     if (value === null || value === undefined) {
       return <span className="text-sm text-gray-500">N/A</span>;
@@ -398,7 +446,7 @@ const FraudDetection: React.FC = () => {
 
   const getMatchedRules = (analysis: any) => {
     const rules = getMatchedRulesList(analysis);
-    
+
     if (rules.length === 0) {
       return (
         <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
@@ -406,7 +454,7 @@ const FraudDetection: React.FC = () => {
         </span>
       );
     }
-    
+
     return (
       <div className="flex flex-wrap gap-1">
         {rules.map((rule, index) => (
@@ -423,7 +471,7 @@ const FraudDetection: React.FC = () => {
 
   const getMatchedRulesList = (analysis: any): string[] => {
     const rules: string[] = [];
-    
+
     if (analysis.rule_processing_results?.results) {
       analysis.rule_processing_results.results
         .filter((result: any) => result.matched)
@@ -433,7 +481,7 @@ const FraudDetection: React.FC = () => {
           }
         });
     }
-    
+
     return rules;
   };
 
@@ -444,21 +492,21 @@ const FraudDetection: React.FC = () => {
       console.log("Using API rules:", allMatchedRules.rules);
       return allMatchedRules.rules;
     }
-    
+
     // Fallback to deriving from current results if API data not available yet
     console.log("API rules not available, using fallback");
     const uniqueRules = new Set<string>();
-    
+
     if (fraudResults?.analyses) {
       fraudResults.analyses.forEach((analysis) => {
         const rules = getMatchedRulesList(analysis);
-        rules.forEach(rule => uniqueRules.add(rule));
+        rules.forEach((rule) => uniqueRules.add(rule));
       });
     }
-    
+
     // Add "No rules matched" as an option
     uniqueRules.add("No rules matched");
-    
+
     const rulesArray = Array.from(uniqueRules).sort();
     console.log("Fallback rules:", rulesArray);
     return rulesArray;
@@ -473,9 +521,12 @@ const FraudDetection: React.FC = () => {
         return count;
       }
     }
-    
+
     // Otherwise, show the total count for each rule from the server
-    if (allMatchedRules?.rule_counts && allMatchedRules.rule_counts[ruleName] !== undefined) {
+    if (
+      allMatchedRules?.rule_counts &&
+      allMatchedRules.rule_counts[ruleName] !== undefined
+    ) {
       return allMatchedRules.rule_counts[ruleName];
     }
     return 0;
@@ -499,7 +550,7 @@ const FraudDetection: React.FC = () => {
     if (field !== sortField) {
       return null; // No icon for unsorted columns
     }
-    
+
     return sortDirection === "asc" ? (
       <ChevronUpIcon className="h-4 w-4" />
     ) : (
@@ -508,9 +559,9 @@ const FraudDetection: React.FC = () => {
   };
 
   const handleRuleFilterToggle = (rule: string) => {
-    setSelectedRules(prev => {
+    setSelectedRules((prev) => {
       if (prev.includes(rule)) {
-        return prev.filter(r => r !== rule);
+        return prev.filter((r) => r !== rule);
       } else {
         return [...prev, rule];
       }
@@ -524,35 +575,39 @@ const FraudDetection: React.FC = () => {
   const handleHoldOrder = async (analysis: any) => {
     try {
       setHoldingOrderId(analysis.shopify_order_id);
-      
+
       // Convert order ID to Shopify GID format if needed
-      const orderGid = analysis.shopify_order_id.startsWith('gid://shopify/Order/') 
-        ? analysis.shopify_order_id 
+      const orderGid = analysis.shopify_order_id.startsWith(
+        "gid://shopify/Order/",
+      )
+        ? analysis.shopify_order_id
         : `gid://shopify/Order/${analysis.shopify_order_id}`;
-      
+
       // Get all fulfillment orders for this order (each represents work instructions for a location)
       let fulfillmentResponse;
       try {
         // Use query parameters to avoid URL encoding issues
         console.log(`Getting fulfillment orders for: ${orderGid}`);
         fulfillmentResponse = await api.get(
-          `/fulfillment-orders?order_id=${encodeURIComponent(orderGid)}&store_id=${analysis.store_id}`
+          `/fulfillment-orders?order_id=${encodeURIComponent(orderGid)}&store_id=${analysis.store_id}`,
         );
       } catch (error: any) {
         // If order by ID fails, try to find by name
         if (error.response?.status === 404 || error.response?.status === 400) {
-          console.log(`Order lookup by ID failed, trying by name: ${analysis.order_name}`);
+          console.log(
+            `Order lookup by ID failed, trying by name: ${analysis.order_name}`,
+          );
           try {
             // Try to get order by name first, then get fulfillment orders
             const orderResponse = await api.get(
-              `/debug/order-data/${analysis.store_id}?order_name=${analysis.order_name}`
+              `/debug/order-data/${analysis.store_id}?order_name=${analysis.order_name}`,
             );
-            
+
             if (orderResponse.data?.order_info?.id) {
               const foundOrderGid = orderResponse.data.order_info.id;
               console.log(`Fallback using found GID: ${foundOrderGid}`);
               fulfillmentResponse = await api.get(
-                `/fulfillment-orders?order_id=${encodeURIComponent(foundOrderGid)}&store_id=${analysis.store_id}`
+                `/fulfillment-orders?order_id=${encodeURIComponent(foundOrderGid)}&store_id=${analysis.store_id}`,
               );
             } else {
               throw new Error("Order not found by name");
@@ -564,82 +619,102 @@ const FraudDetection: React.FC = () => {
           throw error;
         }
       }
-      
+
       const fulfillmentOrders = fulfillmentResponse.data.fulfillment_orders;
-      
+
       if (!fulfillmentOrders || fulfillmentOrders.length === 0) {
-        const debugInfo = fulfillmentResponse.data.debug_info || "Unknown reason";
+        const debugInfo =
+          fulfillmentResponse.data.debug_info || "Unknown reason";
         const orderStatus = fulfillmentResponse.data.order_status || "unknown";
-        
+
         // For unfulfilled orders, suggest alternative action
         if (orderStatus === "UNFULFILLED") {
-          toast.error(`Order ${analysis.order_name} is unfulfilled but has no fulfillment orders yet. This may be a new order - fulfillment orders are typically created automatically by Shopify. Try again in a few minutes.`);
+          toast.error(
+            `Order ${analysis.order_name} is unfulfilled but has no fulfillment orders yet. This may be a new order - fulfillment orders are typically created automatically by Shopify. Try again in a few minutes.`,
+          );
         } else {
-          toast.error(`No fulfillment orders found for order ${analysis.order_name}. Status: ${orderStatus}. ${debugInfo}`);
+          toast.error(
+            `No fulfillment orders found for order ${analysis.order_name}. Status: ${orderStatus}. ${debugInfo}`,
+          );
         }
-        
+
         console.log("Order lookup debug info:", fulfillmentResponse.data);
         return;
       }
-      
+
       // Apply hold to each fulfillment order that isn't already on hold
       let successCount = 0;
       let errorCount = 0;
       let alreadyHeldCount = 0;
       let holdErrors: string[] = [];
-      
-      console.log(`Processing ${fulfillmentOrders.length} fulfillment orders for order ${analysis.order_name}`);
-      
+
+      console.log(
+        `Processing ${fulfillmentOrders.length} fulfillment orders for order ${analysis.order_name}`,
+      );
+
       for (const fo of fulfillmentOrders) {
         console.log(`Fulfillment order ${fo.id}: status=${fo.status}`);
-        
+
         if (fo.status === "ON_HOLD") {
           alreadyHeldCount++;
           console.log(`Fulfillment order ${fo.id} already on hold, skipping`);
           continue;
         }
-        
+
         try {
           console.log(`Applying hold to fulfillment order ${fo.id}...`);
           const holdResponse = await api.post(
-            `/fulfillment-order-hold?fulfillment_order_id=${encodeURIComponent(fo.id)}&store_id=${analysis.store_id}&reason=HIGH_RISK_OF_FRAUD&reason_notes=${encodeURIComponent('Flagged by fraud detection system')}&notify_merchant=true`
+            `/fulfillment-order-hold?fulfillment_order_id=${encodeURIComponent(fo.id)}&store_id=${analysis.store_id}&reason=HIGH_RISK_OF_FRAUD&reason_notes=${encodeURIComponent("Flagged by fraud detection system")}&notify_merchant=true`,
           );
-          
+
           successCount++;
-          console.log(`Successfully held fulfillment order ${fo.id}`, holdResponse.data);
+          console.log(
+            `Successfully held fulfillment order ${fo.id}`,
+            holdResponse.data,
+          );
         } catch (error: any) {
           errorCount++;
-          const errorMsg = error.response?.data?.detail || error.message || "Unknown error";
+          const errorMsg =
+            error.response?.data?.detail || error.message || "Unknown error";
           holdErrors.push(`FO ${fo.id}: ${errorMsg}`);
           console.error(`Failed to hold fulfillment order ${fo.id}:`, error);
         }
       }
-      
+
       // Provide detailed feedback
       if (successCount > 0) {
         toast.success(
           `Order ${analysis.order_name}: ${successCount} fulfillment order(s) put on hold` +
-          (alreadyHeldCount > 0 ? ` (${alreadyHeldCount} already on hold)` : "")
+            (alreadyHeldCount > 0
+              ? ` (${alreadyHeldCount} already on hold)`
+              : ""),
         );
       } else if (alreadyHeldCount > 0) {
-        toast(`Order ${analysis.order_name}: All ${alreadyHeldCount} fulfillment orders already on hold`, {
-          icon: 'ℹ️',
-        });
+        toast(
+          `Order ${analysis.order_name}: All ${alreadyHeldCount} fulfillment orders already on hold`,
+          {
+            icon: "ℹ️",
+          },
+        );
       } else if (successCount === 0 && errorCount === 0) {
-        toast(`Order ${analysis.order_name}: No fulfillment orders available to hold`, {
-          icon: '⚠️',
-        });
+        toast(
+          `Order ${analysis.order_name}: No fulfillment orders available to hold`,
+          {
+            icon: "⚠️",
+          },
+        );
       }
-      
+
       if (errorCount > 0) {
-        toast.error(`Failed to hold ${errorCount} fulfillment order(s): ${holdErrors.join(", ")}`);
+        toast.error(
+          `Failed to hold ${errorCount} fulfillment order(s): ${holdErrors.join(", ")}`,
+        );
       }
-      
     } catch (error: any) {
       console.error("Failed to hold fulfillment orders:", error);
       toast.error(
-        error.response?.data?.detail || 
-        "Failed to put fulfillment orders on hold"
+        error.response?.data?.detail ||
+          "Failed to put fulfillment orders on hold",
       );
     } finally {
       setHoldingOrderId(null);
@@ -689,7 +764,11 @@ const FraudDetection: React.FC = () => {
                           onChange={(e) =>
                             setFraudFilters({
                               ...fraudFilters,
-                              risk_level: e.target.value as "low" | "medium" | "high" | undefined,
+                              risk_level: e.target.value as
+                                | "low"
+                                | "medium"
+                                | "high"
+                                | undefined,
                             })
                           }
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:!border-gray-600 rounded-md shadow-sm bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600"
@@ -730,7 +809,9 @@ const FraudDetection: React.FC = () => {
                           onChange={(e) =>
                             setFraudFilters({
                               ...fraudFilters,
-                              store_id: e.target.value ? Number(e.target.value) : undefined,
+                              store_id: e.target.value
+                                ? Number(e.target.value)
+                                : undefined,
                             })
                           }
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:!border-gray-600 rounded-md shadow-sm bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600"
@@ -756,7 +837,9 @@ const FraudDetection: React.FC = () => {
                         onClick={() => setShowRuleFilter(!showRuleFilter)}
                         className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none dark:bg-dark-100 dark:border-dark-200 dark:text-dark-600 dark:hover:bg-dark-200 mt-5"
                       >
-                        <FunnelIcon className={`h-4 w-4 mr-2 ${selectedRules.length > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-gray-400'}`} />
+                        <FunnelIcon
+                          className={`h-4 w-4 mr-2 ${selectedRules.length > 0 ? "text-orange-600 dark:text-orange-400" : "text-gray-400"}`}
+                        />
                         <span>Filter Rules</span>
                         {selectedRules.length > 0 && (
                           <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-800 dark:text-orange-200">
@@ -764,7 +847,7 @@ const FraudDetection: React.FC = () => {
                           </span>
                         )}
                       </button>
-                      
+
                       {/* Rule Filter Dropdown */}
                       {showRuleFilter && (
                         <div className="absolute right-0 z-30 mt-3 w-64 bg-white dark:bg-dark-100 rounded-md shadow-lg border border-gray-200 dark:border-dark-200">
@@ -790,27 +873,33 @@ const FraudDetection: React.FC = () => {
                                   <label
                                     key={rule}
                                     className={`flex items-center justify-between px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-dark-200 cursor-pointer rounded-md transition-colors ${
-                                      isSelected ? 'bg-orange-50 dark:bg-orange-900/20' : ''
+                                      isSelected
+                                        ? "bg-orange-50 dark:bg-orange-900/20"
+                                        : ""
                                     }`}
                                   >
                                     <div className="flex items-center flex-1 min-w-0">
                                       <input
                                         type="checkbox"
                                         checked={isSelected}
-                                        onChange={() => handleRuleFilterToggle(rule)}
+                                        onChange={() =>
+                                          handleRuleFilterToggle(rule)
+                                        }
                                         className="h-4 w-4 text-orange-600 border-gray-300 dark:border-gray-600 rounded flex-shrink-0 focus:outline-none"
                                       />
                                       <span className="ml-2 text-sm text-gray-700 dark:text-gray-200 break-words">
                                         {rule}
                                       </span>
                                     </div>
-                                    <span className={`ml-2 text-xs flex-shrink-0 ${
-                                      isSelected 
-                                        ? 'text-orange-600 dark:text-orange-400 font-semibold' 
-                                        : matchCount > 0 
-                                          ? 'text-gray-500 dark:text-gray-400' 
-                                          : 'text-gray-400 dark:text-gray-500'
-                                    }`}>
+                                    <span
+                                      className={`ml-2 text-xs flex-shrink-0 ${
+                                        isSelected
+                                          ? "text-orange-600 dark:text-orange-400 font-semibold"
+                                          : matchCount > 0
+                                            ? "text-gray-500 dark:text-gray-400"
+                                            : "text-gray-400 dark:text-gray-500"
+                                      }`}
+                                    >
                                       {`(${matchCount})`}
                                     </span>
                                   </label>
@@ -818,8 +907,8 @@ const FraudDetection: React.FC = () => {
                               })}
                             </div>
                             <div className="mt-2 px-2 py-1 text-xs text-gray-500 dark:text-gray-400">
-                              {selectedRules.length > 0 
-                                ? "Numbers show analyses matching selected + each rule" 
+                              {selectedRules.length > 0
+                                ? "Numbers show analyses matching selected + each rule"
                                 : "Numbers show total analyses per rule"}
                             </div>
                           </div>
@@ -841,12 +930,16 @@ const FraudDetection: React.FC = () => {
                         }}
                         className={`inline-flex items-center px-4 py-2 text-sm font-medium rounded-md transition-colors mt-5 ${
                           showArchived
-                            ? 'bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-orange-800 dark:text-orange-200 dark:hover:bg-orange-700'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
+                            ? "bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-orange-800 dark:text-orange-200 dark:hover:bg-orange-700"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                         }`}
-                        title={showArchived ? "Show unfulfilled orders" : "Show archived orders"}
+                        title={
+                          showArchived
+                            ? "Show unfulfilled orders"
+                            : "Show archived orders"
+                        }
                       >
-                        {showArchived ? 'Archived' : 'Unfulfilled'}
+                        {showArchived ? "Archived" : "Unfulfilled"}
                       </button>
 
                       {/* Reconcile Button */}
@@ -876,8 +969,19 @@ const FraudDetection: React.FC = () => {
                         className="p-2 border border-gray-300 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-50 focus:outline-none dark:border-dark-200 dark:text-dark-400 dark:hover:text-dark-600 dark:hover:bg-dark-200 mt-5"
                         title="Reset all filters"
                       >
-                        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        <svg
+                          className="h-5 w-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
                         </svg>
                       </button>
                     </div>
@@ -887,8 +991,10 @@ const FraudDetection: React.FC = () => {
                 {/* Selected rules indicator */}
                 {selectedRules.length > 0 && (
                   <div className="mb-4 text-sm text-gray-600 dark:text-dark-400">
-                    Showing orders matching ALL selected rules: {selectedRules.slice(0, 3).join(", ")}
-                    {selectedRules.length > 3 && ` and ${selectedRules.length - 3} more`}
+                    Showing orders matching ALL selected rules:{" "}
+                    {selectedRules.slice(0, 3).join(", ")}
+                    {selectedRules.length > 3 &&
+                      ` and ${selectedRules.length - 3} more`}
                   </div>
                 )}
 
@@ -958,21 +1064,36 @@ const FraudDetection: React.FC = () => {
                       <tbody className="bg-white dark:bg-dark-100 divide-y divide-gray-200 dark:divide-dark-200">
                         {filteredResults.length > 0 ? (
                           filteredResults.map((analysis) => (
-                            <tr key={analysis.id} className={analysis.is_archived ? "bg-gray-50 dark:bg-dark-200" : ""}>
+                            <tr
+                              key={analysis.id}
+                              className={
+                                analysis.is_archived
+                                  ? "bg-gray-50 dark:bg-dark-200"
+                                  : ""
+                              }
+                            >
                               <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-dark-800">
                                 <div className="flex items-center space-x-2">
                                   <span>{analysis.order_name}</span>
                                   {analysis.is_archived && (
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                      analysis.archive_reason === 'order_fulfilled' 
-                                        ? 'bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-200' 
-                                        : analysis.archive_reason === 'order_cancelled'
-                                        ? 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
-                                        : 'bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-200'
-                                    }`}>
-                                      {analysis.archive_reason === 'order_fulfilled' ? 'Fulfilled' : 
-                                       analysis.archive_reason === 'order_cancelled' ? 'Cancelled' :
-                                       'Manual Archive'}
+                                    <span
+                                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                        analysis.archive_reason ===
+                                        "order_fulfilled"
+                                          ? "bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-200"
+                                          : analysis.archive_reason ===
+                                              "order_cancelled"
+                                            ? "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+                                            : "bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-200"
+                                      }`}
+                                    >
+                                      {analysis.archive_reason ===
+                                      "order_fulfilled"
+                                        ? "Fulfilled"
+                                        : analysis.archive_reason ===
+                                            "order_cancelled"
+                                          ? "Cancelled"
+                                          : "Manual Archive"}
                                     </span>
                                   )}
                                 </div>
@@ -980,10 +1101,14 @@ const FraudDetection: React.FC = () => {
                               <td className="px-4 py-4 whitespace-nowrap">
                                 <span
                                   className={getRiskLevelBadge(
-                                    analysis.shopify_fraud_risk_level || "unknown"
+                                    analysis.shopify_fraud_risk_level ||
+                                      "unknown",
                                   )}
                                 >
-                                  {(analysis.shopify_fraud_risk_level || "UNKNOWN").toUpperCase()}
+                                  {(
+                                    analysis.shopify_fraud_risk_level ||
+                                    "UNKNOWN"
+                                  ).toUpperCase()}
                                 </span>
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-dark-800">
@@ -998,51 +1123,37 @@ const FraudDetection: React.FC = () => {
                                 </div>
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-400">
-                                {(() => {
-                                  // For archived orders, timestamps are already in user's timezone
-                                  if (analysis.is_archived && analysis.analysis_timestamp) {
-                                    const timestamp = analysis.analysis_timestamp;
-                                    // Timestamps like "2025-07-17 22:57:27.114560" are already in Chicago time
-                                    // Parse and format without creating a Date object to avoid timezone issues
-                                    const match = timestamp.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
-                                    if (match) {
-                                      const [, , month, day, hour, minute] = match;
-                                      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-                                      const monthName = monthNames[parseInt(month) - 1];
-                                      const dayNum = parseInt(day);
-                                      let hours = parseInt(hour);
-                                      const minutes = minute;
-                                      const ampm = hours >= 12 ? 'PM' : 'AM';
-                                      hours = hours % 12 || 12;
-                                      
-                                      return `${monthName} ${dayNum}, ${hours}:${minutes} ${ampm}`;
-                                    }
-                                  }
-                                  
-                                  // For non-archived orders, apply normal timezone conversion
-                                  return formatDate(analysis.analysis_timestamp, { timezone, dateFormat });
-                                })()}
+                                {formatDate(analysis.analysis_timestamp, {
+                                  timezone,
+                                  dateFormat,
+                                })}
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                 {!analysis.is_archived ? (
                                   <div className="flex items-center space-x-2">
                                     <button
                                       onClick={() => handleHoldOrder(analysis)}
-                                      disabled={holdingOrderId === analysis.shopify_order_id}
+                                      disabled={
+                                        holdingOrderId ===
+                                        analysis.shopify_order_id
+                                      }
                                       className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                       title="Put fulfillment orders on hold"
                                     >
-                                      {holdingOrderId === analysis.shopify_order_id ? (
+                                      {holdingOrderId ===
+                                      analysis.shopify_order_id ? (
                                         <LoadingSpinner size="xs" />
                                       ) : (
                                         "Hold"
                                       )}
                                     </button>
                                     <button
-                                      onClick={() => manualArchiveMutation.mutate({ 
-                                        analysisId: analysis.id, 
-                                        archiveReason: "manual_archive" 
-                                      })}
+                                      onClick={() =>
+                                        manualArchiveMutation.mutate({
+                                          analysisId: analysis.id,
+                                          archiveReason: "manual_archive",
+                                        })
+                                      }
                                       disabled={manualArchiveMutation.isPending}
                                       className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                       title="Archive this analysis for testing"
@@ -1055,7 +1166,9 @@ const FraudDetection: React.FC = () => {
                                     </button>
                                   </div>
                                 ) : (
-                                  <span className="text-xs text-gray-500 dark:text-gray-400">Archived</span>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    Archived
+                                  </span>
                                 )}
                               </td>
                             </tr>
@@ -1078,8 +1191,10 @@ const FraudDetection: React.FC = () => {
                 {/* Results count info */}
                 {selectedRules.length > 0 && fraudResults && (
                   <div className="mt-4 text-sm text-gray-600 dark:text-dark-400">
-                    Showing {filteredResults.length} of {fraudResults.analyses.length} results
-                    {filteredResults.length !== fraudResults.analyses.length && (
+                    Showing {filteredResults.length} of{" "}
+                    {fraudResults.analyses.length} results
+                    {filteredResults.length !==
+                      fraudResults.analyses.length && (
                       <span className="ml-2 text-orange-600 dark:text-orange-400">
                         (filtered by matched rules)
                       </span>
@@ -1093,10 +1208,13 @@ const FraudDetection: React.FC = () => {
                     {/* Always show the total count */}
                     <div className="text-sm text-gray-700 dark:text-dark-300 text-center mb-4">
                       Showing {fraudFilters.skip! + 1} to{" "}
-                      {Math.min(fraudFilters.skip! + fraudFilters.limit!, fraudResults.total)} of{" "}
-                      {fraudResults.total} results
+                      {Math.min(
+                        fraudFilters.skip! + fraudFilters.limit!,
+                        fraudResults.total,
+                      )}{" "}
+                      of {fraudResults.total} results
                     </div>
-                    
+
                     {/* Only show pagination buttons if there's more than one page */}
                     {fraudResults.total > fraudFilters.limit! && (
                       <div className="flex items-center justify-center space-x-2">
@@ -1104,7 +1222,10 @@ const FraudDetection: React.FC = () => {
                           onClick={() =>
                             setFraudFilters({
                               ...fraudFilters,
-                              skip: Math.max(0, fraudFilters.skip! - fraudFilters.limit!),
+                              skip: Math.max(
+                                0,
+                                fraudFilters.skip! - fraudFilters.limit!,
+                              ),
                             })
                           }
                           disabled={fraudFilters.skip === 0}
@@ -1119,7 +1240,10 @@ const FraudDetection: React.FC = () => {
                               skip: fraudFilters.skip! + fraudFilters.limit!,
                             })
                           }
-                          disabled={fraudFilters.skip! + fraudFilters.limit! >= fraudResults.total}
+                          disabled={
+                            fraudFilters.skip! + fraudFilters.limit! >=
+                            fraudResults.total
+                          }
                           className="px-4 py-2 border border-gray-300 dark:border-dark-200 rounded-md text-sm font-medium text-gray-700 dark:text-dark-600 bg-white dark:bg-dark-100 hover:bg-gray-50 dark:hover:bg-dark-200 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Next
@@ -1244,7 +1368,11 @@ const FraudDetection: React.FC = () => {
                                     </p>
                                   )}
                                   <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                                    Created: {formatDate(rule.created_at, { timezone, dateFormat })}
+                                    Created:{" "}
+                                    {formatDate(rule.created_at, {
+                                      timezone,
+                                      dateFormat,
+                                    })}
                                   </p>
                                 </div>
                                 <div className="flex items-center space-x-2">
@@ -1285,7 +1413,8 @@ const FraudDetection: React.FC = () => {
                           No fraud rules
                         </h3>
                         <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
-                          Get started by creating your first fraud detection rule.
+                          Get started by creating your first fraud detection
+                          rule.
                         </p>
                       </div>
                     )}
@@ -1419,13 +1548,19 @@ const FraudDetection: React.FC = () => {
                           </p>
                         </div>
                         <div className="text-right">
-                          {analysisResult.analysis.shopify_fraud_risk_level !== undefined && (
+                          {analysisResult.analysis.shopify_fraud_risk_level !==
+                            undefined && (
                             <span
                               className={getShopifyRiskBadge(
-                                analysisResult.analysis.shopify_fraud_risk_level || 'NONE',
+                                analysisResult.analysis
+                                  .shopify_fraud_risk_level || "NONE",
                               )}
                             >
-                              {(analysisResult.analysis.shopify_fraud_risk_level || 'NONE').toUpperCase()} RISK
+                              {(
+                                analysisResult.analysis
+                                  .shopify_fraud_risk_level || "NONE"
+                              ).toUpperCase()}{" "}
+                              RISK
                             </span>
                           )}
                         </div>
@@ -1457,11 +1592,14 @@ const FraudDetection: React.FC = () => {
                             </span>
                             <div className="text-right">
                               <div className="text-sm font-medium text-gray-900 dark:text-dark-800">
-                                ${analysisResult.analysis.current_order_total || "N/A"}
+                                $
+                                {analysisResult.analysis.current_order_total ||
+                                  "N/A"}
                               </div>
                               {analysisResult.analysis.previous_order_total && (
                                 <div className="text-xs text-gray-500 dark:text-dark-400">
-                                  Previous: ${analysisResult.analysis.previous_order_total}
+                                  Previous: $
+                                  {analysisResult.analysis.previous_order_total}
                                 </div>
                               )}
                             </div>
@@ -1472,7 +1610,9 @@ const FraudDetection: React.FC = () => {
                             <span className="text-sm font-medium text-gray-700 dark:text-dark-300">
                               First-time Customer
                             </span>
-                            {getFirstTimeCustomerBadge(analysisResult.analysis.is_first_time_customer)}
+                            {getFirstTimeCustomerBadge(
+                              analysisResult.analysis.is_first_time_customer,
+                            )}
                           </div>
 
                           {/* Transaction attempts */}
@@ -1481,7 +1621,8 @@ const FraudDetection: React.FC = () => {
                               Transaction Attempts
                             </span>
                             <span className="text-sm font-medium text-gray-900 dark:text-dark-800">
-                              {analysisResult.analysis.transaction_attempts_count || "N/A"}
+                              {analysisResult.analysis
+                                .transaction_attempts_count || "N/A"}
                             </span>
                           </div>
 
@@ -1490,15 +1631,20 @@ const FraudDetection: React.FC = () => {
                             <span className="text-sm font-medium text-gray-700 dark:text-dark-300">
                               Same Billing
                             </span>
-                            {getBooleanBadge(analysisResult.analysis.same_billing_shipping)}
+                            {getBooleanBadge(
+                              analysisResult.analysis.same_billing_shipping,
+                            )}
                           </div>
 
                           {/* Duplicate within configurable days */}
                           <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-dark-200">
                             <span className="text-sm font-medium text-gray-700 dark:text-dark-300">
-                              Duplicate within {userSettings?.duplicate_detection_days || 7} Days
+                              Duplicate within{" "}
+                              {userSettings?.duplicate_detection_days || 7} Days
                             </span>
-                            {getBooleanBadge(analysisResult.analysis.duplicate_within_7days)}
+                            {getBooleanBadge(
+                              analysisResult.analysis.duplicate_within_7days,
+                            )}
                           </div>
 
                           {/* Billing address outside US */}
@@ -1506,7 +1652,10 @@ const FraudDetection: React.FC = () => {
                             <span className="text-sm font-medium text-gray-700 dark:text-dark-300">
                               Billing Address Outside US
                             </span>
-                            {getBillingOutsideUSBadge(analysisResult.analysis.billing_address_outside_us)}
+                            {getBillingOutsideUSBadge(
+                              analysisResult.analysis
+                                .billing_address_outside_us,
+                            )}
                           </div>
 
                           {/* Shipping state */}
@@ -1514,7 +1663,9 @@ const FraudDetection: React.FC = () => {
                             <span className="text-sm font-medium text-gray-700 dark:text-dark-300">
                               Shipping State
                             </span>
-                            {getShippingStateBadge(analysisResult.analysis.shipping_state)}
+                            {getShippingStateBadge(
+                              analysisResult.analysis.shipping_state,
+                            )}
                           </div>
 
                           {/* Previous order delivery status */}
@@ -1523,7 +1674,8 @@ const FraudDetection: React.FC = () => {
                               Previous Order Delivery Status
                             </span>
                             <span className="text-sm font-medium text-gray-900 dark:text-dark-800">
-                              {analysisResult.analysis.previous_order_delivery_status || "N/A"}
+                              {analysisResult.analysis
+                                .previous_order_delivery_status || "N/A"}
                             </span>
                           </div>
 

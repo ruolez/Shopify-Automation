@@ -64,3 +64,10 @@ coverage/
 *.tmp
 *.temp
 .tmp/
+
+# Serena development tool
+.serena/
+serena
+
+# Temporary debug scripts
+*stale_tasks*.py

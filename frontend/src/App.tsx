@@ -12,6 +12,7 @@ import Rules from "./pages/Rules";
 import RuleBuilder from "./pages/RuleBuilder";
 import FraudDetection from "./pages/FraudDetection";
 import FraudRuleBuilder from "./components/FraudRuleBuilder";
+import Inventory from "./pages/Inventory";
 import OrderLogs from "./pages/OrderLogs";
 import Settings from "./pages/Settings";
 import LocationManagement from "./pages/LocationManagement";
@@ -81,6 +82,7 @@ function App() {
               <Route path="/fraud-detection" element={<FraudDetection />} />
               <Route path="/fraud-detection/rules/new" element={<FraudRuleBuilder />} />
               <Route path="/fraud-detection/rules/:id/edit" element={<FraudRuleBuilder />} />
+              <Route path="/inventory" element={<Inventory />} />
               <Route path="/order-logs" element={<OrderLogs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/locations" element={<LocationManagement />} />

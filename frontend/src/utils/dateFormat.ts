@@ -33,8 +33,24 @@ export function formatDate(
   const { timezone = "UTC", dateFormat = "MMM d, yyyy HH:mm" } = options;
 
   try {
-    // Parse the date if it's a string
-    const dateObj = typeof date === "string" ? parseISO(date) : date;
+    let dateObj: Date;
+
+    if (typeof date === "string") {
+      // Check if the string has timezone information
+      const hasTimezone =
+        date.includes("Z") || date.includes("+") || date.includes("T");
+
+      if (!hasTimezone && date.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)) {
+        // This looks like a naive datetime from the backend (YYYY-MM-DD HH:MM:SS)
+        // Assume it's in UTC
+        dateObj = parseISO(date.replace(" ", "T") + "Z");
+      } else {
+        // Parse normally
+        dateObj = parseISO(date);
+      }
+    } else {
+      dateObj = date;
+    }
 
     // Get the format string for date-fns
     const formatStr = formatMap[dateFormat] || dateFormat;

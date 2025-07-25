@@ -677,6 +677,191 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({
   );
 };
 
+const InventoryVerificationSection: React.FC = () => {
+  const queryClient = useQueryClient();
+  const [excludedTag, setExcludedTag] = useState<string>("");
+  const [hasChanges, setHasChanges] = useState(false);
+
+  // Fetch inventory verification settings
+  const { data: verificationSettings, isLoading } = useQuery({
+    queryKey: ["inventory-verification-settings"],
+    queryFn: async () => {
+      const response = await api.get("/settings/inventory-verification");
+      return response.data;
+    },
+  });
+
+  // Update excluded tag when data is loaded
+  useEffect(() => {
+    if (verificationSettings) {
+      setExcludedTag(verificationSettings.excluded_tag || "");
+    }
+  }, [verificationSettings]);
+
+  // Update settings mutation
+  const updateSettings = useMutation({
+    mutationFn: async (data: { excluded_tag: string | null }) => {
+      const response = await api.put("/settings/inventory-verification", data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["inventory-verification-settings"] });
+      toast.success("Inventory verification settings updated");
+      setHasChanges(false);
+    },
+    onError: (error: any) => {
+      toast.error(
+        error.response?.data?.detail || "Failed to update inventory verification settings"
+      );
+    },
+  });
+
+  const handleTagChange = (value: string) => {
+    setExcludedTag(value);
+    setHasChanges(true);
+  };
+
+  const handleSave = () => {
+    updateSettings.mutate({
+      excluded_tag: excludedTag.trim() || null,
+    });
+  };
+
+  const handleCancel = () => {
+    setExcludedTag(verificationSettings?.excluded_tag || "");
+    setHasChanges(false);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <div className="flex justify-center items-center h-24">
+            <LoadingSpinner size="sm" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
+      <div className="px-4 py-5 sm:p-6">
+        <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
+          Inventory Verification
+        </h3>
+        <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
+          Configure inventory verification settings for cross-checking committed quantities.
+        </p>
+
+        <div className="mt-6 space-y-6">
+          {/* Feature Status */}
+          <div className="flex items-center">
+            <div className="flex-1">
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-medium text-gray-700 dark:text-dark-600">
+                  Status:
+                </span>
+                <span
+                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                    verificationSettings?.enabled
+                      ? "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400"
+                      : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400"
+                  }`}
+                >
+                  {verificationSettings?.enabled ? "Enabled" : "Disabled"}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-dark-400 mt-1">
+                Verification checks unfulfilled orders from the past 4 days
+              </p>
+            </div>
+          </div>
+
+          {/* Excluded Tag */}
+          <div>
+            <label
+              htmlFor="excluded-tag"
+              className="block text-sm font-medium text-gray-700 dark:text-dark-600"
+            >
+              Excluded Order Tag
+            </label>
+            <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
+              Orders with this tag will be excluded from verification calculations
+            </p>
+            <div className="flex space-x-2">
+              <input
+                id="excluded-tag"
+                type="text"
+                value={excludedTag}
+                onChange={(e) => handleTagChange(e.target.value)}
+                placeholder="e.g., test, internal, wholesale"
+                className="flex-1 block w-full rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm"
+              />
+              {hasChanges && (
+                <>
+                  <button
+                    onClick={handleSave}
+                    disabled={updateSettings.isPending}
+                    className="px-4 py-2 bg-shopify-600 hover:bg-shopify-700 text-white rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    {updateSettings.isPending ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={updateSettings.isPending}
+                    className="px-4 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-dark-300 mt-1">
+              Leave empty to include all orders in verification
+            </p>
+          </div>
+
+          {/* Info Box */}
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg
+                  className="h-5 w-5 text-blue-400"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+              <div className="ml-3 flex-1">
+                <h3 className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                  How Inventory Verification Works
+                </h3>
+                <div className="mt-2 text-sm text-blue-700 dark:text-blue-400">
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>Searches unfulfilled orders from the past 4 days</li>
+                    <li>Counts quantities of products matching the barcode</li>
+                    <li>Excludes cancelled orders automatically</li>
+                    <li>Excludes orders with the specified tag (if set)</li>
+                    <li>Displays result next to the committed value for comparison</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const DatabaseCompaction: React.FC = () => {
   const [isCompacting, setIsCompacting] = useState(false);
   const queryClient = useQueryClient();
@@ -1495,6 +1680,9 @@ const Settings: React.FC = () => {
 
       {/* Product Exclusions */}
       <ExcludedSKUsSection timezone={settings?.timezone} />
+
+      {/* Inventory Verification Settings */}
+      <InventoryVerificationSection />
 
       {/* Display Preferences */}
       <div className="bg-white dark:bg-dark-100 shadow rounded-lg">

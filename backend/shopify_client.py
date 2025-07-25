@@ -50,7 +50,7 @@ class ShopifyClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify API error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                         logger.info(f"Retrying after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -59,7 +59,7 @@ class ShopifyClient:
                 logger.error(f"Shopify API timeout after 60 seconds: {str(e)}")
                 last_exception = Exception(f"Shopify API timeout: Request took too long to complete")
                 if attempt < retry_count - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                     logger.info(f"Retrying after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -67,7 +67,7 @@ class ShopifyClient:
                 logger.error(f"Request failed: {str(e)}")
                 last_exception = e
                 if attempt < retry_count - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                     logger.info(f"Retrying after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -142,7 +142,7 @@ class ShopifyClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify GraphQL error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                         logger.info(f"Retrying GraphQL request after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -151,7 +151,7 @@ class ShopifyClient:
                 logger.error(f"Shopify GraphQL timeout after 60 seconds: {str(e)}")
                 last_exception = Exception(f"Shopify GraphQL timeout: Request took too long to complete")
                 if attempt < retry_count - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                     logger.info(f"Retrying GraphQL request after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -159,7 +159,7 @@ class ShopifyClient:
                 logger.error(f"GraphQL request failed: {str(e)}")
                 last_exception = e
                 if attempt < retry_count - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
                     logger.info(f"Retrying GraphQL request after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -2982,3 +2982,545 @@ class ShopifyClient:
                 'field_scores': {},
                 'quality_category': 'ERROR'
             }
+
+    async def get_product_by_barcode(self, barcode: str) -> List[Dict[str, Any]]:
+        """Search for product variants by barcode across the store - OPTIMIZED VERSION"""
+        query = """
+        query($query: String!) {
+            productVariants(first: 10, query: $query) {
+                edges {
+                    node {
+                        id
+                        title
+                        sku
+                        barcode
+                        product {
+                            id
+                            title
+                            handle
+                        }
+                        inventoryItem {
+                            id
+                            inventoryLevels(first: 50) {
+                                edges {
+                                    node {
+                                        id
+                                        location {
+                                            id
+                                            name
+                                        }
+                                        quantities(names: ["available", "on_hand", "committed"]) {
+                                            name
+                                            quantity
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {
+            "query": f"barcode:{barcode}"
+        }
+        
+        try:
+            result = await self._make_graphql_request(query, variables)
+            
+            variants = []
+            edges = result.get("data", {}).get("productVariants", {}).get("edges", [])
+            
+            for edge in edges:
+                variant = edge.get("node", {})
+                if variant:
+                    # Extract inventory levels for immediate use
+                    inventory_item = variant.get("inventoryItem", {})
+                    if inventory_item:
+                        inventory_levels = {}
+                        inv_edges = inventory_item.get("inventoryLevels", {}).get("edges", [])
+                        for inv_edge in inv_edges:
+                            inv_node = inv_edge.get("node", {})
+                            location_id = inv_node.get("location", {}).get("id")
+                            if location_id:
+                                quantities = {}
+                                for q in inv_node.get("quantities", []):
+                                    quantities[q.get("name")] = q.get("quantity", 0)
+                                
+                                inventory_levels[location_id] = {
+                                    "location_id": location_id,
+                                    "location_name": inv_node.get("location", {}).get("name"),
+                                    "inventory_level_id": inv_node.get("id"),
+                                    "quantities": quantities
+                                }
+                        
+                        # Store inventory levels in the variant for later use
+                        variant["_inventory_levels"] = inventory_levels
+                    
+                    variants.append(variant)
+            
+            return variants
+            
+        except Exception as e:
+            logger.error(f"Failed to search products by barcode {barcode}: {str(e)}")
+            raise
+    
+    async def get_inventory_across_locations(self, variant_id: str, location_ids: List[str]) -> Dict[str, Any]:
+        """Get inventory levels for a variant across multiple locations"""
+        # First get the inventory item ID from the variant
+        variant_query = """
+        query($variantId: ID!) {
+            productVariant(id: $variantId) {
+                id
+                inventoryItem {
+                    id
+                }
+            }
+        }
+        """
+        
+        try:
+            variant_result = await self._make_graphql_request(
+                variant_query, 
+                {"variantId": variant_id}
+            )
+            
+            inventory_item_id = variant_result.get("data", {}).get("productVariant", {}).get("inventoryItem", {}).get("id")
+            
+            if not inventory_item_id:
+                logger.error(f"No inventory item found for variant {variant_id}")
+                return {}
+            
+            # Now get inventory levels for all locations
+            inventory_query = """
+            query($inventoryItemId: ID!) {
+                inventoryItem(id: $inventoryItemId) {
+                    id
+                    inventoryLevels(first: 50) {
+                        edges {
+                            node {
+                                id
+                                location {
+                                    id
+                                    name
+                                }
+                                quantities(names: ["available", "on_hand", "committed"]) {
+                                    name
+                                    quantity
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            """
+            
+            inventory_result = await self._make_graphql_request(
+                inventory_query,
+                {"inventoryItemId": inventory_item_id}
+            )
+            
+            # Filter results to only requested locations
+            inventory_levels = {}
+            edges = inventory_result.get("data", {}).get("inventoryItem", {}).get("inventoryLevels", {}).get("edges", [])
+            
+            for edge in edges:
+                node = edge.get("node", {})
+                location_id = node.get("location", {}).get("id")
+                
+                if location_id in location_ids:
+                    quantities = {}
+                    for q in node.get("quantities", []):
+                        quantities[q.get("name")] = q.get("quantity", 0)
+                    
+                    inventory_levels[location_id] = {
+                        "location_id": location_id,
+                        "location_name": node.get("location", {}).get("name"),
+                        "inventory_level_id": node.get("id"),
+                        "quantities": quantities
+                    }
+            
+            return {
+                "variant_id": variant_id,
+                "inventory_item_id": inventory_item_id,
+                "inventory_levels": inventory_levels
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get inventory levels for variant {variant_id}: {str(e)}")
+            raise
+    
+    async def get_unfulfilled_orders_for_verification(
+        self, 
+        barcode: str,
+        days_back: int = 4,
+        excluded_tag: Optional[str] = None,
+        location_id: Optional[str] = None
+    ) -> Dict[str, int]:
+        """
+        DEDICATED METHOD FOR INVENTORY VERIFICATION ONLY
+        Does not affect any existing order processing
+        
+        Fetches unfulfilled orders from the past N days and counts quantities 
+        for products matching the given barcode, optionally filtered by fulfillment location.
+        
+        Args:
+            barcode: Product barcode to search for
+            days_back: Number of days to look back (default 4)
+            excluded_tag: Optional tag to exclude orders containing this tag
+            location_id: Optional Shopify location ID to filter by (e.g., "gid://shopify/Location/123")
+            
+        Returns:
+            Dict with total quantity found in unfulfilled orders
+        """
+        from datetime import datetime, timedelta
+        
+        try:
+            # Calculate date range
+            cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
+            
+            # Build query filter
+            query_parts = [
+                f"created_at:>={cutoff_date}",
+                "(fulfillment_status:unshipped OR fulfillment_status:partial)",
+                "NOT status:cancelled"
+            ]
+            
+            # Add tag exclusion if specified
+            if excluded_tag:
+                query_parts.append(f"tag_not:{excluded_tag}")
+            
+            query_filter = " AND ".join(query_parts)
+            
+            # Query for orders - optimized for lower cost
+            # When location filtering is enabled, we need fulfillment data
+            # Otherwise, we can use a simpler query
+            if location_id:
+                orders_query = """
+                query getUnfulfilledOrdersForVerification($query: String!, $first: Int!, $after: String) {
+                    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+                        edges {
+                            node {
+                                id
+                                name
+                                createdAt
+                                displayFulfillmentStatus
+                                tags
+                                fulfillmentOrders(first: 5) {
+                                    edges {
+                                        node {
+                                            id
+                                            status
+                                            assignedLocation {
+                                                location {
+                                                    id
+                                                }
+                                            }
+                                            lineItems(first: 50) {
+                                                edges {
+                                                    node {
+                                                        id
+                                                        remainingQuantity
+                                                        lineItem {
+                                                            variant {
+                                                                barcode
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                    }
+                }
+                """
+            else:
+                # Simpler query when no location filtering is needed
+                orders_query = """
+                query getUnfulfilledOrdersForVerification($query: String!, $first: Int!, $after: String) {
+                    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+                        edges {
+                            node {
+                                id
+                                name
+                                createdAt
+                                displayFulfillmentStatus
+                                tags
+                                lineItems(first: 50) {
+                                    edges {
+                                        node {
+                                            quantity
+                                            variant {
+                                                barcode
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                    }
+                }
+                """
+            
+            total_quantity = 0
+            cursor = None
+            has_next_page = True
+            processed_orders = 0
+            
+            # Paginate through orders
+            while has_next_page:
+                variables = {
+                    "query": query_filter,
+                    "first": 20,  # Reduced to avoid cost limit
+                    "after": cursor
+                }
+                
+                result = await self._make_graphql_request(orders_query, variables)
+                
+                orders_data = result.get("data", {}).get("orders", {})
+                edges = orders_data.get("edges", [])
+                page_info = orders_data.get("pageInfo", {})
+                
+                # Process each order
+                for edge in edges:
+                    order = edge.get("node", {})
+                    
+                    # If location filtering is enabled, use fulfillment order data
+                    if location_id:
+                        fulfillment_orders = order.get("fulfillmentOrders", {}).get("edges", [])
+                        
+                        for fo_edge in fulfillment_orders:
+                            fo = fo_edge.get("node", {})
+                            # Check if this fulfillment order is assigned to the target location
+                            assigned_location = fo.get("assignedLocation", {}).get("location", {})
+                            if assigned_location.get("id") == location_id:
+                                # Process line items from this fulfillment order
+                                fo_line_items = fo.get("lineItems", {}).get("edges", [])
+                                for fo_line_edge in fo_line_items:
+                                    fo_line = fo_line_edge.get("node", {})
+                                    line_variant = fo_line.get("lineItem", {}).get("variant", {})
+                                    
+                                    # Check if barcode matches
+                                    if line_variant and line_variant.get("barcode") == barcode:
+                                        # Use remaining quantity (unfulfilled quantity)
+                                        remaining_qty = fo_line.get("remainingQuantity", 0)
+                                        total_quantity += remaining_qty
+                                        logger.debug(f"Found {remaining_qty} units in order {order.get('name')} for location {assigned_location.get('name')}")
+                    else:
+                        # No location filtering - use original logic
+                        line_items = order.get("lineItems", {}).get("edges", [])
+                        
+                        # Check each line item for barcode match
+                        for line_item_edge in line_items:
+                            line_item = line_item_edge.get("node", {})
+                            variant = line_item.get("variant", {})
+                            
+                            # Check if barcode matches
+                            if variant and variant.get("barcode") == barcode:
+                                quantity = line_item.get("quantity", 0)
+                                total_quantity += quantity
+                                logger.debug(f"Found {quantity} units in order {order.get('name')}")
+                    
+                    processed_orders += 1
+                
+                # Check for next page
+                has_next_page = page_info.get("hasNextPage", False)
+                cursor = page_info.get("endCursor")
+                
+                # Limit total orders processed to avoid timeout
+                if processed_orders >= 200:
+                    logger.info(f"Reached order processing limit of 200 for verification")
+                    break
+            
+            logger.info(f"Inventory verification complete: processed {processed_orders} orders, found {total_quantity} units" + 
+                       (f" for location {location_id}" if location_id else ""))
+            
+            return {
+                "total_quantity": total_quantity,
+                "orders_processed": processed_orders,
+                "days_back": days_back,
+                "excluded_tag": excluded_tag,
+                "cutoff_date": cutoff_date,
+                "location_id": location_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get unfulfilled orders for verification: {str(e)}")
+            # Return zero quantity on error to not break the main flow
+            return {
+                "total_quantity": 0,
+                "orders_processed": 0,
+                "days_back": days_back,
+                "excluded_tag": excluded_tag,
+                "location_id": location_id,
+                "error": str(e)
+            }
+    
+    async def update_inventory_quantities(self, updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Update inventory quantities at specific locations
+        
+        Args:
+            updates: List of dicts with:
+                - inventory_item_id: str
+                - location_id: str
+                - available: int (optional)
+                - on_hand: int (optional)
+        
+        Returns:
+            Dict with results of each update
+        """
+        mutation = """
+        mutation($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) {
+                inventoryAdjustmentGroup {
+                    id
+                    reason
+                    changes {
+                        name
+                        delta
+                        quantityAfterChange
+                    }
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }
+        """
+        
+        results = []
+        
+        # Group updates by quantity type (available or on_hand)
+        available_updates = []
+        on_hand_updates = []
+        
+        for update in updates:
+            if "available" in update:
+                available_updates.append({
+                    "inventoryItemId": update["inventory_item_id"],
+                    "locationId": update["location_id"],
+                    "quantity": update["available"]
+                })
+            
+            if "on_hand" in update:
+                on_hand_updates.append({
+                    "inventoryItemId": update["inventory_item_id"],
+                    "locationId": update["location_id"],
+                    "quantity": update["on_hand"]
+                })
+        
+        # Process available quantity updates
+        if available_updates:
+            variables = {
+                "input": {
+                    "reason": "correction",
+                    "name": "available",
+                    "quantities": available_updates,
+                    "ignoreCompareQuantity": True
+                }
+            }
+            
+            try:
+                result = await self._make_graphql_request(mutation, variables)
+                
+                inventory_result = result.get("data", {}).get("inventorySetQuantities", {})
+                user_errors = inventory_result.get("userErrors", [])
+                
+                if user_errors:
+                    logger.error(f"Inventory update errors for available quantities: {user_errors}")
+                    for qty_update in available_updates:
+                        results.append({
+                            "success": False,
+                            "location_id": qty_update["locationId"],
+                            "inventory_item_id": qty_update["inventoryItemId"],
+                            "quantity_type": "available",
+                            "errors": user_errors
+                        })
+                else:
+                    for qty_update in available_updates:
+                        results.append({
+                            "success": True,
+                            "location_id": qty_update["locationId"],
+                            "inventory_item_id": qty_update["inventoryItemId"],
+                            "quantity_type": "available",
+                            "adjustment_group": inventory_result.get("inventoryAdjustmentGroup")
+                        })
+                    
+            except Exception as e:
+                logger.error(f"Failed to update available inventory: {str(e)}")
+                for qty_update in available_updates:
+                    results.append({
+                        "success": False,
+                        "location_id": qty_update["locationId"],
+                        "inventory_item_id": qty_update["inventoryItemId"],
+                        "quantity_type": "available",
+                        "error": str(e)
+                    })
+        
+        # Process on_hand quantity updates
+        if on_hand_updates:
+            variables = {
+                "input": {
+                    "reason": "correction",
+                    "name": "on_hand",
+                    "quantities": on_hand_updates,
+                    "ignoreCompareQuantity": True
+                }
+            }
+            
+            try:
+                result = await self._make_graphql_request(mutation, variables)
+                
+                inventory_result = result.get("data", {}).get("inventorySetQuantities", {})
+                user_errors = inventory_result.get("userErrors", [])
+                
+                if user_errors:
+                    logger.error(f"Inventory update errors for on_hand quantities: {user_errors}")
+                    for qty_update in on_hand_updates:
+                        results.append({
+                            "success": False,
+                            "location_id": qty_update["locationId"],
+                            "inventory_item_id": qty_update["inventoryItemId"],
+                            "quantity_type": "on_hand",
+                            "errors": user_errors
+                        })
+                else:
+                    for qty_update in on_hand_updates:
+                        results.append({
+                            "success": True,
+                            "location_id": qty_update["locationId"],
+                            "inventory_item_id": qty_update["inventoryItemId"],
+                            "quantity_type": "on_hand",
+                            "adjustment_group": inventory_result.get("inventoryAdjustmentGroup")
+                        })
+                    
+            except Exception as e:
+                logger.error(f"Failed to update on_hand inventory: {str(e)}")
+                for qty_update in on_hand_updates:
+                    results.append({
+                        "success": False,
+                        "location_id": qty_update["locationId"],
+                        "inventory_item_id": qty_update["inventoryItemId"],
+                        "quantity_type": "on_hand",
+                        "error": str(e)
+                    })
+        
+        return {
+            "results": results,
+            "total": len(updates),
+            "successful": len([r for r in results if r.get("success", False)])
+        }
