@@ -787,7 +787,7 @@ const Inventory: React.FC = () => {
           className="bg-white dark:bg-dark-100 rounded-lg shadow-md p-6 mt-6"
         >
           <div className="space-y-4">
-            <div>
+            <div className="flex justify-center">
               <input
                 ref={liveQuantityInputRef}
                 type="number"
@@ -795,7 +795,7 @@ const Inventory: React.FC = () => {
                 onChange={(e) => setLiveQuantity(e.target.value)}
                 onKeyPress={handleLiveQuantitySubmit}
                 placeholder="Live Quantity"
-                className="w-full max-w-md mx-auto px-4 sm:px-6 py-3 sm:py-4 text-lg sm:text-xl border border-gray-300 dark:border-dark-300 rounded-lg focus:ring-2 focus:ring-shopify-500 dark:focus:ring-shopify-300 focus:border-transparent bg-white dark:bg-dark-50 text-gray-900 dark:text-dark-700 placeholder-gray-500 dark:placeholder-dark-400"
+                className="w-full max-w-md px-4 sm:px-6 py-3 sm:py-4 text-lg sm:text-xl border border-gray-300 dark:border-dark-300 rounded-lg focus:ring-2 focus:ring-shopify-500 dark:focus:ring-shopify-300 focus:border-transparent bg-white dark:bg-dark-50 text-gray-900 dark:text-dark-700 placeholder-gray-500 dark:placeholder-dark-400"
               />
             </div>
             
