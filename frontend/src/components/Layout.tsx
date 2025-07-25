@@ -208,8 +208,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Main content */}
       <div className="lg:pl-16 xl:pl-64">
         {/* Top bar with menu button and theme toggle */}
-        <div className="sticky top-0 z-10 bg-white dark:bg-dark-100 shadow-sm dark:shadow-md">
-          <div className="flex justify-between items-center px-4 sm:px-6 lg:px-8 py-2">
+        <div className="sticky top-0 z-10 bg-gray-50 dark:bg-dark-50">
+          <div className="flex h-12 justify-between items-center px-4 sm:px-6 lg:px-8">
             <button
               onClick={() => setSidebarOpen(true)}
               className="p-1 text-gray-400 hover:text-gray-500 lg:hidden"
