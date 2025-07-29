@@ -65,49 +65,54 @@ fi
 cleanup_previous_installation() {
     print_warning "Cleaning up previous installation..."
     
-    # Backup database if requested
-    if [ "$KEEP_DATABASE" = "true" ]; then
-        print_status "Backing up existing database..."
-        BACKUP_DIR="./backups/install_backup_$(date +%Y%m%d_%H%M%S)"
-        mkdir -p "$BACKUP_DIR"
-        
-        # Get the correct volume name based on compose file
-        if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
-            VOLUME_PREFIX="shopifyautomation"
-        else
-            VOLUME_PREFIX="shopify-automation"
-        fi
-        
-        # Backup SQLite database
-        if docker volume inspect ${VOLUME_PREFIX}_sqlite_data >/dev/null 2>&1; then
-            docker run --rm -v ${VOLUME_PREFIX}_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
-            print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
-            export RESTORE_DB_PATH="$BACKUP_DIR"
-        fi
-        
-        # Backup Redis data
-        if docker volume inspect ${VOLUME_PREFIX}_redis_data >/dev/null 2>&1; then
-            docker run --rm -v ${VOLUME_PREFIX}_redis_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/redis_data.tar.gz -C /source .
-            print_success "Redis data backed up to $BACKUP_DIR/redis_data.tar.gz"
-        fi
-    fi
-    
-    # Stop and remove containers
-    if docker compose -f $COMPOSE_FILE ps >/dev/null 2>&1; then
+    # Check if Docker is installed before attempting Docker operations
+    if command -v docker &> /dev/null; then
+        # Backup database if requested
         if [ "$KEEP_DATABASE" = "true" ]; then
-            docker compose -f $COMPOSE_FILE down 2>/dev/null || true
-        else
-            docker compose -f $COMPOSE_FILE down -v 2>/dev/null || true
+            print_status "Backing up existing database..."
+            BACKUP_DIR="./backups/install_backup_$(date +%Y%m%d_%H%M%S)"
+            mkdir -p "$BACKUP_DIR"
+            
+            # Get the correct volume name based on compose file
+            if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
+                VOLUME_PREFIX="shopifyautomation"
+            else
+                VOLUME_PREFIX="shopify-automation"
+            fi
+            
+            # Backup SQLite database
+            if docker volume inspect ${VOLUME_PREFIX}_sqlite_data >/dev/null 2>&1; then
+                docker run --rm -v ${VOLUME_PREFIX}_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
+                print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
+                export RESTORE_DB_PATH="$BACKUP_DIR"
+            fi
+            
+            # Backup Redis data
+            if docker volume inspect ${VOLUME_PREFIX}_redis_data >/dev/null 2>&1; then
+                docker run --rm -v ${VOLUME_PREFIX}_redis_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/redis_data.tar.gz -C /source .
+                print_success "Redis data backed up to $BACKUP_DIR/redis_data.tar.gz"
+            fi
         fi
+        
+        # Stop and remove containers
+        if docker compose -f $COMPOSE_FILE ps >/dev/null 2>&1; then
+            if [ "$KEEP_DATABASE" = "true" ]; then
+                docker compose -f $COMPOSE_FILE down 2>/dev/null || true
+            else
+                docker compose -f $COMPOSE_FILE down -v 2>/dev/null || true
+            fi
+        fi
+        
+        # Remove Docker images
+        docker rmi $(docker images | grep shopify | awk '{print $3}') 2>/dev/null || true
+        
+        # Clean up Docker system
+        docker system prune -f 2>/dev/null || true
+    else
+        print_warning "Docker not installed yet, skipping Docker cleanup operations"
     fi
     
-    # Remove Docker images
-    docker rmi $(docker images | grep shopify | awk '{print $3}') 2>/dev/null || true
-    
-    # Clean up Docker system
-    docker system prune -f
-    
-    # Remove logs and environment files
+    # Remove logs and environment files (these don't require Docker)
     sudo rm -rf logs/* 2>/dev/null || true
     rm -f frontend/.env 2>/dev/null || true
     
@@ -120,6 +125,12 @@ restore_database() {
     
     if [ ! -d "$backup_path" ]; then
         print_error "Backup directory $backup_path does not exist!"
+        return 1
+    fi
+    
+    # Check if Docker is available
+    if ! command -v docker &> /dev/null; then
+        print_error "Docker is required to restore database backup!"
         return 1
     fi
     
