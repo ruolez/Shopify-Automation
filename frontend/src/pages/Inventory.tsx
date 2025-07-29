@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import {
-  MagnifyingGlassIcon,
   PencilIcon,
   CheckIcon,
   XMarkIcon,
@@ -365,7 +364,7 @@ const Inventory: React.FC = () => {
     setExpandedVariants(newExpanded);
   };
 
-  const getInventoryLevelsForVariant = (variantId: string) => {
+  const getInventoryLevelsForVariant = (_variantId: string) => {
     // In this implementation, we're showing all inventory levels
     // In a real multi-variant scenario, you'd filter by variant
     return inventoryData?.inventory_levels || [];
