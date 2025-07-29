@@ -595,8 +595,8 @@ fi
 # Step 7: Build and start services
 print_status "Building Docker images ($DEPLOYMENT_MODE mode)..."
 
-# Build with no cache to ensure fresh build
-docker compose -f $COMPOSE_FILE build --no-cache
+# Build with no cache and force pull to ensure fresh build
+docker compose -f $COMPOSE_FILE build --no-cache --pull
 print_success "Docker images built successfully!"
 
 # Step 8: Start services
