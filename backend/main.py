@@ -1144,6 +1144,7 @@ async def get_inventory_verification_settings(
     
     return {
         "excluded_tag": settings.inventory_verification_excluded_tag,
+        "days_back": settings.inventory_verification_days_back or 5,
         "enabled": os.getenv("ENABLE_INVENTORY_VERIFICATION", "true").lower() == "true"
     }
 
@@ -1164,11 +1165,19 @@ async def update_inventory_verification_settings(
     if "excluded_tag" in data:
         settings.inventory_verification_excluded_tag = data.get("excluded_tag")
     
+    # Update days_back if provided
+    if "days_back" in data:
+        days_back = data.get("days_back")
+        # Ensure it's a valid integer between 1 and 30
+        if isinstance(days_back, int) and 1 <= days_back <= 30:
+            settings.inventory_verification_days_back = days_back
+    
     db.commit()
     db.refresh(settings)
     
     return {
         "excluded_tag": settings.inventory_verification_excluded_tag,
+        "days_back": settings.inventory_verification_days_back or 5,
         "enabled": os.getenv("ENABLE_INVENTORY_VERIFICATION", "true").lower() == "true"
     }
 
@@ -6237,6 +6246,7 @@ async def get_inventory_levels(
             # Get user's verification settings
             settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
             excluded_tag = settings.inventory_verification_excluded_tag if settings else None
+            days_back = settings.inventory_verification_days_back if settings else 5
             
             # Run verification per location for accurate counts - PARALLEL EXECUTION
             
@@ -6254,7 +6264,7 @@ async def get_inventory_levels(
                 try:
                     result = await client.get_unfulfilled_orders_for_verification(
                         barcode=barcode,
-                        days_back=4,
+                        days_back=days_back,
                         excluded_tag=excluded_tag,
                         location_id=level.location_id
                     )
@@ -6265,7 +6275,10 @@ async def get_inventory_levels(
                     level.quantities.verification_quantity = location_quantity
                     level.quantities.verification_metadata = {
                         "orders_processed": result.get("orders_processed", 0),
-                        "days_back": result.get("days_back", 4),
+                        "pages_fetched": result.get("pages_fetched", 0),
+                        "execution_time": result.get("execution_time", 0),
+                        "hit_time_limit": result.get("hit_time_limit", False),
+                        "days_back": result.get("days_back", days_back),
                         "excluded_tag": result.get("excluded_tag"),
                         "location_id": result.get("location_id"),
                         "error": result.get("error")
@@ -6284,7 +6297,10 @@ async def get_inventory_levels(
                     level.quantities.verification_quantity = 0
                     level.quantities.verification_metadata = {
                         "orders_processed": 0,
-                        "days_back": 4,
+                        "pages_fetched": 0,
+                        "execution_time": 0,
+                        "hit_time_limit": False,
+                        "days_back": days_back,
                         "excluded_tag": excluded_tag,
                         "error": str(e)
                     }
@@ -6316,7 +6332,7 @@ async def get_inventory_levels(
             # Add verification summary
             verification_summary = {
                 "total_quantity": total_verification_quantity,
-                "days_back": 4,
+                "days_back": days_back,
                 "excluded_tag": excluded_tag,
                 "store_details": verification_details,
                 "enabled": True

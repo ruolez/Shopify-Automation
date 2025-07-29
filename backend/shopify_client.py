@@ -3176,8 +3176,12 @@ class ShopifyClient:
             Dict with total quantity found in unfulfilled orders
         """
         from datetime import datetime, timedelta
+        import time
         
         try:
+            start_time = time.time()
+            max_execution_time = 30  # Maximum 30 seconds
+            
             # Calculate date range
             cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
             
@@ -3185,7 +3189,8 @@ class ShopifyClient:
             query_parts = [
                 f"created_at:>={cutoff_date}",
                 "(fulfillment_status:unshipped OR fulfillment_status:partial)",
-                "NOT status:cancelled"
+                "NOT status:cancelled",
+                f'sku:"{barcode}"'  # Add SKU filter to reduce result set
             ]
             
             # Add tag exclusion if specified
@@ -3279,9 +3284,23 @@ class ShopifyClient:
             cursor = None
             has_next_page = True
             processed_orders = 0
+            pages_fetched = 0
+            hit_time_limit = False
             
             # Paginate through orders
             while has_next_page:
+                # Check time limit
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= max_execution_time:
+                    logger.warning(f"Inventory verification hit time limit of {max_execution_time}s")
+                    hit_time_limit = True
+                    break
+                
+                # Check page limit (safety measure)
+                if pages_fetched >= 50:
+                    logger.warning("Inventory verification hit page limit of 50")
+                    break
+                
                 variables = {
                     "query": query_filter,
                     "first": 20,  # Reduced to avoid cost limit
@@ -3289,6 +3308,7 @@ class ShopifyClient:
                 }
                 
                 result = await self._make_graphql_request(orders_query, variables)
+                pages_fetched += 1
                 
                 orders_data = result.get("data", {}).get("orders", {})
                 edges = orders_data.get("edges", [])
@@ -3339,18 +3359,19 @@ class ShopifyClient:
                 # Check for next page
                 has_next_page = page_info.get("hasNextPage", False)
                 cursor = page_info.get("endCursor")
-                
-                # Limit total orders processed to avoid timeout
-                if processed_orders >= 200:
-                    logger.info(f"Reached order processing limit of 200 for verification")
-                    break
             
-            logger.info(f"Inventory verification complete: processed {processed_orders} orders, found {total_quantity} units" + 
+            execution_time = time.time() - start_time
+            
+            logger.info(f"Inventory verification complete: processed {processed_orders} orders in {pages_fetched} pages, " + 
+                       f"found {total_quantity} units in {execution_time:.2f}s" + 
                        (f" for location {location_id}" if location_id else ""))
             
             return {
                 "total_quantity": total_quantity,
                 "orders_processed": processed_orders,
+                "pages_fetched": pages_fetched,
+                "execution_time": round(execution_time, 2),
+                "hit_time_limit": hit_time_limit,
                 "days_back": days_back,
                 "excluded_tag": excluded_tag,
                 "cutoff_date": cutoff_date,
@@ -3363,6 +3384,9 @@ class ShopifyClient:
             return {
                 "total_quantity": 0,
                 "orders_processed": 0,
+                "pages_fetched": 0,
+                "execution_time": 0,
+                "hit_time_limit": False,
                 "days_back": days_back,
                 "excluded_tag": excluded_tag,
                 "location_id": location_id,

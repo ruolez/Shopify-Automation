@@ -22,6 +22,9 @@ interface InventoryQuantities {
   verification_quantity?: number;
   verification_metadata?: {
     orders_processed: number;
+    pages_fetched: number;
+    execution_time: number;
+    hit_time_limit: boolean;
     days_back: number;
     excluded_tag?: string;
     error?: string;
@@ -752,9 +755,13 @@ const Inventory: React.FC = () => {
                                         : "text-gray-500 dark:text-dark-500"
                                     }`}
                                     title={level.quantities.verification_metadata ? 
-                                      `Processed ${level.quantities.verification_metadata.orders_processed} orders from past ${level.quantities.verification_metadata.days_back} days${
+                                      `Processed ${level.quantities.verification_metadata.orders_processed} orders in ${level.quantities.verification_metadata.pages_fetched} pages (${level.quantities.verification_metadata.execution_time}s) from past ${level.quantities.verification_metadata.days_back} days${
                                         level.quantities.verification_metadata.excluded_tag ? 
                                         ` (excluding tag: ${level.quantities.verification_metadata.excluded_tag})` : 
+                                        ''
+                                      }${
+                                        level.quantities.verification_metadata.hit_time_limit ? 
+                                        ' ⚠️ Time limit reached' : 
                                         ''
                                       }` : 
                                       'No verification data'

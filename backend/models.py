@@ -131,6 +131,7 @@ class Settings(Base):
     timezone = Column(String, default="UTC")  # User's preferred timezone
     date_format = Column(String, default="MMM d, yyyy HH:mm")  # User's preferred date format
     inventory_verification_excluded_tag = Column(String(255), nullable=True)  # Tag to exclude from inventory verification
+    inventory_verification_days_back = Column(Integer, default=5)  # How many days to look back for inventory verification
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

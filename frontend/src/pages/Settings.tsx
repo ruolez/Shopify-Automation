@@ -680,6 +680,7 @@ const ExcludedSKUsSection: React.FC<{ timezone?: string }> = ({
 const InventoryVerificationSection: React.FC = () => {
   const queryClient = useQueryClient();
   const [excludedTag, setExcludedTag] = useState<string>("");
+  const [daysBack, setDaysBack] = useState<number>(5);
   const [hasChanges, setHasChanges] = useState(false);
 
   // Fetch inventory verification settings
@@ -691,16 +692,17 @@ const InventoryVerificationSection: React.FC = () => {
     },
   });
 
-  // Update excluded tag when data is loaded
+  // Update settings when data is loaded
   useEffect(() => {
     if (verificationSettings) {
       setExcludedTag(verificationSettings.excluded_tag || "");
+      setDaysBack(verificationSettings.days_back || 5);
     }
   }, [verificationSettings]);
 
   // Update settings mutation
   const updateSettings = useMutation({
-    mutationFn: async (data: { excluded_tag: string | null }) => {
+    mutationFn: async (data: { excluded_tag: string | null; days_back: number }) => {
       const response = await api.put("/settings/inventory-verification", data);
       return response.data;
     },
@@ -721,14 +723,21 @@ const InventoryVerificationSection: React.FC = () => {
     setHasChanges(true);
   };
 
+  const handleDaysBackChange = (value: number) => {
+    setDaysBack(value);
+    setHasChanges(true);
+  };
+
   const handleSave = () => {
     updateSettings.mutate({
       excluded_tag: excludedTag.trim() || null,
+      days_back: daysBack,
     });
   };
 
   const handleCancel = () => {
     setExcludedTag(verificationSettings?.excluded_tag || "");
+    setDaysBack(verificationSettings?.days_back || 5);
     setHasChanges(false);
   };
 
@@ -773,7 +782,7 @@ const InventoryVerificationSection: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-gray-500 dark:text-dark-400 mt-1">
-                Verification checks unfulfilled orders from the past 4 days
+                Verification checks unfulfilled orders from the past {verificationSettings?.days_back || 5} days
               </p>
             </div>
           </div>
@@ -822,6 +831,57 @@ const InventoryVerificationSection: React.FC = () => {
             </p>
           </div>
 
+          {/* Days Back Setting */}
+          <div>
+            <label
+              htmlFor="days-back"
+              className="block text-sm font-medium text-gray-700 dark:text-dark-600"
+            >
+              Verification Period (days)
+            </label>
+            <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
+              How many days back to check for unfulfilled orders
+            </p>
+            <div className="flex items-center space-x-2">
+              <input
+                id="days-back"
+                type="number"
+                min="1"
+                max="30"
+                value={daysBack}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  if (!isNaN(value) && value >= 1 && value <= 30) {
+                    handleDaysBackChange(value);
+                  }
+                }}
+                className="w-24 block rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm"
+              />
+              <span className="text-sm text-gray-600 dark:text-dark-500">days</span>
+              {hasChanges && (
+                <>
+                  <button
+                    onClick={handleSave}
+                    disabled={updateSettings.isPending}
+                    className="px-4 py-2 bg-shopify-600 hover:bg-shopify-700 text-white rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    {updateSettings.isPending ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={updateSettings.isPending}
+                    className="px-4 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-dark-300 mt-1">
+              Recommended: 5-7 days. Higher values may impact performance.
+            </p>
+          </div>
+
           {/* Info Box */}
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
             <div className="flex">
@@ -846,7 +906,7 @@ const InventoryVerificationSection: React.FC = () => {
                 </h3>
                 <div className="mt-2 text-sm text-blue-700 dark:text-blue-400">
                   <ul className="list-disc list-inside space-y-1">
-                    <li>Searches unfulfilled orders from the past 4 days</li>
+                    <li>Searches unfulfilled orders from the past {daysBack} days</li>
                     <li>Counts quantities of products matching the barcode</li>
                     <li>Excludes cancelled orders automatically</li>
                     <li>Excludes orders with the specified tag (if set)</li>
