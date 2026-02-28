@@ -12,14 +12,20 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default to production mode
+# Default to production mode with PostgreSQL
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-production}"
-COMPOSE_FILE="docker-compose.yml"
+DATABASE_TYPE="postgresql"  # Always use PostgreSQL
+COMPOSE_FILE="docker-compose.postgres.yml"
+POSTGRES_PASSWORD=""
 
 # Check if production mode is requested
 if [ "$DEPLOYMENT_MODE" = "production" ] || [ "$1" = "--production" ]; then
     DEPLOYMENT_MODE="production"
-    COMPOSE_FILE="docker-compose.prod.yml"
+    COMPOSE_FILE="docker-compose.postgres.prod.yml"
+    # Check if prod compose file exists, if not use regular postgres compose
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        COMPOSE_FILE="docker-compose.postgres.yml"
+    fi
 fi
 
 # Function to print colored output
@@ -43,7 +49,7 @@ print_warning() {
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
 echo "║     Shopify Multi-Store Order Management System           ║"
-echo "║       Automated Installation Script - PRODUCTION          ║"
+echo "║    PostgreSQL Installation Script - PRODUCTION            ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -80,10 +86,15 @@ cleanup_previous_installation() {
                 VOLUME_PREFIX="shopify-automation"
             fi
             
-            # Backup SQLite database
-            if docker volume inspect ${VOLUME_PREFIX}_sqlite_data >/dev/null 2>&1; then
-                docker run --rm -v ${VOLUME_PREFIX}_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
-                print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
+            # Backup PostgreSQL database
+            if docker ps | grep -q shopify_postgres; then
+                docker exec shopify_postgres pg_dump -U shopify_user -d shopify_db | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"
+                print_success "PostgreSQL database backed up to $BACKUP_DIR/postgres_backup.sql.gz"
+                export RESTORE_DB_PATH="$BACKUP_DIR"
+            elif docker volume inspect ${VOLUME_PREFIX}_postgres_data >/dev/null 2>&1; then
+                # If container not running but volume exists, backup the volume
+                docker run --rm -v ${VOLUME_PREFIX}_postgres_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/postgres_data.tar.gz -C /source .
+                print_success "PostgreSQL data volume backed up to $BACKUP_DIR/postgres_data.tar.gz"
                 export RESTORE_DB_PATH="$BACKUP_DIR"
             fi
             
@@ -112,9 +123,12 @@ cleanup_previous_installation() {
         print_warning "Docker not installed yet, skipping Docker cleanup operations"
     fi
     
-    # Remove logs and environment files (these don't require Docker)
+    # Remove logs (these don't require Docker)
     sudo rm -rf logs/* 2>/dev/null || true
-    rm -f frontend/.env 2>/dev/null || true
+    # Only remove frontend/.env on clean install; it gets recreated later either way
+    if [ "$KEEP_DATABASE" != "true" ]; then
+        rm -f frontend/.env 2>/dev/null || true
+    fi
     
     print_success "Previous installation cleaned up."
 }
@@ -143,10 +157,24 @@ restore_database() {
         VOLUME_PREFIX="shopify-automation"
     fi
     
-    # Restore SQLite database
-    if [ -f "$backup_path/sqlite_data.tar.gz" ]; then
-        docker run --rm -v ${VOLUME_PREFIX}_sqlite_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/sqlite_data.tar.gz -C /target"
-        print_success "Database restored"
+    # Restore PostgreSQL database
+    if [ -f "$backup_path/postgres_backup.sql.gz" ]; then
+        # Wait for PostgreSQL to be ready
+        print_status "Waiting for PostgreSQL to be ready..."
+        for i in {1..30}; do
+            if docker exec shopify_postgres pg_isready -U shopify_user &>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
+        
+        # Restore from SQL backup
+        gunzip -c "$backup_path/postgres_backup.sql.gz" | docker exec -i shopify_postgres psql -U shopify_user -d shopify_db
+        print_success "PostgreSQL database restored from SQL backup"
+    elif [ -f "$backup_path/postgres_data.tar.gz" ]; then
+        # Restore from volume backup
+        docker run --rm -v ${VOLUME_PREFIX}_postgres_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/postgres_data.tar.gz -C /target"
+        print_success "PostgreSQL data volume restored"
     fi
     
     # Restore Redis data
@@ -193,17 +221,22 @@ get_server_config() {
 # Parse command line arguments
 KEEP_DATABASE=false
 CLEAN_INSTALL=false
+MIGRATE_FROM_SQLITE=false
+SQLITE_PATH="./backend/app.db"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --production)
             DEPLOYMENT_MODE="production"
-            COMPOSE_FILE="docker-compose.prod.yml"
+            COMPOSE_FILE="docker-compose.postgres.prod.yml"
+            if [ ! -f "$COMPOSE_FILE" ]; then
+                COMPOSE_FILE="docker-compose.postgres.yml"
+            fi
             shift
             ;;
         --development)
             DEPLOYMENT_MODE="development"
-            COMPOSE_FILE="docker-compose.yml"
+            COMPOSE_FILE="docker-compose.postgres.yml"
             shift
             ;;
         --clean)
@@ -214,21 +247,37 @@ while [[ $# -gt 0 ]]; do
             KEEP_DATABASE=true
             shift
             ;;
+        --postgres-password)
+            POSTGRES_PASSWORD="$2"
+            shift 2
+            ;;
+        --migrate-from-sqlite)
+            MIGRATE_FROM_SQLITE=true
+            if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                SQLITE_PATH="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --production          Run in production mode (default)"
-            echo "  --development         Run in development mode"
-            echo "  --clean               Clean installation (remove all previous data)"
-            echo "  --keep-db             Keep existing database during reinstall (runs migrations)"
-            echo "  --help, -h            Show this help message"
+            echo "  --production              Run in production mode (default)"
+            echo "  --development             Run in development mode"
+            echo "  --clean                   Clean installation (remove all previous data)"
+            echo "  --keep-db                 Keep existing database during reinstall"
+            echo "  --postgres-password <pwd> Set PostgreSQL password (generated if not provided)"
+            echo "  --migrate-from-sqlite     Migrate from SQLite to PostgreSQL"
+            echo "  --help, -h                Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                    # Fresh production installation"
-            echo "  $0 --development      # Development installation"
-            echo "  $0 --clean           # Clean installation (remove all data)"
-            echo "  $0 --keep-db          # Reinstall but keep existing database"
+            echo "  $0                        # Fresh PostgreSQL production installation"
+            echo "  $0 --development          # PostgreSQL development installation"
+            echo "  $0 --clean                # Clean installation (remove all data)"
+            echo "  $0 --keep-db              # Reinstall but keep existing database"
+            echo "  $0 --migrate-from-sqlite  # Migrate from SQLite to PostgreSQL"
             exit 0
             ;;
         *)
@@ -411,7 +460,7 @@ if ! command -v docker &> /dev/null; then
     # Try to activate group without logout (may not work on all systems)
     if [ "$SKIP_GROUP_REFRESH" != "true" ]; then
         export SKIP_GROUP_REFRESH=true
-        exec sg docker "$0 $@"
+        exec sg docker "$0" "$@"
     fi
 else
     print_success "Docker is already installed."
@@ -529,40 +578,80 @@ mkdir -p logs
 mkdir -p backups
 mkdir -p nginx/ssl
 
-# Step 3: Create .env file if it doesn't exist
-if [ ! -f .env ]; then
-    print_status "Creating environment configuration..."
-    cat > .env <<EOF
+# Step 3: Preserve existing settings or generate new ones
+EXISTING_POSTGRES_PASSWORD=""
+EXISTING_SECRET_KEY=""
+EXISTING_ADMIN_SECRET_KEY=""
+EXISTING_JWT_SECRET_KEY=""
+
+if [ "$KEEP_DATABASE" = "true" ] && [ -f .env ]; then
+    print_status "Preserving existing secrets from .env..."
+    EXISTING_POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d'=' -f2- || true)
+    EXISTING_SECRET_KEY=$(grep '^SECRET_KEY=' .env | cut -d'=' -f2- || true)
+    EXISTING_ADMIN_SECRET_KEY=$(grep '^ADMIN_SECRET_KEY=' .env | cut -d'=' -f2- || true)
+    EXISTING_JWT_SECRET_KEY=$(grep '^JWT_SECRET_KEY=' .env | cut -d'=' -f2- || true)
+    if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
+        print_success "Existing secrets preserved (DB password, JWT keys, etc.)"
+    fi
+fi
+
+# Use existing values if preserving, otherwise generate new ones
+if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
+    POSTGRES_PASSWORD="$EXISTING_POSTGRES_PASSWORD"
+elif [ -z "$POSTGRES_PASSWORD" ]; then
+    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    print_warning "Generated PostgreSQL password (saved in .env file)"
+fi
+
+SECRET_KEY="${EXISTING_SECRET_KEY:-$(openssl rand -hex 32)}"
+ADMIN_SECRET_KEY="${EXISTING_ADMIN_SECRET_KEY:-$(openssl rand -hex 32)}"
+JWT_SECRET_KEY="${EXISTING_JWT_SECRET_KEY:-$(openssl rand -hex 32)}"
+
+# Create .env file
+print_status "Creating environment configuration..."
+cat > .env <<EOF
 # Server Configuration
 SERVER_IP=$SERVER_IP
 VITE_API_URL=http://$SERVER_IP:8000
+ENVIRONMENT=$DEPLOYMENT_MODE
+
+# Database Configuration (PostgreSQL)
+DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=shopify_db
+POSTGRES_USER=shopify_user
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+
+# Connection Pool Settings
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=40
+DB_POOL_TIMEOUT=30
+DB_POOL_RECYCLE=3600
 
 # CORS Configuration
 CORS_ORIGINS=http://$SERVER_IP,http://$SERVER_IP:3000,http://localhost,http://localhost:3000
 
 # Security
-SECRET_KEY=$(openssl rand -hex 32)
-ADMIN_SECRET_KEY=$(openssl rand -hex 32)
-
-# Environment
-ENVIRONMENT=$DEPLOYMENT_MODE
-
-# Shopify Configuration (Add your credentials here)
-SHOPIFY_API_VERSION=2025-04
-
-# JWT Configuration
-JWT_SECRET_KEY=$(openssl rand -hex 32)
+SECRET_KEY=${SECRET_KEY}
+ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
+JWT_SECRET_KEY=${JWT_SECRET_KEY}
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
 
+# Shopify Configuration
+SHOPIFY_API_VERSION=2025-04
+
 # Redis Configuration
 REDIS_URL=redis://redis:6379/0
+REDIS_PASSWORD=
+REDIS_MAX_CONNECTIONS=50
 
-# Database Configuration
-DATABASE_URL=sqlite:///app/data/app.db
+# Application Settings
+LOG_LEVEL=$( [ "$DEPLOYMENT_MODE" = "production" ] && echo "INFO" || echo "DEBUG" )
+WORKERS=$( [ "$DEPLOYMENT_MODE" = "production" ] && echo "4" || echo "1" )
 EOF
-    print_success "Environment configuration created!"
-fi
+print_success "Environment configuration created with PostgreSQL settings!"
 
 # Step 4: Configure CORS origins for server IP
 print_status "Configuring CORS origins for server IP..."
@@ -656,72 +745,177 @@ elif [ "$KEEP_DATABASE" = "true" ]; then
         print_success "Existing database schema is up to date!"
     fi
 else
-    print_status "Initializing database..."
+    print_status "Initializing PostgreSQL database..."
+    
+    # Wait for PostgreSQL to be ready
+    print_status "Waiting for PostgreSQL to initialize..."
+    for i in {1..30}; do
+        if docker exec shopify_postgres pg_isready -U shopify_user &>/dev/null; then
+            print_success "PostgreSQL is ready"
+            break
+        fi
+        echo -n "."
+        sleep 2
+    done
+    
+    # Initialize database schema
     docker exec shopify_api python -c "
+import sys
+sys.path.append('/app')
 from database import Base, engine
 from models import *
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 try:
+    # Create all tables
     Base.metadata.create_all(bind=engine)
-    print('Database initialized successfully!')
+    logger.info('PostgreSQL database schema created successfully')
+    
+    # Verify tables were created
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    logger.info(f'Created {len(tables)} tables: {tables}')
+    
 except Exception as e:
-    print(f'Database initialization failed: {e}')
-    exit(1)
+    logger.error(f'Failed to create database schema: {e}')
+    sys.exit(1)
 "
 
     if [ $? -eq 0 ]; then
-        print_success "Database initialized successfully!"
+        print_success "PostgreSQL database initialized successfully!"
         
-        # For fresh installs, migrations are not needed as SQLAlchemy creates
-        # the complete schema with all columns. Mark all migrations as applied.
-        print_status "Marking all migrations as applied for fresh install..."
+        # Create migration tracking table for PostgreSQL
+        print_status "Setting up migration tracking..."
         docker exec shopify_api python -c "
-import sqlite3
+import sys
+sys.path.append('/app')
+from sqlalchemy import create_engine, text
+import os
 from datetime import datetime
 
-# Connect to database
-conn = sqlite3.connect('/app/data/app.db')
-cursor = conn.cursor()
+DATABASE_URL = os.getenv('DATABASE_URL')
+engine = create_engine(DATABASE_URL)
 
-# Create migration tracking table
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-        migration_name TEXT PRIMARY KEY,
-        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-''')
-
-# Mark all migrations as applied for fresh install
-migrations = [
-    'add_delay_ms_to_rules',
-    'add_timezone_to_settings',
-    'add_fraud_sync_enabled',
-    'add_fraud_detection_rules',
-    'add_duplicate_detection_days_column',
-    'add_delivery_analytics_column',
-    'add_days_since_last_delivery_column',
-    'add_user_id_to_task_status',
-    'add_fraud_analyses_archive'
-]
-
-for migration in migrations:
-    cursor.execute(
-        'INSERT OR IGNORE INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)',
-        (migration, datetime.now())
-    )
-
-conn.commit()
-conn.close()
-print('All migrations marked as applied for fresh install.')
+with engine.connect() as conn:
+    # Create migration tracking table
+    conn.execute(text('''
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_name TEXT PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    '''))
+    
+    # Mark all migrations as applied for fresh install
+    migrations = [
+        'add_delay_ms_to_rules',
+        'add_timezone_to_settings',
+        'add_fraud_sync_enabled',
+        'add_fraud_detection_rules',
+        'add_duplicate_detection_days_column',
+        'add_delivery_analytics_column',
+        'add_days_since_last_delivery_column',
+        'add_user_id_to_task_status',
+        'add_fraud_analyses_archive',
+        'remove_age_checker_from_archive'
+    ]
+    
+    for migration in migrations:
+        conn.execute(text(
+            'INSERT INTO schema_migrations (migration_name, applied_at) VALUES (:name, :date) ON CONFLICT DO NOTHING'
+        ), {'name': migration, 'date': datetime.now()})
+    
+    conn.commit()
+    print('Migration tracking configured for PostgreSQL')
 "
         if [ $? -eq 0 ]; then
             print_success "Fresh install schema setup completed!"
         else
-            print_error "Failed to mark migrations as applied!"
-            # Not critical - continue installation
+            print_warning "Migration tracking setup had issues (not critical)"
         fi
     else
         print_error "Database initialization failed!"
         exit 1
+    fi
+    
+    # Check if we should migrate from SQLite
+    if [ "$MIGRATE_FROM_SQLITE" = true ] && [ -f "$SQLITE_PATH" ]; then
+        print_status "Migrating data from SQLite to PostgreSQL..."
+        
+        # Copy SQLite database to container
+        docker cp "$SQLITE_PATH" shopify_api:/tmp/sqlite_backup.db
+        
+        # Perform migration
+        docker exec shopify_api python -c "
+import sys
+sys.path.append('/app')
+import sqlite3
+from sqlalchemy import create_engine, text
+from database import SessionLocal
+import os
+import json
+
+# Connect to SQLite
+sqlite_conn = sqlite3.connect('/tmp/sqlite_backup.db')
+sqlite_conn.row_factory = sqlite3.Row
+sqlite_cursor = sqlite_conn.cursor()
+
+# Connect to PostgreSQL
+pg_session = SessionLocal()
+
+try:
+    # Migrate users
+    print('Migrating users...')
+    sqlite_cursor.execute('SELECT * FROM users')
+    users = sqlite_cursor.fetchall()
+    for user in users:
+        pg_session.execute(text('''
+            INSERT INTO users (id, email, username, password_hash, full_name, is_active, created_at)
+            VALUES (:id, :email, :username, :password_hash, :full_name, :is_active, :created_at)
+            ON CONFLICT (id) DO NOTHING
+        '''), dict(user))
+    
+    # Migrate stores
+    print('Migrating stores...')
+    sqlite_cursor.execute('SELECT * FROM stores')
+    stores = sqlite_cursor.fetchall()
+    for store in stores:
+        pg_session.execute(text('''
+            INSERT INTO stores (id, user_id, store_name, shop_domain, access_token, webhook_id, is_active, created_at)
+            VALUES (:id, :user_id, :store_name, :shop_domain, :access_token, :webhook_id, :is_active, :created_at)
+            ON CONFLICT (id) DO NOTHING
+        '''), dict(store))
+    
+    # Migrate rules
+    print('Migrating rules...')
+    sqlite_cursor.execute('SELECT * FROM rules')
+    rules = sqlite_cursor.fetchall()
+    for rule in rules:
+        pg_session.execute(text('''
+            INSERT INTO rules (id, store_id, name, description, conditions, actions, priority, is_active, created_at, delay_ms)
+            VALUES (:id, :store_id, :name, :description, :conditions, :actions, :priority, :is_active, :created_at, :delay_ms)
+            ON CONFLICT (id) DO NOTHING
+        '''), dict(rule))
+    
+    pg_session.commit()
+    print('Data migration completed successfully')
+    
+except Exception as e:
+    print(f'Migration error: {e}')
+    pg_session.rollback()
+finally:
+    sqlite_conn.close()
+    pg_session.close()
+"
+        
+        if [ $? -eq 0 ]; then
+            print_success "Data migrated from SQLite to PostgreSQL"
+        else
+            print_warning "Data migration had issues (some data may not have migrated)"
+        fi
     fi
 fi
 
@@ -760,13 +954,40 @@ fi
 # Create initial admin user
 print_status "Creating initial admin user..."
 docker exec shopify_api python -c "
+import sys
+sys.path.append('/app')
+from database import SessionLocal
+from models import AdminUser
+from admin_auth import get_admin_password_hash
+
+db = SessionLocal()
 try:
-    from init_admin import create_initial_admin
-    create_initial_admin()
-except FileNotFoundError:
-    print('Note: Admin initialization script not found. You can add it later.')
+    # Check if admin user already exists
+    existing_admin = db.query(AdminUser).filter(AdminUser.username == 'admin').first()
+    if not existing_admin:
+        # Create default admin user
+        admin_user = AdminUser(
+            username='admin',
+            email='admin@shopify-automation.local',
+            full_name='System Administrator',
+            hashed_password=get_admin_password_hash('admin'),
+            role='super_admin',
+            is_active=True
+        )
+        db.add(admin_user)
+        db.commit()
+        print('✅ Admin user created successfully!')
+        print('  Username: admin')
+        print('  Password: admin')
+    else:
+        print('✅ Admin user already exists')
+        print('  Username: admin')
+        print('  Password: admin (if not changed)')
 except Exception as e:
-    print(f'Admin user might already exist or error occurred: {e}')
+    print(f'Error with admin user: {e}')
+    db.rollback()
+finally:
+    db.close()
 "
 
 # Step 11: Display success message
@@ -776,9 +997,16 @@ echo -e "${GREEN}║          Installation completed successfully!             �
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
 echo
 echo -e "${BLUE}Access the application:${NC}"
-echo -e "  Main App:    ${GREEN}http://$SERVER_IP${NC}"
+echo -e "  Main App:    ${GREEN}http://$SERVER_IP:3000${NC}"
 echo -e "  API Docs:    ${GREEN}http://$SERVER_IP:8000/docs${NC}"
-echo -e "  Admin Panel: ${GREEN}http://$SERVER_IP/admin/login${NC}"
+echo -e "  Admin Panel: ${GREEN}http://$SERVER_IP:3000/admin${NC}"
+echo
+echo -e "${BLUE}PostgreSQL Database:${NC}"
+echo -e "  Host:     localhost (or container: postgres)"
+echo -e "  Port:     5432"
+echo -e "  Database: shopify_db"
+echo -e "  Username: shopify_user"
+echo -e "  Password: ${YELLOW}[Saved in .env file]${NC}"
 echo
 echo -e "${BLUE}Default Admin Credentials:${NC}"
 echo -e "  Username: ${YELLOW}admin${NC}"
@@ -786,9 +1014,10 @@ echo -e "  Password: ${YELLOW}admin${NC}"
 echo -e "  ${RED}⚠️  Change the admin password immediately after first login!${NC}"
 echo
 echo -e "${BLUE}Monitor services:${NC}"
-echo -e "  View logs:      ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
-echo -e "  Service status: ${YELLOW}docker compose -f $COMPOSE_FILE ps${NC}"
-echo -e "  Schema version: ${YELLOW}docker exec shopify_api python check_schema_version.py${NC}"
+echo -e "  View logs:        ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
+echo -e "  Service status:   ${YELLOW}docker compose -f $COMPOSE_FILE ps${NC}"
+echo -e "  Database console: ${YELLOW}docker exec -it shopify_postgres psql -U shopify_user -d shopify_db${NC}"
+echo -e "  Backup database:  ${YELLOW}docker exec shopify_postgres pg_dump -U shopify_user shopify_db > backup.sql${NC}"
 
 # Verify schema is up to date
 print_status "Verifying database schema..."
