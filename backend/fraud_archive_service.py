@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, and_, or_
 from sqlalchemy.exc import SQLAlchemyError
 
-from models import FraudAnalysis, ShopifyStore, User, Settings
+from models import FraudAnalysis, ShopifyStore, User, Settings, ProcessedFraudOrder
 from shopify_client import ShopifyClient
 from database import get_db
 
@@ -106,6 +106,10 @@ class FraudArchiveService:
                     
                     # Check each order's status in the batch
                     for analysis in batch:
+                        # Store analysis info before processing (in case it gets deleted)
+                        analysis_id = analysis.id
+                        analysis_order_name = analysis.order_name
+                        
                         try:
                             # Get current order status from Shopify
                             order_status = await self._get_order_status(
@@ -114,7 +118,7 @@ class FraudArchiveService:
                             )
                             
                             if not order_status:
-                                logger.warning(f"Could not get status for order {analysis.order_name}")
+                                logger.warning(f"Could not get status for order {analysis_order_name}")
                                 failed_count += 1
                                 continue
                             
@@ -142,7 +146,7 @@ class FraudArchiveService:
                             
                             # Log why order is or isn't being archived
                             if not archive_reason:
-                                logger.debug(f"Order {analysis.order_name} not archived - Status: {fulfillment_status}, Financial: {financial_status}")
+                                logger.debug(f"Order {analysis_order_name} not archived - Status: {fulfillment_status}, Financial: {financial_status}")
                             
                             if archive_reason:
                                 # Archive this analysis
@@ -152,15 +156,15 @@ class FraudArchiveService:
                                     batch_archived += 1
                                     reasons[archive_reason] += 1
                                     archived_orders.append({
-                                        "order_name": analysis.order_name,
+                                        "order_name": analysis_order_name,
                                         "archive_reason": archive_reason
                                     })
-                                    logger.info(f"Archived fraud analysis for order {analysis.order_name} (reason: {archive_reason})")
+                                    logger.info(f"Archived fraud analysis for order {analysis_order_name} (reason: {archive_reason})")
                                 else:
                                     failed_count += 1
                             
                         except Exception as e:
-                            logger.error(f"Error processing analysis {analysis.id}: {str(e)}")
+                            logger.error(f"Error processing analysis {analysis_id} (order: {analysis_order_name}): {str(e)}")
                             failed_count += 1
                     
                     # Commit after each batch to avoid long locks
@@ -254,6 +258,26 @@ class FraudArchiveService:
             True if successful, False otherwise
         """
         try:
+            # First, check if there are any processed_fraud_orders that reference this analysis
+            from models import ProcessedFraudOrder
+            
+            # Preserve ProcessedFraudOrder records as deduplication guards by nulling
+            # out the FK instead of deleting them. The dedup check in
+            # process_store_fraud_detection uses store_id + order_id, not fraud_analysis_id.
+            preserved_count = self.db.query(ProcessedFraudOrder).filter(
+                ProcessedFraudOrder.fraud_analysis_id == analysis.id
+            ).update({ProcessedFraudOrder.fraud_analysis_id: None})
+            
+            # First check if this analysis is already archived
+            check_sql = text("SELECT id FROM fraud_analyses_archive WHERE id = :id")
+            existing = self.db.execute(check_sql, {"id": analysis.id}).fetchone()
+            
+            if existing:
+                logger.warning(f"Analysis {analysis.id} already exists in archive, skipping insert")
+                # Still need to delete from main table and related records
+                self.db.delete(analysis)
+                return True
+            
             # Build insert statement for archive table
             insert_sql = text("""
                 INSERT INTO fraud_analyses_archive (
@@ -322,12 +346,14 @@ class FraudArchiveService:
                 "analysis_timestamp": analysis.analysis_timestamp,
                 "processing_time_seconds": str(analysis.processing_time_seconds) if analysis.processing_time_seconds else None,
                 "analysis_version": analysis.analysis_version,
-                "archived_at": datetime.utcnow(),
+                "archived_at": datetime.now(timezone.utc),
                 "archive_reason": archive_reason
             })
             
-            # Delete from active table
+            # Delete from active table (after deleting related records)
             self.db.delete(analysis)
+            
+            logger.info(f"Archived analysis {analysis.id} for order {analysis.order_name} (preserved {preserved_count} ProcessedFraudOrder records)")
             
             return True
             
