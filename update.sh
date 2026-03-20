@@ -14,7 +14,8 @@ NC='\033[0m' # No Color
 
 # Configuration
 BACKUP_DIR="./backups/$(date +%Y%m%d_%H%M%S)"
-COMPOSE_FILE="docker-compose.prod.yml"
+DATABASE_TYPE="postgresql"  # Always use PostgreSQL
+COMPOSE_FILE="docker-compose.postgres.yml"
 
 # Get server IP from existing configuration
 get_server_ip() {
@@ -68,13 +69,17 @@ backup_data() {
     print_info "Creating backup in $BACKUP_DIR..."
     mkdir -p "$BACKUP_DIR"
     
-    # Backup SQLite database
-    if docker volume inspect shopify-automation_sqlite_data >/dev/null 2>&1; then
-        print_info "Backing up SQLite database..."
-        docker run --rm -v shopify-automation_sqlite_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/sqlite_data.tar.gz -C /source .
-        print_success "Database backed up to $BACKUP_DIR/sqlite_data.tar.gz"
+    # Backup PostgreSQL database
+    if docker ps | grep -q shopify_postgres; then
+        print_info "Backing up PostgreSQL database..."
+        docker exec shopify_postgres pg_dump -U shopify_user -d shopify_db | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"
+        print_success "PostgreSQL database backed up to $BACKUP_DIR/postgres_backup.sql.gz"
+    elif docker volume inspect shopify-automation_postgres_data >/dev/null 2>&1; then
+        print_info "Backing up PostgreSQL data volume..."
+        docker run --rm -v shopify-automation_postgres_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/postgres_data.tar.gz -C /source .
+        print_success "PostgreSQL data volume backed up to $BACKUP_DIR/postgres_data.tar.gz"
     else
-        print_warning "SQLite volume not found, skipping database backup"
+        print_warning "PostgreSQL not found, skipping database backup"
     fi
     
     # Backup Redis data
@@ -105,11 +110,23 @@ restore_data() {
     
     print_info "Restoring data from $backup_path..."
     
-    # Restore SQLite database
-    if [ -f "$backup_path/sqlite_data.tar.gz" ]; then
-        print_info "Restoring SQLite database..."
-        docker run --rm -v shopify-automation_sqlite_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/sqlite_data.tar.gz -C /target"
-        print_success "Database restored"
+    # Restore PostgreSQL database
+    if [ -f "$backup_path/postgres_backup.sql.gz" ]; then
+        print_info "Restoring PostgreSQL database from SQL backup..."
+        # Wait for PostgreSQL to be ready
+        for i in {1..30}; do
+            if docker exec shopify_postgres pg_isready -U shopify_user -d shopify_db &>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
+        # Restore from SQL backup
+        gunzip -c "$backup_path/postgres_backup.sql.gz" | docker exec -i shopify_postgres psql -U shopify_user -d shopify_db
+        print_success "PostgreSQL database restored"
+    elif [ -f "$backup_path/postgres_data.tar.gz" ]; then
+        print_info "Restoring PostgreSQL data volume..."
+        docker run --rm -v shopify-automation_postgres_data:/target -v "$(pwd)/$backup_path:/backup" alpine sh -c "rm -rf /target/* && tar xzf /backup/postgres_data.tar.gz -C /target"
+        print_success "PostgreSQL data volume restored"
     fi
     
     # Restore Redis data
@@ -186,14 +203,14 @@ if [ -n "$RESTORE_FROM" ]; then
     
     # Stop services
     print_info "Stopping services..."
-    docker-compose -f "$COMPOSE_FILE" down
+    docker compose -f "$COMPOSE_FILE" down
     
     # Restore data
     restore_data "$RESTORE_FROM"
     
     # Start services
     print_info "Starting services..."
-    docker-compose -f "$COMPOSE_FILE" up -d
+    docker compose -f "$COMPOSE_FILE" up -d
     
     print_success "Restore completed!"
     exit 0
@@ -245,15 +262,15 @@ print_success "Configuration updated for server IP: $SERVER_IP"
 
 # Stop services
 print_info "Stopping services..."
-docker-compose -f "$COMPOSE_FILE" down
+docker compose -f "$COMPOSE_FILE" down
 
 # Rebuild containers (force rebuild to get latest changes)
 print_info "Rebuilding containers..."
-docker-compose -f "$COMPOSE_FILE" build --no-cache
+docker compose -f "$COMPOSE_FILE" build --no-cache
 
 # Start services
 print_info "Starting updated services..."
-docker-compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" up -d
 
 # Wait for services to be ready
 print_info "Waiting for services to start..."
@@ -268,11 +285,11 @@ fi
 
 # Check if services are running
 print_info "Checking service status..."
-if docker-compose -f "$COMPOSE_FILE" ps | grep -q "Up"; then
+if docker compose -f "$COMPOSE_FILE" ps | grep -q "Up"; then
     print_success "Services are running!"
 else
     print_error "Some services may not be running properly"
-    docker-compose -f "$COMPOSE_FILE" ps
+    docker compose -f "$COMPOSE_FILE" ps
 fi
 
 print_success "Update completed!"

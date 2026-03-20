@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: shopify_postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-shopify_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-shopify_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shopify_user} -d ${POSTGRES_DB:-shopify_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     container_name: shopify_redis
@@ -18,7 +36,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///app/data/app.db
+      - DATABASE_URL=${DATABASE_URL:-postgresql://shopify_user:changeme@postgres:5432/shopify_db}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this-in-production}
       - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY:-your-admin-secret-key-change-this}
@@ -30,9 +48,10 @@ services:
       - ENVIRONMENT=production
     volumes:
       - ./backend:/app
-      - sqlite_data:/app/data
+      # - sqlite_data:/app/data  # Removed: migrated to PostgreSQL
       - ./logs:/app/logs
     depends_on:
+      - postgres
       - redis
     restart: unless-stopped
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -43,15 +62,16 @@ services:
       dockerfile: Dockerfile
     container_name: shopify_worker
     environment:
-      - DATABASE_URL=sqlite:///app/data/app.db
+      - DATABASE_URL=${DATABASE_URL:-postgresql://shopify_user:changeme@postgres:5432/shopify_db}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this-in-production}
       - ENVIRONMENT=production
     volumes:
       - ./backend:/app
-      - sqlite_data:/app/data
+      # - sqlite_data:/app/data  # Removed: migrated to PostgreSQL
       - ./logs:/app/logs
     depends_on:
+      - postgres
       - redis
       - api
     restart: unless-stopped
@@ -63,15 +83,16 @@ services:
       dockerfile: Dockerfile
     container_name: shopify_scheduler
     environment:
-      - DATABASE_URL=sqlite:///app/data/app.db
+      - DATABASE_URL=${DATABASE_URL:-postgresql://shopify_user:changeme@postgres:5432/shopify_db}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this-in-production}
       - ENVIRONMENT=production
     volumes:
       - ./backend:/app
-      - sqlite_data:/app/data
+      # - sqlite_data:/app/data  # Removed: migrated to PostgreSQL
       - ./logs:/app/logs
     depends_on:
+      - postgres
       - redis
       - api
     restart: unless-stopped
@@ -105,4 +126,5 @@ services:
 
 volumes:
   redis_data:
-  sqlite_data:
+  postgres_data:
+  # sqlite_data:  # Removed: migrated to PostgreSQL
