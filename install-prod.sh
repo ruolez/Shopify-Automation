@@ -203,7 +203,7 @@ ENVEOF
     # ENCRYPTION_KEY: required for token encryption (added in audit fix #5)
     if ! grep -q '^ENCRYPTION_KEY=' .env; then
         print_warning "Adding missing ENCRYPTION_KEY to .env..."
-        ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)
+        ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || python3 -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())" 2>/dev/null || openssl rand -base64 32 | tr '+/' '-_')
         echo "" >> .env
         echo "# Encryption key (auto-added during update)" >> .env
         echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}" >> .env
@@ -985,7 +985,7 @@ fi
 SECRET_KEY="${EXISTING_SECRET_KEY:-$(openssl rand -hex 32)}"
 ADMIN_SECRET_KEY="${EXISTING_ADMIN_SECRET_KEY:-$(openssl rand -hex 32)}"
 JWT_SECRET_KEY="${EXISTING_JWT_SECRET_KEY:-$(openssl rand -hex 32)}"
-ENCRYPTION_KEY="${EXISTING_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)}"
+ENCRYPTION_KEY="${EXISTING_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || python3 -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())" 2>/dev/null || openssl rand -base64 32 | tr '+/' '-_')}"
 
 # Create .env file
 print_status "Creating environment configuration..."

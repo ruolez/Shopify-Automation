@@ -68,6 +68,23 @@ async def get_enhanced_dashboard_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    try:
+        return _build_enhanced_stats(current_user, db)
+    except Exception as e:
+        logger.error(f"Error building enhanced dashboard stats: {e}", exc_info=True)
+        # Return safe defaults so the dashboard still renders
+        return {
+            "processing": {"orders_today": 0, "orders_last_7_days": [0]*7, "success_rate": 100, "total_processed": 0, "last_sync": None, "next_sync": None, "is_syncing": False, "sync_enabled": False},
+            "rules": {"total": 0, "active": 0, "triggered_today": {}},
+            "stores": {"total": 0, "active": 0, "activity": {}},
+            "fraud": {"analyses_today": 0, "high_risk_count": 0, "active_rules": 0},
+            "system": {"celery_status": "degraded", "failed_tasks": 0},
+            "recent_activity": [],
+            "recent_errors": [],
+        }
+
+
+def _build_enhanced_stats(current_user: User, db: Session):
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     seven_days_ago = now - timedelta(days=7)
@@ -130,26 +147,23 @@ async def get_enhanced_dashboard_stats(
         next_sync = last_sync_time + timedelta(minutes=sync_frequency)
 
     # Rules triggered today
-    rules_triggered = (
-        db.query(OrderLog.details, func.count(func.distinct(OrderLog.order_id)).label("count"))
-        .filter(
-            OrderLog.user_id == current_user.id,
-            OrderLog.created_at >= today_start,
-            OrderLog.action == "rule_applied",
-        )
-        .group_by(OrderLog.details)
-        .all()
-    )
     rules_triggered_dict = {}
-    for detail, count in rules_triggered:
-        if detail:
-            try:
-                import json
-                details = json.loads(detail) if isinstance(detail, str) else detail
-                rule_name = details.get("rule_name", "Unknown") if isinstance(details, dict) else "Unknown"
-                rules_triggered_dict[rule_name] = count
-            except Exception:
-                pass
+    try:
+        rule_logs = (
+            db.query(OrderLog)
+            .filter(
+                OrderLog.user_id == current_user.id,
+                OrderLog.created_at >= today_start,
+                OrderLog.action.like("applied_rule_%"),
+            )
+            .all()
+        )
+        for log in rule_logs:
+            if log.details and isinstance(log.details, dict):
+                rule_name = log.details.get("rule_name", "Unknown")
+                rules_triggered_dict[rule_name] = rules_triggered_dict.get(rule_name, 0) + 1
+    except Exception as e:
+        logger.debug(f"Rules triggered query failed: {e}")
 
     # Store activity
     store_activity = (

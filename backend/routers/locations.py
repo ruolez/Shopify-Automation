@@ -67,8 +67,8 @@ async def get_location_aliases(
     for alias in aliases:
         alias_dict = {
             "id": alias.id,
-            "user_id": alias.user_id,
             "alias_name": alias.alias_name,
+            "description": alias.description,
             "is_active": alias.is_active,
             "created_at": alias.created_at,
             "updated_at": alias.updated_at,
