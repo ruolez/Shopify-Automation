@@ -614,21 +614,35 @@ if [ "$CLEAN_INSTALL" = true ] || [ -f docker-compose.yml ]; then
         cleanup_previous_installation
     else
         print_warning "Existing installation detected!"
-        echo "Do you want to:"
-        echo "1) Keep existing database and update application"
-        echo "2) Clean installation (remove all data)"
-        echo "3) Cancel"
-        read -p "Choose an option (1-3): " choice
-        
+        echo
+        echo -e "${BLUE}What would you like to do?${NC}"
+        echo
+        echo "  1) Update from GitHub   — Pull latest code, backup DB, rebuild (recommended)"
+        echo "  2) Reinstall (keep DB)  — Full reinstall but preserve your database"
+        echo "  3) Clean install        — Remove ALL data and start fresh"
+        echo "  4) Cancel"
+        echo
+        read -p "Choose an option (1-4): " choice
+
         case $choice in
             1)
+                update_from_github
+                ;;
+            2)
                 KEEP_DATABASE=true
                 cleanup_previous_installation
                 ;;
-            2)
+            3)
+                echo
+                echo -e "${RED}WARNING: This will delete ALL data (users, stores, rules, fraud analyses).${NC}"
+                read -p "Are you sure? Type 'yes' to confirm: " confirm
+                if [ "$confirm" != "yes" ]; then
+                    print_status "Cancelled."
+                    exit 0
+                fi
                 cleanup_previous_installation
                 ;;
-            3)
+            4)
                 print_status "Installation cancelled."
                 exit 0
                 ;;
