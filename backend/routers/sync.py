@@ -41,7 +41,7 @@ async def sync_store(
         )
 
     # Trigger async processing
-    task = process_store_orders.delay(store.id)
+    task = process_store_orders.delay(current_user.id, store.id)
     return {"message": "Sync started", "task_id": task.id}
 
 

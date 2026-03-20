@@ -2,7 +2,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from database import get_db
 from models import User, ProcessingRule
@@ -193,29 +193,33 @@ async def delete_rule(
 
 @router.put("/bulk/activate")
 async def bulk_activate_rules(
-    rule_ids: List[int],
+    rule_ids: Optional[List[int]] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    updated = db.query(ProcessingRule).filter(
-        ProcessingRule.id.in_(rule_ids),
+    query = db.query(ProcessingRule).filter(
         ProcessingRule.user_id == current_user.id
-    ).update({"is_active": True}, synchronize_session=False)
+    )
+    if rule_ids:
+        query = query.filter(ProcessingRule.id.in_(rule_ids))
 
+    updated = query.update({"is_active": True}, synchronize_session=False)
     db.commit()
     return {"message": f"Activated {updated} rules"}
 
 
 @router.put("/bulk/deactivate")
 async def bulk_deactivate_rules(
-    rule_ids: List[int],
+    rule_ids: Optional[List[int]] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    updated = db.query(ProcessingRule).filter(
-        ProcessingRule.id.in_(rule_ids),
+    query = db.query(ProcessingRule).filter(
         ProcessingRule.user_id == current_user.id
-    ).update({"is_active": False}, synchronize_session=False)
+    )
+    if rule_ids:
+        query = query.filter(ProcessingRule.id.in_(rule_ids))
 
+    updated = query.update({"is_active": False}, synchronize_session=False)
     db.commit()
     return {"message": f"Deactivated {updated} rules"}
