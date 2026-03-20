@@ -63,16 +63,11 @@ services:
     container_name: shopify_api_prod
     ports:
       - "8000:8000"
+    env_file: .env
     environment:
       - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
-      # PostgreSQL connection pool settings (production)
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
-      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
-      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
-      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
       - ./logs:/app/logs
@@ -90,16 +85,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: shopify_worker_prod
+    env_file: .env
     environment:
       - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
-      # PostgreSQL connection pool settings (production)
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
-      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
-      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
-      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
       - ./logs:/app/logs
@@ -119,16 +109,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: shopify_scheduler_prod
+    env_file: .env
     environment:
       - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
-      # PostgreSQL connection pool settings (production)
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
-      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
-      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
-      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
       - ./logs:/app/logs
