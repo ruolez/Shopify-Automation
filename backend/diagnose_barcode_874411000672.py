@@ -6,7 +6,7 @@ Using the exact same logic as the inventory verification
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import create_engine
@@ -136,7 +136,7 @@ async def diagnose_barcode():
         print(f"Total committed quantity: {total_committed}")
         
         # Now run the verification query (with date filter)
-        cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_back)
         print(f"\n2. Running verification query (last {days_back} days, since {cutoff_date.isoformat()})")
         
         # Filter orders by date and excluded tag

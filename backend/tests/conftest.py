@@ -1,5 +1,13 @@
 import pytest
 import asyncio
+import os
+
+# Set test secret keys before importing auth modules
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-not-for-production")
+os.environ.setdefault("ADMIN_SECRET_KEY", "test-admin-secret-key-for-testing-only-not-for-production")
+# Set test encryption key (valid Fernet key for testing only - DO NOT USE IN PRODUCTION)
+os.environ.setdefault("ENCRYPTION_KEY", "dGVzdGtleWZvcnRlc3RpbmdwdXJwb3NlczEyMzQ1Ng==")
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,10 +19,9 @@ from models import User
 from auth import create_access_token, get_password_hash
 
 # Test database
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+SQLALCHEMY_DATABASE_URL = "postgresql://test_user:test_pass@localhost:5432/test_db"
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

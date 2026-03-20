@@ -6,7 +6,7 @@ Using the exact same logic as the inventory verification
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import create_engine
@@ -162,7 +162,7 @@ async def diagnose_barcode_scc():
         # Now run the verification query using the EXACT same logic as inventory verification
         print(f"\n2. Running verification query (last {days_back} days)...")
         
-        cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
         
         # Build query filter - EXACT same as in shopify_client.py
         query_parts = [

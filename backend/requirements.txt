@@ -13,6 +13,7 @@ httpx==0.25.2
 cryptography==43.0.3
 python-dotenv==1.0.0
 slowapi==0.1.9
+regex==2024.11.6
 # PostgreSQL support
 psycopg2-binary==2.9.9
 # Optional: async PostgreSQL support

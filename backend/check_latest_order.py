@@ -6,7 +6,7 @@ Check the latest order from Shopify and compare with fraud analyses
 import sys
 import os
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -45,7 +45,7 @@ async def check_latest_orders():
         print("\nFetching latest orders from Shopify...")
         orders_data = await client.get_orders(
             limit=10,
-            created_at_min=(datetime.utcnow() - timedelta(days=1)).isoformat()
+            created_at_min=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         )
         
         if orders_data and "edges" in orders_data:

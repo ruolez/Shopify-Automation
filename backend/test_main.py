@@ -9,8 +9,8 @@ from models import User
 from auth import get_password_hash
 
 # Test database
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SQLALCHEMY_DATABASE_URL = "postgresql://test_user:test_pass@localhost:5432/test_db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def override_get_db():
@@ -67,7 +67,9 @@ def test_register_user(client):
     response = client.post("/auth/register", json=user_data)
     assert response.status_code == 200
     assert "access_token" in response.json()
+    assert "refresh_token" in response.json()
     assert response.json()["token_type"] == "bearer"
+    assert "expires_in" in response.json()
 
 def test_register_duplicate_email(client, test_user):
     """Test registration with duplicate email"""
@@ -89,6 +91,8 @@ def test_login_success(client, test_user):
     response = client.post("/auth/login", json=login_data)
     assert response.status_code == 200
     assert "access_token" in response.json()
+    assert "refresh_token" in response.json()
+    assert "expires_in" in response.json()
 
 def test_login_invalid_credentials(client):
     """Test login with invalid credentials"""
@@ -121,6 +125,31 @@ def test_unauthorized_access(client):
     """Test accessing protected endpoint without token"""
     response = client.get("/auth/me")
     assert response.status_code == 403  # No auth header
+
+
+def test_refresh_token(client, test_user):
+    """Test refreshing access token"""
+    # Login first to get tokens
+    login_data = {
+        "email": test_user.email,
+        "password": "testpassword123"
+    }
+    login_response = client.post("/auth/login", json=login_data)
+    refresh_token = login_response.json()["refresh_token"]
+
+    # Use refresh token to get new tokens
+    response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+    assert "refresh_token" in response.json()
+    assert "expires_in" in response.json()
+
+
+def test_refresh_token_invalid(client):
+    """Test refreshing with invalid token"""
+    response = client.post("/auth/refresh", json={"refresh_token": "invalid_token"})
+    assert response.status_code == 401
+
 
 def test_get_stores_empty(client, test_user):
     """Test getting stores for user with no stores"""

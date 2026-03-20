@@ -5,7 +5,7 @@ Check fraud detection status for stores and recent orders
 
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -77,7 +77,7 @@ try:
     print(f"\n{'='*60}")
     
     # Check for any recent fraud analyses across all stores
-    recent_window = datetime.utcnow() - timedelta(minutes=10)
+    recent_window = datetime.now(timezone.utc) - timedelta(minutes=10)
     recent_fraud_count = db.query(FraudAnalysis).filter(
         FraudAnalysis.analysis_timestamp >= recent_window
     ).count()

@@ -18,11 +18,17 @@ from sqlalchemy.orm import sessionmaker
 
 async def debug_fulfillment():
     """Debug fulfillment location issues"""
-    
+
     print("=== SHOPIFY FULFILLMENT DEBUG ===\n")
-    
-    # Connect to database (use the same path as the app)
-    engine = create_engine('sqlite:///./app.db')
+
+    # Connect to database using environment variable (required)
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL environment variable is not set")
+        print("Please set DATABASE_URL in your .env file or environment")
+        sys.exit(1)
+
+    engine = create_engine(database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
     

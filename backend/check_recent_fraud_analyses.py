@@ -7,12 +7,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database import SessionLocal
 from models import FraudAnalysis
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 db = SessionLocal()
 try:
     # Get recent analyses from the last 30 minutes
-    recent_time = datetime.utcnow() - timedelta(minutes=30)
+    recent_time = datetime.now(timezone.utc) - timedelta(minutes=30)
     analyses = db.query(FraudAnalysis).filter(
         FraudAnalysis.analysis_timestamp >= recent_time
     ).order_by(FraudAnalysis.analysis_timestamp.desc()).all()
