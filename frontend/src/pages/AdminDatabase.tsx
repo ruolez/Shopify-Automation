@@ -70,8 +70,8 @@ const AdminDatabase: React.FC = () => {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (!file.name.endsWith(".db")) {
-        setError("Please select a valid database file (.db)");
+      if (!file.name.endsWith(".sql") && !file.name.endsWith(".dump")) {
+        setError("Please select a valid database backup file (.sql or .dump)");
         return;
       }
       setSelectedFile(file);
@@ -126,12 +126,12 @@ const AdminDatabase: React.FC = () => {
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith(".db")) {
+    if (file && (file.name.endsWith(".sql") || file.name.endsWith(".dump"))) {
       setSelectedFile(file);
       setError("");
       setShowConfirmRestore(true);
     } else {
-      setError("Please drop a valid database file (.db)");
+      setError("Please drop a valid database backup file (.sql or .dump)");
     }
   };
 
@@ -300,7 +300,7 @@ const AdminDatabase: React.FC = () => {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".db"
+                      accept=".sql,.dump"
                       onChange={handleFileSelect}
                       className="hidden"
                     />
