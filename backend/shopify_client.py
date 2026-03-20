@@ -2,9 +2,10 @@ import httpx
 import json
 import asyncio
 from typing import Dict, List, Optional, Any
-import logging
 
-logger = logging.getLogger(__name__)
+from logging_config import get_logger, debug_log, DEBUG_LOGGING
+
+logger = get_logger(__name__)
 
 class ShopifyClient:
     def __init__(self, shop_domain: str, access_token: str):
@@ -3175,15 +3176,15 @@ class ShopifyClient:
         Returns:
             Dict with total quantity found in unfulfilled orders
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         import time
-        
+
         try:
             start_time = time.time()
             max_execution_time = 30  # Maximum 30 seconds
-            
+
             # Calculate date range
-            cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
             
             # Build query filter
             query_parts = [

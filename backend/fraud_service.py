@@ -2,12 +2,10 @@
 Fraud analysis service for Shopify orders.
 Analyzes orders for potential fraud indicators and stores results for ML training.
 """
-import logging
 import asyncio
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-import re
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func
@@ -16,8 +14,9 @@ from models import FraudAnalysis, ShopifyStore, User
 from shopify_client import ShopifyClient
 from enhanced_shopify_client import EnhancedShopifyClient
 from database import get_db
+from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def format_ordinal_date(dt: datetime) -> str:
@@ -192,8 +191,7 @@ class FraudAnalysisService:
             
             fraud_analysis = FraudAnalysis(**fraud_analysis_data)
             
-            # CRITICAL DEBUG: Log the risk level being saved
-            logger.info(f"🔍 FRAUD SERVICE DEBUG - Order {order_name}: Saving fraud analysis with risk level: {fraud_analysis.shopify_fraud_risk_level}")
+            debug_log(logger, f"FRAUD SERVICE DEBUG - Order {order_name}: Saving fraud analysis with risk level: {fraud_analysis.shopify_fraud_risk_level}")
             
             try:
                 self.db.add(fraud_analysis)
@@ -213,8 +211,7 @@ class FraudAnalysisService:
                     # Re-raise if it's a different integrity error
                     raise
             
-            # CRITICAL DEBUG: Verify the saved risk level
-            logger.info(f"🔍 FRAUD SERVICE DEBUG - Order {order_name}: Saved fraud analysis {fraud_analysis.id} with risk level: {fraud_analysis.shopify_fraud_risk_level}")
+            debug_log(logger, f"FRAUD SERVICE DEBUG - Order {order_name}: Saved fraud analysis {fraud_analysis.id} with risk level: {fraud_analysis.shopify_fraud_risk_level}")
             
             logger.info(f"Fraud analysis completed for order {order_name}")
             return fraud_analysis
@@ -830,52 +827,51 @@ class FraudAnalysisService:
             Risk level (LOW, MEDIUM, HIGH) as determined by Shopify, or None
         """
         try:
-            # ENHANCED DEBUG LOGGING to identify data format issues
             order_name = order_data.get('name', 'unknown')
-            logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Starting risk level extraction")
-            logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Order data keys: {list(order_data.keys())[:10]}...")
-            
+            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Starting risk level extraction")
+            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Order data keys: {list(order_data.keys())[:10]}...")
+
             # Check Shopify's risk field (OrderRiskSummary structure)
             risk_data = order_data.get('risk')
-            logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Risk data type: {type(risk_data)}, value: {risk_data}")
-            
+            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Risk data type: {type(risk_data)}, value: {risk_data}")
+
             if risk_data and isinstance(risk_data, dict):
                 # Extract assessments from the OrderRiskSummary
                 assessments = risk_data.get('assessments', [])
-                logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Found {len(assessments)} assessments")
-                
+                debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Found {len(assessments)} assessments")
+
                 if assessments and len(assessments) > 0:
                     # Get the first assessment (typically the main fraud assessment)
                     assessment = assessments[0]
-                    logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Assessment data: {assessment}")
+                    debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Assessment data: {assessment}")
                     risk_level = assessment.get('riskLevel')
-                    logger.info(f"🔍 FRAUD RISK DEBUG - Order {order_name}: Raw risk level: {risk_level}")
-                    
+                    debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Raw risk level: {risk_level}")
+
                     if risk_level:
                         # Convert to uppercase for consistency
                         risk_level = risk_level.upper()
-                        
+
                         # Validate it's one of the expected values
                         if risk_level in ['LOW', 'MEDIUM', 'HIGH']:
-                            logger.info(f"✅ FRAUD RISK DEBUG - Order {order_name}: Valid Shopify fraud risk assessment: {risk_level}")
+                            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Valid Shopify fraud risk assessment: {risk_level}")
                             facts = assessment.get('facts', [])
-                            logger.info(f"✅ FRAUD RISK DEBUG - Order {order_name}: Risk facts count: {len(facts)}")
+                            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Risk facts count: {len(facts)}")
                             return risk_level
                         else:
-                            logger.warning(f"⚠️ FRAUD RISK DEBUG - Order {order_name}: Unexpected Shopify risk level value: {risk_level}")
+                            logger.warning(f"FRAUD RISK DEBUG - Order {order_name}: Unexpected Shopify risk level value: {risk_level}")
                             return risk_level  # Return it anyway in case Shopify added new values
                     else:
-                        logger.warning(f"❌ FRAUD RISK DEBUG - Order {order_name}: Risk level is null in assessment")
+                        debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Risk level is null in assessment")
                 else:
-                    logger.warning(f"❌ FRAUD RISK DEBUG - Order {order_name}: No risk assessments found in order")
+                    debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: No risk assessments found in order")
             else:
-                logger.warning(f"❌ FRAUD RISK DEBUG - Order {order_name}: No risk data found in order (risk field is None or empty)")
-            
-            logger.warning(f"❌ FRAUD RISK DEBUG - Order {order_name}: Returning None - no Shopify fraud risk level found")
+                debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: No risk data found in order (risk field is None or empty)")
+
+            debug_log(logger, f"FRAUD RISK DEBUG - Order {order_name}: Returning None - no Shopify fraud risk level found")
             return None
-            
+
         except Exception as e:
-            logger.error(f"💥 FRAUD RISK DEBUG - Order {order_name}: Error extracting fraud risk level: {str(e)}")
+            logger.error(f"FRAUD RISK DEBUG - Order {order_name}: Error extracting fraud risk level: {str(e)}")
             return None
     
     def _extract_customer_notes(self, order_data: Dict[str, Any]) -> Optional[str]:

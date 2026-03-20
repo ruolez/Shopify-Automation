@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from database import DATABASE_URL
+from db_utils import check_table_exists, check_column_exists, get_db_type
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -27,43 +28,53 @@ def run_migration():
             try:
                 # Step 1: Create fraud_detection_rules table
                 logger.info("Checking if fraud_detection_rules table exists...")
-                result = conn.execute(text("""
-                    SELECT COUNT(*) 
-                    FROM sqlite_master 
-                    WHERE type='table' AND name='fraud_detection_rules'
-                """))
                 
-                if result.scalar() == 0:
+                if not check_table_exists(conn, 'fraud_detection_rules'):
                     logger.info("Creating fraud_detection_rules table...")
-                    conn.execute(text("""
-                        CREATE TABLE fraud_detection_rules (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            user_id INTEGER NOT NULL,
-                            name VARCHAR NOT NULL,
-                            description TEXT,
-                            conditions JSON NOT NULL,
-                            actions JSON NOT NULL,
-                            priority INTEGER DEFAULT 0,
-                            delay_ms INTEGER DEFAULT 10,
-                            is_active BOOLEAN DEFAULT 1,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            updated_at DATETIME,
-                            FOREIGN KEY(user_id) REFERENCES users (id)
-                        )
-                    """))
+                    db_type = get_db_type()
+                    
+                    if db_type == "postgresql":
+                        conn.execute(text("""
+                            CREATE TABLE fraud_detection_rules (
+                                id SERIAL PRIMARY KEY,
+                                user_id INTEGER NOT NULL,
+                                name VARCHAR NOT NULL,
+                                description TEXT,
+                                conditions JSON NOT NULL,
+                                actions JSON NOT NULL,
+                                priority INTEGER DEFAULT 0,
+                                delay_ms INTEGER DEFAULT 10,
+                                is_active BOOLEAN DEFAULT true,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                updated_at TIMESTAMP,
+                                FOREIGN KEY(user_id) REFERENCES users (id)
+                            )
+                        """))
+                    else:
+                        conn.execute(text("""
+                            CREATE TABLE fraud_detection_rules (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                user_id INTEGER NOT NULL,
+                                name VARCHAR NOT NULL,
+                                description TEXT,
+                                conditions JSON NOT NULL,
+                                actions JSON NOT NULL,
+                                priority INTEGER DEFAULT 0,
+                                delay_ms INTEGER DEFAULT 10,
+                                is_active BOOLEAN DEFAULT 1,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME,
+                                FOREIGN KEY(user_id) REFERENCES users (id)
+                            )
+                        """))
                     logger.info("✅ Created fraud_detection_rules table")
                 else:
                     logger.info("fraud_detection_rules table already exists")
                 
                 # Step 2: Add rule_triggered_ids column to fraud_analyses
                 logger.info("Checking if rule_triggered_ids column exists in fraud_analyses table...")
-                result = conn.execute(text("""
-                    SELECT COUNT(*) 
-                    FROM pragma_table_info('fraud_analyses') 
-                    WHERE name='rule_triggered_ids'
-                """))
                 
-                if result.scalar() == 0:
+                if not check_column_exists(conn, 'fraud_analyses', 'rule_triggered_ids'):
                     logger.info("Adding rule_triggered_ids column to fraud_analyses table...")
                     conn.execute(text("""
                         ALTER TABLE fraud_analyses 
@@ -75,13 +86,8 @@ def run_migration():
                 
                 # Step 3: Add rule_processing_results column to fraud_analyses
                 logger.info("Checking if rule_processing_results column exists in fraud_analyses table...")
-                result = conn.execute(text("""
-                    SELECT COUNT(*) 
-                    FROM pragma_table_info('fraud_analyses') 
-                    WHERE name='rule_processing_results'
-                """))
                 
-                if result.scalar() == 0:
+                if not check_column_exists(conn, 'fraud_analyses', 'rule_processing_results'):
                     logger.info("Adding rule_processing_results column to fraud_analyses table...")
                     conn.execute(text("""
                         ALTER TABLE fraud_analyses 

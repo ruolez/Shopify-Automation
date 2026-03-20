@@ -20,7 +20,13 @@ class UserLogin(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
+    expires_in: int
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 # Store schemas
 class ShopifyStoreCreate(BaseModel):
@@ -158,18 +164,7 @@ class DashboardStats(BaseModel):
     rules: Dict[str, int]
     recent_activity: List[OrderLogResponse]
 
-# Task schemas
-class TaskStatusResponse(BaseModel):
-    task_id: str
-    task_name: str
-    status: str
-    result: Optional[Dict[str, Any]]
-    error_message: Optional[str]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    
-    class Config:
-        from_attributes = True
+# Task schemas - TaskStatusResponse defined below with FailedTasksResponse
 
 # Settings schemas
 class SettingsBase(BaseModel):

@@ -531,7 +531,7 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6 overflow-visible">
             <div>
               <label
                 htmlFor="date-filter"
@@ -539,7 +539,7 @@ const OrderLogs: React.FC = () => {
               >
                 Date Range
               </label>
-              <div className="space-y-1">
+              <div className="space-y-1 overflow-visible">
                 <select
                   id="date-filter"
                   className="w-full rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm"
@@ -562,28 +562,30 @@ const OrderLogs: React.FC = () => {
                 </select>
 
                 {dateFilter === "custom" && (
-                  <div className="flex space-x-2">
-                    <div className="flex-1">
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <div className="relative">
                       <input
+                        id="date-from"
                         type="date"
                         value={customDateFrom}
                         onChange={(e) => {
                           setCustomDateFrom(e.target.value);
                           setPage(1);
                         }}
-                        className="input text-xs"
+                        className="input text-xs w-full"
                         placeholder="From"
                       />
                     </div>
-                    <div className="flex-1">
+                    <div className="relative">
                       <input
+                        id="date-to"
                         type="date"
                         value={customDateTo}
                         onChange={(e) => {
                           setCustomDateTo(e.target.value);
                           setPage(1);
                         }}
-                        className="input text-xs"
+                        className="input text-xs w-full"
                         placeholder="To"
                       />
                     </div>

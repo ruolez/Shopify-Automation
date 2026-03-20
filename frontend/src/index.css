@@ -56,7 +56,7 @@
   }
   
   /* Ensure all form elements have visible borders and dark mode support */
-  select, input, textarea {
+  select, input:not([type="date"]), textarea {
     border-color: #d1d5db !important; /* gray-300 - light but still visible */
     border-width: 1px !important;
     border-style: solid !important;
@@ -67,13 +67,32 @@
     transition: all 0.2s ease-in-out !important;
   }
   
+  /* Specific styles for date inputs to avoid conflicts */
+  input[type="date"] {
+    border-color: #d1d5db;
+    border-width: 1px;
+    border-style: solid;
+    padding: 6px 16px;
+    min-height: 34px;
+    background-color: white;
+    color: #111827;
+    transition: all 0.2s ease-in-out;
+  }
+  
   /* Dark mode overrides for form elements */
   .dark select, 
-  .dark input, 
+  .dark input:not([type="date"]), 
   .dark textarea {
     border-color: #52525b !important; /* dark-300 */
     background-color: #27272a !important; /* dark-100 */
     color: #f4f4f5 !important; /* dark-800 */
+  }
+  
+  /* Dark mode specific styles for date inputs */
+  .dark input[type="date"] {
+    border-color: #52525b;
+    background-color: #27272a;
+    color: #f4f4f5;
   }
   
   /* Remove the old focus styles that were causing issues */

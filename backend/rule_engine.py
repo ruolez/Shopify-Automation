@@ -1,12 +1,12 @@
 from typing import Dict, List, Any, Union
-import re
-import logging
 from datetime import datetime
 from decimal import Decimal
 from models import ProcessingRule, FraudAnalysis
 from sqlalchemy.orm import Session
+from safe_regex import safe_regex_match
+from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class RuleEngine:
     """Engine for evaluating and applying order processing rules"""
@@ -110,18 +110,17 @@ class RuleEngine:
             # Get the actual value from the order
             actual_value = self._get_order_field_value(field, order, excluded_skus, store_context)
             
-            # CRITICAL DEBUG: Log condition evaluation for duplicate detection
             if field == "duplicate_within_7days":
-                logger.info(f"🎯 CONDITION EVALUATION DEBUG - duplicate_within_7days:")
-                logger.info(f"  - Field: {field}")
-                logger.info(f"  - Operator: {operator}")
-                logger.info(f"  - Expected value: {expected_value} (type: {type(expected_value)})")
-                logger.info(f"  - Actual value: {actual_value} (type: {type(actual_value)})")
-                
+                debug_log(logger, f"CONDITION EVALUATION DEBUG - duplicate_within_7days:")
+                debug_log(logger, f"  - Field: {field}")
+                debug_log(logger, f"  - Operator: {operator}")
+                debug_log(logger, f"  - Expected value: {expected_value} (type: {type(expected_value)})")
+                debug_log(logger, f"  - Actual value: {actual_value} (type: {type(actual_value)})")
+
                 # Fix boolean comparison for duplicate field
                 if isinstance(expected_value, str) and expected_value.lower() in ('true', 'false'):
                     expected_value = expected_value.lower() == 'true'
-                    logger.info(f"  - Converted expected to boolean: {expected_value}")
+                    debug_log(logger, f"  - Converted expected to boolean: {expected_value}")
             
             # Convert expected value to uppercase for province/state/country fields to make comparison case-insensitive
             if field in ["shipping_province", "shipping_country", "billing_province", "billing_country", "shipping_state"]:
@@ -171,25 +170,24 @@ class RuleEngine:
             if field in fraud_fields:
                 # This is fraud rule evaluation - order data is actually fraud analysis data
                 value = order.get(field)
-                
-                # CRITICAL DEBUG: Log duplicate detection field access
+
                 if field == "duplicate_within_7days":
-                    logger.info(f"🔍 RULE ENGINE DEBUG - Accessing duplicate_within_7days:")
-                    logger.info(f"  - Raw value from order data: {value}")
-                    logger.info(f"  - Type: {type(value)}")
-                    logger.info(f"  - Order name: {order.get('order_name', 'Unknown')}")
-                
+                    debug_log(logger, f"RULE ENGINE DEBUG - Accessing duplicate_within_7days:")
+                    debug_log(logger, f"  - Raw value from order data: {value}")
+                    debug_log(logger, f"  - Type: {type(value)}")
+                    debug_log(logger, f"  - Order name: {order.get('order_name', 'Unknown')}")
+
                 if field == "shipping_state":
-                    logger.info(f"🔍 RULE ENGINE DEBUG - Accessing shipping_state:")
-                    logger.info(f"  - Raw value from order data: {value}")
-                    logger.info(f"  - Type: {type(value)}")
-                    logger.info(f"  - Order name: {order.get('order_name', 'Unknown')}")
-                
+                    debug_log(logger, f"RULE ENGINE DEBUG - Accessing shipping_state:")
+                    debug_log(logger, f"  - Raw value from order data: {value}")
+                    debug_log(logger, f"  - Type: {type(value)}")
+                    debug_log(logger, f"  - Order name: {order.get('order_name', 'Unknown')}")
+
                 if field == "fraud_order_total_multiple":
-                    logger.info(f"Retrieved fraud_order_total_multiple: {value}")
-                
+                    debug_log(logger, f"Retrieved fraud_order_total_multiple: {value}")
+
                 if field == "days_since_last_delivery":
-                    logger.info(f"Retrieved days_since_last_delivery: {value}")
+                    debug_log(logger, f"Retrieved days_since_last_delivery: {value}")
                 
                 return value
             
@@ -216,17 +214,17 @@ class RuleEngine:
                 # Shopify returns weight in grams via currentTotalWeight field
                 weight_grams = order.get("currentTotalWeight", 0)
                 if weight_grams is None or weight_grams == "":
-                    logger.info(f"Order {order.get('name', 'unknown')}: No weight data available")
+                    debug_log(logger, f"Order {order.get('name', 'unknown')}: No weight data available")
                     return 0
                 weight_grams = float(weight_grams)
-                
+
                 # Calculate weight from individual line items, excluding specified SKUs
                 line_items = order.get("lineItems", {}).get("edges", [])
                 total_calculated_weight = 0
                 excluded_skus = excluded_skus or []
                 excluded_count = 0
-                
-                logger.info(f"Order {order.get('name', 'unknown')}: Calculating weight (excluding {len(excluded_skus)} SKU patterns)")
+
+                debug_log(logger, f"Order {order.get('name', 'unknown')}: Calculating weight (excluding {len(excluded_skus)} SKU patterns)")
                 
                 for item_edge in line_items:
                     item = item_edge["node"]
@@ -240,7 +238,7 @@ class RuleEngine:
                             if excluded_pattern.lower() in sku.lower():
                                 skip_item = True
                                 excluded_count += 1
-                                logger.info(f"  - EXCLUDED: {item.get('title', 'Unknown')} (SKU: {sku}) matches pattern '{excluded_pattern}'")
+                                debug_log(logger, f"  - EXCLUDED: {item.get('title', 'Unknown')} (SKU: {sku}) matches pattern '{excluded_pattern}'")
                                 break
                     
                     if skip_item:
@@ -266,18 +264,18 @@ class RuleEngine:
                     
                     total_item_weight = item_weight_grams * quantity
                     total_calculated_weight += total_item_weight
-                    
-                    logger.info(f"  - {item.get('title', 'Unknown')} (SKU: {sku}): {quantity} x {item_weight_value} {item_weight_unit} = {total_item_weight}g")
-                
+
+                    debug_log(logger, f"  - {item.get('title', 'Unknown')} (SKU: {sku}): {quantity} x {item_weight_value} {item_weight_unit} = {total_item_weight}g")
+
                 if excluded_count > 0:
-                    logger.info(f"Order {order.get('name', 'unknown')}: Excluded {excluded_count} items from weight calculation")
-                
-                logger.info(f"Order {order.get('name', 'unknown')}: Shopify currentTotalWeight = {weight_grams}g")
-                logger.info(f"Order {order.get('name', 'unknown')}: Calculated from included line items = {total_calculated_weight}g")
+                    debug_log(logger, f"Order {order.get('name', 'unknown')}: Excluded {excluded_count} items from weight calculation")
+
+                debug_log(logger, f"Order {order.get('name', 'unknown')}: Shopify currentTotalWeight = {weight_grams}g")
+                debug_log(logger, f"Order {order.get('name', 'unknown')}: Calculated from included line items = {total_calculated_weight}g")
                 
                 # When SKUs are excluded, always use calculated weight instead of Shopify's total
                 if excluded_skus and excluded_count > 0:
-                    logger.info(f"Order {order.get('name', 'unknown')}: Using calculated weight due to SKU exclusions")
+                    debug_log(logger, f"Order {order.get('name', 'unknown')}: Using calculated weight due to SKU exclusions")
                     return total_calculated_weight
                 
                 # Use calculated weight if it's significantly different from Shopify's value
@@ -291,7 +289,7 @@ class RuleEngine:
             elif field == "shipping_province":
                 shipping_addr = order.get("shippingAddress", {})
                 province = shipping_addr.get("province", "").strip()
-                logger.info(f"Order {order.get('name', 'unknown')}: Raw shipping province = '{province}', Uppercase = '{province.upper()}'")
+                debug_log(logger, f"Order {order.get('name', 'unknown')}: Raw shipping province = '{province}', Uppercase = '{province.upper()}'")
                 return province.upper()
             
             elif field == "shipping_country":
@@ -542,12 +540,7 @@ class RuleEngine:
     def _regex_match(self, actual: Any, expected: str) -> bool:
         if actual is None:
             return False
-        try:
-            pattern = re.compile(expected, re.IGNORECASE)
-            return bool(pattern.search(str(actual)))
-        except re.error:
-            logger.error(f"Invalid regex pattern: {expected}")
-            return False
+        return safe_regex_match(expected, str(actual))
     
     def _is_empty(self, actual: Any, expected: Any) -> bool:
         if actual is None:

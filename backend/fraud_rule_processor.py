@@ -2,7 +2,6 @@
 Fraud Rule Processor service for evaluating and applying fraud detection rules.
 Integrates with the existing order processing pipeline to run fraud analysis rules.
 """
-import logging
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
@@ -13,8 +12,9 @@ from sqlalchemy import and_, func
 from models import FraudDetectionRule, FraudAnalysis, OrderLog, User, ShopifyStore
 from rule_engine import RuleEngine
 from fraud_service import FraudAnalysisService
+from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FraudRuleProcessor:
@@ -73,11 +73,11 @@ class FraudRuleProcessor:
                 }
             
             fraud_analysis = fresh_fraud_analysis
-            logger.info(f"🔄 REFRESHED fraud analysis {fraud_analysis.id} with fresh database query")
-            logger.info(f"  - Analysis timestamp: {fraud_analysis.analysis_timestamp}")
-            logger.info(f"  - duplicate_within_7days (DB): {fraud_analysis.duplicate_within_7days}")
-            logger.info(f"  - customer_name (DB): {fraud_analysis.customer_name}")
-            logger.info(f"  - first_time_customer (DB): {fraud_analysis.is_first_time_customer}")
+            debug_log(logger, f"REFRESHED fraud analysis {fraud_analysis.id} with fresh database query")
+            debug_log(logger, f"  - Analysis timestamp: {fraud_analysis.analysis_timestamp}")
+            debug_log(logger, f"  - duplicate_within_7days (DB): {fraud_analysis.duplicate_within_7days}")
+            debug_log(logger, f"  - customer_name (DB): {fraud_analysis.customer_name}")
+            debug_log(logger, f"  - first_time_customer (DB): {fraud_analysis.is_first_time_customer}")
             
             # Get all active fraud rules for the user, ordered by priority
             fraud_rules = self.db.query(FraudDetectionRule).filter(
@@ -99,12 +99,11 @@ class FraudRuleProcessor:
             # Convert fraud analysis to rule evaluation format
             fraud_data = self._convert_fraud_analysis_to_rule_data(fraud_analysis)
             
-            # ENHANCED Debug logging for duplicate detection and data consistency
-            logger.info(f"🔍 FRAUD DATA CONVERSION DEBUG for order {order_name}:")
-            logger.info(f"  - fraud_analysis_id: {fraud_data.get('fraud_analysis_id')}")
-            logger.info(f"  - duplicate_within_7days: {fraud_data.get('duplicate_within_7days')} (type: {type(fraud_data.get('duplicate_within_7days'))})")
-            logger.info(f"  - customer_name: {fraud_data.get('customer_name')}")
-            logger.info(f"  - first_time_customer: {fraud_data.get('first_time_customer')}")
+            debug_log(logger, f"FRAUD DATA CONVERSION DEBUG for order {order_name}:")
+            debug_log(logger, f"  - fraud_analysis_id: {fraud_data.get('fraud_analysis_id')}")
+            debug_log(logger, f"  - duplicate_within_7days: {fraud_data.get('duplicate_within_7days')} (type: {type(fraud_data.get('duplicate_within_7days'))})")
+            debug_log(logger, f"  - customer_name: {fraud_data.get('customer_name')}")
+            debug_log(logger, f"  - first_time_customer: {fraud_data.get('first_time_customer')}")
             
             results = {
                 "rules_processed": 0,
@@ -180,31 +179,30 @@ class FraudRuleProcessor:
         }
         
         try:
-            # ENHANCED LOGGING: Log rule conditions and fraud data values being checked
-            logger.info(f"🎯 EVALUATING FRAUD RULE '{rule.name}' (ID: {rule.id}) for order {order_name}")
-            logger.info(f"  - Rule conditions: {rule.conditions}")
-            
+            debug_log(logger, f"EVALUATING FRAUD RULE '{rule.name}' (ID: {rule.id}) for order {order_name}")
+            debug_log(logger, f"  - Rule conditions: {rule.conditions}")
+
             # Log specific values being checked if duplicate detection is in conditions
             if rule.conditions:
                 conditions_str = str(rule.conditions)
                 if 'duplicate_within_7days' in conditions_str:
-                    logger.info(f"  ⚠️  Rule checks duplicate_within_7days")
-                    logger.info(f"  - Current value in fraud_data: {fraud_data.get('duplicate_within_7days')}")
+                    debug_log(logger, f"  Rule checks duplicate_within_7days")
+                    debug_log(logger, f"  - Current value in fraud_data: {fraud_data.get('duplicate_within_7days')}")
                 if 'customer_name' in conditions_str:
-                    logger.info(f"  ⚠️  Rule checks customer_name")
-                    logger.info(f"  - Current value in fraud_data: {fraud_data.get('customer_name')}")
+                    debug_log(logger, f"  Rule checks customer_name")
+                    debug_log(logger, f"  - Current value in fraud_data: {fraud_data.get('customer_name')}")
                 if 'first_time_customer' in conditions_str:
-                    logger.info(f"  ⚠️  Rule checks first_time_customer")
-                    logger.info(f"  - Current value in fraud_data: {fraud_data.get('first_time_customer')}")
+                    debug_log(logger, f"  Rule checks first_time_customer")
+                    debug_log(logger, f"  - Current value in fraud_data: {fraud_data.get('first_time_customer')}")
                 if 'customer_total_orders' in conditions_str:
-                    logger.info(f"  ⚠️  Rule checks customer_total_orders")
-                    logger.info(f"  - Current value in fraud_data: {fraud_data.get('customer_total_orders')}")
-            
+                    debug_log(logger, f"  Rule checks customer_total_orders")
+                    debug_log(logger, f"  - Current value in fraud_data: {fraud_data.get('customer_total_orders')}")
+
             # Evaluate the fraud rule against fraud analysis data
             matched = self.rule_engine.evaluate_rule(rule, fraud_data)
             result["matched"] = matched
-            
-            logger.info(f"  - Rule evaluation result: {'✅ MATCHED' if matched else '❌ NOT MATCHED'}")
+
+            debug_log(logger, f"  - Rule evaluation result: {'MATCHED' if matched else 'NOT MATCHED'}")
             
             if matched:
                 logger.info(f"Fraud rule '{rule.name}' matched for order {order_name}")
@@ -242,15 +240,14 @@ class FraudRuleProcessor:
             Dictionary formatted for rule engine evaluation
         """
         try:
-            # CRITICAL LOGGING: Log the source fraud analysis data
-            logger.info(f"📊 CONVERTING FRAUD ANALYSIS {fraud_analysis.id} TO RULE DATA:")
-            logger.info(f"  - Order: {fraud_analysis.order_name}")
-            logger.info(f"  - Analysis timestamp: {fraud_analysis.analysis_timestamp}")
-            logger.info(f"  - duplicate_within_7days (SOURCE): {fraud_analysis.duplicate_within_7days}")
-            logger.info(f"  - customer_name (SOURCE): {fraud_analysis.customer_name}")
-            logger.info(f"  - is_first_time_customer (SOURCE): {fraud_analysis.is_first_time_customer}")
-            logger.info(f"  - customer_total_orders (SOURCE): {fraud_analysis.customer_total_orders}")
-            logger.info(f"  - shopify_fraud_risk_level (SOURCE): {fraud_analysis.shopify_fraud_risk_level}")
+            debug_log(logger, f"CONVERTING FRAUD ANALYSIS {fraud_analysis.id} TO RULE DATA:")
+            debug_log(logger, f"  - Order: {fraud_analysis.order_name}")
+            debug_log(logger, f"  - Analysis timestamp: {fraud_analysis.analysis_timestamp}")
+            debug_log(logger, f"  - duplicate_within_7days (SOURCE): {fraud_analysis.duplicate_within_7days}")
+            debug_log(logger, f"  - customer_name (SOURCE): {fraud_analysis.customer_name}")
+            debug_log(logger, f"  - is_first_time_customer (SOURCE): {fraud_analysis.is_first_time_customer}")
+            debug_log(logger, f"  - customer_total_orders (SOURCE): {fraud_analysis.customer_total_orders}")
+            debug_log(logger, f"  - shopify_fraud_risk_level (SOURCE): {fraud_analysis.shopify_fraud_risk_level}")
             
             # Extract delivery analytics if available
             delivery_analytics = fraud_analysis.delivery_analytics or {}
@@ -295,25 +292,27 @@ class FraudRuleProcessor:
                 # Additional context
                 "analysis_timestamp": fraud_analysis.analysis_timestamp,
                 "store_id": fraud_analysis.store_id,
-                "user_id": fraud_analysis.user_id
+                "user_id": fraud_analysis.user_id,
+                
+                # Previous order cancellation status
+                "previous_order_cancelled": getattr(fraud_analysis, 'previous_order_cancelled', None)
             }
             
-            # VERIFY CONVERSION: Log key fields after conversion
-            logger.info(f"  📤 CONVERTED DATA:")
-            logger.info(f"  - duplicate_within_7days (CONVERTED): {fraud_data.get('duplicate_within_7days')}")
-            logger.info(f"  - customer_name (CONVERTED): {fraud_data.get('customer_name')}")
-            logger.info(f"  - first_time_customer (CONVERTED): {fraud_data.get('first_time_customer')}")
-            logger.info(f"  - fraud_risk_level (CONVERTED): {fraud_data.get('fraud_risk_level')}")
-            logger.info(f"  - days_since_last_delivery (CONVERTED): {fraud_data.get('days_since_last_delivery')}")
-            logger.info(f"  - customer_total_orders (CONVERTED): {fraud_data.get('customer_total_orders')}")
-            logger.info(f"  - shipping_state (CONVERTED): {fraud_data.get('shipping_state')}")
-            
-            logger.debug(f"Converted fraud analysis to rule data: {len(fraud_data)} fields available")
-            
-            # CRITICAL DEBUG: Log the exact duplicate value being passed
-            logger.info(f"🎯 FRAUD DATA READY FOR RULE ENGINE:")
-            logger.info(f"  - duplicate_within_7days: {fraud_data.get('duplicate_within_7days')}")
-            logger.info(f"  - Type: {type(fraud_data.get('duplicate_within_7days'))}")
+            debug_log(logger, f"  CONVERTED DATA:")
+            debug_log(logger, f"  - duplicate_within_7days (CONVERTED): {fraud_data.get('duplicate_within_7days')}")
+            debug_log(logger, f"  - customer_name (CONVERTED): {fraud_data.get('customer_name')}")
+            debug_log(logger, f"  - first_time_customer (CONVERTED): {fraud_data.get('first_time_customer')}")
+            debug_log(logger, f"  - fraud_risk_level (CONVERTED): {fraud_data.get('fraud_risk_level')}")
+            debug_log(logger, f"  - days_since_last_delivery (CONVERTED): {fraud_data.get('days_since_last_delivery')}")
+            debug_log(logger, f"  - customer_total_orders (CONVERTED): {fraud_data.get('customer_total_orders')}")
+            debug_log(logger, f"  - shipping_state (CONVERTED): {fraud_data.get('shipping_state')}")
+            debug_log(logger, f"  - previous_order_cancelled (CONVERTED): {fraud_data.get('previous_order_cancelled')}")
+
+            debug_log(logger, f"Converted fraud analysis to rule data: {len(fraud_data)} fields available")
+
+            debug_log(logger, f"FRAUD DATA READY FOR RULE ENGINE:")
+            debug_log(logger, f"  - duplicate_within_7days: {fraud_data.get('duplicate_within_7days')}")
+            debug_log(logger, f"  - Type: {type(fraud_data.get('duplicate_within_7days'))}")
             
             return fraud_data
             
@@ -566,35 +565,32 @@ class FraudRuleProcessor:
                 if result.get("matched", False)
             ]
             
-            # CRITICAL DEBUG: Check if fraud risk level is being changed
             original_risk_level = fraud_analysis.shopify_fraud_risk_level
-            logger.info(f"🔍 FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Original risk level: {original_risk_level}")
-            
+            debug_log(logger, f"FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Original risk level: {original_risk_level}")
+
             # Don't override Shopify's original fraud risk assessment
             # Keep the original Shopify fraud risk level from the analysis
-            
+
             # Update the fraud analysis record
             fraud_analysis.rule_triggered_ids = triggered_rule_ids if triggered_rule_ids else None
             fraud_analysis.rule_processing_results = results
             # DON'T override shopify_fraud_risk_level - keep Shopify's original assessment
-            
-            # CRITICAL DEBUG: Verify risk level hasn't changed
+
             current_risk_level = fraud_analysis.shopify_fraud_risk_level
-            logger.info(f"🔍 FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Current risk level: {current_risk_level}")
-            
+            debug_log(logger, f"FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Current risk level: {current_risk_level}")
+
             if original_risk_level != current_risk_level:
-                logger.error(f"💥 FRAUD RULE PROCESSOR BUG - Analysis {fraud_analysis.id}: Risk level changed from {original_risk_level} to {current_risk_level}!")
-            
+                logger.error(f"FRAUD RULE PROCESSOR BUG - Analysis {fraud_analysis.id}: Risk level changed from {original_risk_level} to {current_risk_level}!")
+
             # Commit the changes
             self.db.commit()
-            
-            # CRITICAL DEBUG: Check risk level after commit
+
             self.db.refresh(fraud_analysis)
             post_commit_risk_level = fraud_analysis.shopify_fraud_risk_level
-            logger.info(f"🔍 FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Post-commit risk level: {post_commit_risk_level}")
-            
+            debug_log(logger, f"FRAUD RULE PROCESSOR DEBUG - Analysis {fraud_analysis.id}: Post-commit risk level: {post_commit_risk_level}")
+
             if original_risk_level != post_commit_risk_level:
-                logger.error(f"💥 FRAUD RULE PROCESSOR BUG - Analysis {fraud_analysis.id}: Risk level changed after commit from {original_risk_level} to {post_commit_risk_level}!")
+                logger.error(f"FRAUD RULE PROCESSOR BUG - Analysis {fraud_analysis.id}: Risk level changed after commit from {original_risk_level} to {post_commit_risk_level}!")
             
             logger.info(f"Updated fraud analysis {fraud_analysis.id} with rule results: "
                        f"{len(triggered_rule_ids)} rules triggered")

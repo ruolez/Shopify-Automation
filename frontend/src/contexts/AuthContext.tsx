@@ -45,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setUser(response.data);
     } catch (error) {
       localStorage.removeItem("token");
+      localStorage.removeItem("refreshToken");
     } finally {
       setLoading(false);
     }
@@ -52,9 +53,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const login = async (email: string, password: string) => {
     const response = await api.post("/auth/login", { email, password });
-    const { access_token } = response.data;
+    const { access_token, refresh_token } = response.data;
 
     localStorage.setItem("token", access_token);
+    localStorage.setItem("refreshToken", refresh_token);
     await fetchUser();
   };
 
@@ -68,14 +70,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       full_name,
       password,
     });
-    const { access_token } = response.data;
+    const { access_token, refresh_token } = response.data;
 
     localStorage.setItem("token", access_token);
+    localStorage.setItem("refreshToken", refresh_token);
     await fetchUser();
   };
 
   const logout = () => {
     localStorage.removeItem("token");
+    localStorage.removeItem("refreshToken");
     setUser(null);
   };
 

@@ -20,8 +20,11 @@ logger = logging.getLogger(__name__)
 
 def run_migration():
     """Create fraud_analyses_archive table"""
-    # Get database URL from environment or use default
-    database_url = os.getenv("DATABASE_URL", "sqlite:///./shopify_automation.db")
+    # Get database URL from environment (required)
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        logger.error("DATABASE_URL environment variable is not set")
+        raise ValueError("DATABASE_URL environment variable is required")
     engine = create_engine(database_url)
     
     try:

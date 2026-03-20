@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BuildingStorefrontIcon,
   CogIcon,
@@ -14,6 +14,7 @@ import {
   ServerIcon,
   SparklesIcon,
   DocumentTextIcon,
+  TrashIcon,
 } from "@heroicons/react/24/outline";
 import {
   LineChart,
@@ -85,7 +86,9 @@ interface EnhancedDashboardStats {
 
 const Dashboard: React.FC = () => {
   const { timezone } = useTimezone();
+  const queryClient = useQueryClient();
   const [showFailedTasksModal, setShowFailedTasksModal] = useState(false);
+  const [showClearErrorsConfirm, setShowClearErrorsConfirm] = useState(false);
   
   // Use both endpoints - enhanced for new features, basic for compatibility
   const { data: enhancedStats, isLoading: isLoadingEnhanced } = useQuery<EnhancedDashboardStats>({
@@ -103,6 +106,25 @@ const Dashboard: React.FC = () => {
     queryFn: async () => {
       const response = await api.get("/dashboard/stats");
       return response.data;
+    },
+  });
+
+  // Mutation for clearing error logs
+  const clearErrorLogsMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.delete("/admin/clear-error-logs");
+      return response.data;
+    },
+    onSuccess: (data) => {
+      // Refetch dashboard data to update the UI
+      queryClient.invalidateQueries({ queryKey: ["dashboard-enhanced-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      setShowClearErrorsConfirm(false);
+      // Show success message (you might want to add a toast notification here)
+      alert(`${data.message}`);
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.detail || "Failed to clear error logs");
     },
   });
 
@@ -256,6 +278,14 @@ const Dashboard: React.FC = () => {
               </span>
             </div>
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowClearErrorsConfirm(true)}
+                className="px-3 py-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md flex items-center gap-1 transition-colors"
+                title="Clear error logs and failed tasks only"
+              >
+                <TrashIcon className="h-3 w-3" />
+                Clear Errors
+              </button>
               <span
                 className={`px-2 py-1 text-xs font-medium rounded-full ${
                   systemHealthColor[stats?.system.celery_status || "healthy"]
@@ -577,9 +607,19 @@ const Dashboard: React.FC = () => {
           {/* Recent Errors - Only show if there are errors */}
           {stats?.recent_errors && stats.recent_errors.length > 0 && (
             <div className="card border-red-200 dark:border-red-900">
-              <h3 className="text-sm font-semibold text-red-900 dark:text-red-400 mb-3">
-                Recent Errors
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-red-900 dark:text-red-400">
+                  Recent Errors
+                </h3>
+                <button
+                  onClick={() => setShowClearErrorsConfirm(true)}
+                  className="text-xs text-red-600 hover:text-red-700 flex items-center gap-1"
+                  title="Clear error logs only"
+                >
+                  <TrashIcon className="h-3 w-3" />
+                  Clear
+                </button>
+              </div>
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {stats.recent_errors.slice(0, 3).map((error) => (
                   <div
@@ -604,6 +644,41 @@ const Dashboard: React.FC = () => {
         isOpen={showFailedTasksModal}
         onClose={() => setShowFailedTasksModal(false)}
       />
+
+      {/* Clear Error Logs Confirmation Modal */}
+      {showClearErrorsConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-dark-100 rounded-lg p-6 max-w-md w-full mx-4"
+          >
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-dark-800 mb-4">
+              Clear Error Logs and Failed Tasks?
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-dark-500 mb-6">
+              This will permanently delete only error logs and failed system tasks from your system. 
+              Successful order processing logs and historical data will be preserved.
+              This action cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowClearErrorsConfirm(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-dark-700 bg-gray-100 dark:bg-dark-200 rounded-md hover:bg-gray-200 dark:hover:bg-dark-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => clearErrorLogsMutation.mutate()}
+                disabled={clearErrorLogsMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {clearErrorLogsMutation.isPending ? "Clearing..." : "Clear Errors"}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

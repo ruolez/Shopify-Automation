@@ -196,7 +196,13 @@ export const adminApi = {
 
     // Extract filename from content-disposition header or use default
     const contentDisposition = response.headers["content-disposition"];
-    let filename = "shopify_automation_backup.db";
+    // Default filename based on content type
+    const contentType = response.headers["content-type"];
+    let defaultFilename = contentType?.includes("sql") 
+      ? "shopify_automation_backup.sql" 
+      : "shopify_automation_backup.db";
+    
+    let filename = defaultFilename;
     if (contentDisposition) {
       const filenameMatch = contentDisposition.match(
         /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/,

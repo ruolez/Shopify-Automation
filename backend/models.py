@@ -1,7 +1,9 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.sql import func
 from database import Base
+from encryption import encrypt_token, decrypt_token
 
 class User(Base):
     __tablename__ = "users"
@@ -27,17 +29,27 @@ class User(Base):
 
 class ShopifyStore(Base):
     __tablename__ = "shopify_stores"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     shop_domain = Column(String, nullable=False, index=True)
     shop_name = Column(String, nullable=False)
-    access_token = Column(Text, nullable=False)  # Encrypted in production
+    _access_token_encrypted = Column("access_token", Text, nullable=False)  # Encrypted using Fernet
     is_active = Column(Boolean, default=True)
     last_sync = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
+    @hybrid_property
+    def access_token(self) -> str:
+        """Decrypt and return the access token."""
+        return decrypt_token(self._access_token_encrypted)
+
+    @access_token.setter
+    def access_token(self, value: str):
+        """Encrypt and store the access token."""
+        self._access_token_encrypted = encrypt_token(value)
+
     # Relationships
     user = relationship("User", back_populates="stores")
     order_logs = relationship("OrderLog", back_populates="store", cascade="all, delete-orphan")
