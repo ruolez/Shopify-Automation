@@ -50,9 +50,24 @@ async def sync_all_stores(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Trigger async processing for all stores
-    task = process_all_orders.delay(current_user.id)
-    return {"message": "Sync started for all stores", "task_id": task.id}
+    # Trigger async processing for all user's stores
+    stores = db.query(ShopifyStore).filter(
+        ShopifyStore.user_id == current_user.id,
+        ShopifyStore.is_active == True
+    ).all()
+
+    if not stores:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active stores found"
+        )
+
+    tasks = []
+    for store in stores:
+        task = process_store_orders.delay(current_user.id, store.id)
+        tasks.append({"store_id": store.id, "store_domain": store.shop_domain, "task_id": task.id})
+
+    return {"message": f"Sync started for {len(tasks)} stores", "tasks": tasks}
 
 
 # Debug endpoints
