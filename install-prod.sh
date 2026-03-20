@@ -111,19 +111,23 @@ cleanup_previous_installation() {
             fi
         fi
         
-        # Stop and remove containers
-        if docker compose -f $COMPOSE_FILE ps >/dev/null 2>&1; then
-            if [ "$KEEP_DATABASE" = "true" ]; then
-                docker compose -f $COMPOSE_FILE down 2>/dev/null || true
-            else
-                docker compose -f $COMPOSE_FILE down -v 2>/dev/null || true
-            fi
+        # Force stop all shopify containers first (avoids hangs)
+        print_status "Stopping containers..."
+        docker ps -aq --filter "name=shopify" | xargs -r docker stop -t 5 2>/dev/null || true
+        docker ps -aq --filter "name=shopify" | xargs -r docker rm -f 2>/dev/null || true
+
+        # Remove compose project (networks, volumes if clean install)
+        if [ "$KEEP_DATABASE" = "true" ]; then
+            docker compose -f $COMPOSE_FILE down --remove-orphans 2>/dev/null || true
+        else
+            docker compose -f $COMPOSE_FILE down -v --remove-orphans 2>/dev/null || true
         fi
-        
+
         # Remove Docker images
-        docker rmi $(docker images | grep shopify | awk '{print $3}') 2>/dev/null || true
-        
+        docker images --filter "reference=*shopify*" -q | xargs -r docker rmi -f 2>/dev/null || true
+
         # Clean up Docker system
+        docker network prune -f 2>/dev/null || true
         docker system prune -f 2>/dev/null || true
     else
         print_warning "Docker not installed yet, skipping Docker cleanup operations"
