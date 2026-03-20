@@ -31,6 +31,7 @@ from routers import (
     fraud_router,
     admin_router,
     inventory_router,
+    dashboard_router,
 )
 
 setup_logging()
@@ -93,6 +94,7 @@ app.include_router(locations_router)
 app.include_router(fraud_router)
 app.include_router(admin_router)
 app.include_router(inventory_router)
+app.include_router(dashboard_router)
 
 
 if __name__ == "__main__":

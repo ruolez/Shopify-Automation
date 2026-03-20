@@ -11,6 +11,7 @@ from .locations import router as locations_router
 from .fraud import router as fraud_router
 from .admin import router as admin_router
 from .inventory import router as inventory_router
+from .dashboard import router as dashboard_router
 
 __all__ = [
     'health_router',
@@ -24,4 +25,5 @@ __all__ = [
     'fraud_router',
     'admin_router',
     'inventory_router',
+    'dashboard_router',
 ]
