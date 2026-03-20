@@ -75,7 +75,6 @@ services:
       - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
-      - ./backend:/app:ro  # Read-only in production
       - ./logs:/app/logs
     depends_on:
       redis:
@@ -103,7 +102,6 @@ services:
       - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
-      - ./backend:/app:ro  # Read-only in production
       - ./logs:/app/logs
     depends_on:
       redis:
@@ -133,7 +131,6 @@ services:
       - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - DB_ECHO=false
     volumes:
-      - ./backend:/app:ro  # Read-only in production
       - ./logs:/app/logs
     depends_on:
       redis:
