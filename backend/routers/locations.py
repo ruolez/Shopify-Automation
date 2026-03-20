@@ -87,6 +87,7 @@ async def get_location_aliases(
                     "alias_id": mapping.alias_id,
                     "store_id": mapping.store_id,
                     "store_name": store.shop_name if store else "Unknown",
+                    "store_domain": store.shop_domain if store else "Unknown",
                     "shopify_location_id": mapping.shopify_location_id,
                     "shopify_location_name": mapping.shopify_location_name,
                     "is_active": mapping.is_active,
