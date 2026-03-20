@@ -17,14 +17,20 @@ DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-production}"
 DATABASE_TYPE="postgresql"  # Always use PostgreSQL
 COMPOSE_FILE="docker-compose.postgres.yml"
 POSTGRES_PASSWORD=""
+POSTGRES_CONTAINER="shopify_postgres"
+API_CONTAINER="shopify_api"
 
 # Check if production mode is requested
 if [ "$DEPLOYMENT_MODE" = "production" ] || [ "$1" = "--production" ]; then
     DEPLOYMENT_MODE="production"
     COMPOSE_FILE="docker-compose.postgres.prod.yml"
+    POSTGRES_CONTAINER="shopify_postgres_prod"
+    API_CONTAINER="shopify_api_prod"
     # Check if prod compose file exists, if not use regular postgres compose
     if [ ! -f "$COMPOSE_FILE" ]; then
         COMPOSE_FILE="docker-compose.postgres.yml"
+        POSTGRES_CONTAINER="shopify_postgres"
+        API_CONTAINER="shopify_api"
     fi
 fi
 
@@ -87,8 +93,8 @@ cleanup_previous_installation() {
             fi
             
             # Backup PostgreSQL database
-            if docker ps | grep -q shopify_postgres; then
-                docker exec shopify_postgres pg_dump -U shopify_user -d shopify_db | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"
+            if docker ps | grep -q $POSTGRES_CONTAINER; then
+                docker exec $POSTGRES_CONTAINER pg_dump -U shopify_user -d shopify_db | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"
                 print_success "PostgreSQL database backed up to $BACKUP_DIR/postgres_backup.sql.gz"
                 export RESTORE_DB_PATH="$BACKUP_DIR"
             elif docker volume inspect ${VOLUME_PREFIX}_postgres_data >/dev/null 2>&1; then
@@ -162,14 +168,14 @@ restore_database() {
         # Wait for PostgreSQL to be ready
         print_status "Waiting for PostgreSQL to be ready..."
         for i in {1..30}; do
-            if docker exec shopify_postgres pg_isready -U shopify_user &>/dev/null; then
+            if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user &>/dev/null; then
                 break
             fi
             sleep 2
         done
         
         # Restore from SQL backup
-        gunzip -c "$backup_path/postgres_backup.sql.gz" | docker exec -i shopify_postgres psql -U shopify_user -d shopify_db
+        gunzip -c "$backup_path/postgres_backup.sql.gz" | docker exec -i $POSTGRES_CONTAINER psql -U shopify_user -d shopify_db
         print_success "PostgreSQL database restored from SQL backup"
     elif [ -f "$backup_path/postgres_data.tar.gz" ]; then
         # Restore from volume backup
@@ -229,14 +235,20 @@ while [[ $# -gt 0 ]]; do
         --production)
             DEPLOYMENT_MODE="production"
             COMPOSE_FILE="docker-compose.postgres.prod.yml"
+            POSTGRES_CONTAINER="shopify_postgres_prod"
+            API_CONTAINER="shopify_api_prod"
             if [ ! -f "$COMPOSE_FILE" ]; then
                 COMPOSE_FILE="docker-compose.postgres.yml"
+                POSTGRES_CONTAINER="shopify_postgres"
+                API_CONTAINER="shopify_api"
             fi
             shift
             ;;
         --development)
             DEPLOYMENT_MODE="development"
             COMPOSE_FILE="docker-compose.postgres.yml"
+            POSTGRES_CONTAINER="shopify_postgres"
+            API_CONTAINER="shopify_api"
             shift
             ;;
         --clean)
@@ -713,10 +725,10 @@ if [ -n "$RESTORE_DB_PATH" ]; then
     
     # Run migrations after restoring database
     print_status "Checking for database migrations..."
-    docker exec shopify_api python run_all_migrations.py --check
+    docker exec $API_CONTAINER python run_all_migrations.py --check
     if [ $? -ne 0 ]; then
         print_status "Running pending migrations..."
-        docker exec shopify_api python run_all_migrations.py
+        docker exec $API_CONTAINER python run_all_migrations.py
         if [ $? -eq 0 ]; then
             print_success "Database migrations completed successfully!"
         else
@@ -730,10 +742,10 @@ if [ -n "$RESTORE_DB_PATH" ]; then
 elif [ "$KEEP_DATABASE" = "true" ]; then
     # Database was preserved, check if migrations are needed
     print_status "Checking existing database for required migrations..."
-    docker exec shopify_api python run_all_migrations.py --check
+    docker exec $API_CONTAINER python run_all_migrations.py --check
     if [ $? -ne 0 ]; then
         print_warning "Database schema needs updating. Running migrations..."
-        docker exec shopify_api python run_all_migrations.py
+        docker exec $API_CONTAINER python run_all_migrations.py
         if [ $? -eq 0 ]; then
             print_success "Database migrations completed successfully!"
         else
@@ -750,7 +762,7 @@ else
     # Wait for PostgreSQL to be ready
     print_status "Waiting for PostgreSQL to initialize..."
     for i in {1..30}; do
-        if docker exec shopify_postgres pg_isready -U shopify_user &>/dev/null; then
+        if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user &>/dev/null; then
             print_success "PostgreSQL is ready"
             break
         fi
@@ -759,7 +771,7 @@ else
     done
     
     # Initialize database schema
-    docker exec shopify_api python -c "
+    docker exec $API_CONTAINER python -c "
 import sys
 sys.path.append('/app')
 from database import Base, engine
@@ -790,7 +802,7 @@ except Exception as e:
         
         # Create migration tracking table for PostgreSQL
         print_status "Setting up migration tracking..."
-        docker exec shopify_api python -c "
+        docker exec $API_CONTAINER python -c "
 import sys
 sys.path.append('/app')
 from sqlalchemy import create_engine, text
@@ -846,10 +858,10 @@ with engine.connect() as conn:
         print_status "Migrating data from SQLite to PostgreSQL..."
         
         # Copy SQLite database to container
-        docker cp "$SQLITE_PATH" shopify_api:/tmp/sqlite_backup.db
+        docker cp "$SQLITE_PATH" $API_CONTAINER:/tmp/sqlite_backup.db
         
         # Perform migration
-        docker exec shopify_api python -c "
+        docker exec $API_CONTAINER python -c "
 import sys
 sys.path.append('/app')
 import sqlite3
@@ -953,7 +965,7 @@ fi
 
 # Create initial admin user
 print_status "Creating initial admin user..."
-docker exec shopify_api python -c "
+docker exec $API_CONTAINER python -c "
 import sys
 sys.path.append('/app')
 from database import SessionLocal
@@ -1016,16 +1028,16 @@ echo
 echo -e "${BLUE}Monitor services:${NC}"
 echo -e "  View logs:        ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
 echo -e "  Service status:   ${YELLOW}docker compose -f $COMPOSE_FILE ps${NC}"
-echo -e "  Database console: ${YELLOW}docker exec -it shopify_postgres psql -U shopify_user -d shopify_db${NC}"
-echo -e "  Backup database:  ${YELLOW}docker exec shopify_postgres pg_dump -U shopify_user shopify_db > backup.sql${NC}"
+echo -e "  Database console: ${YELLOW}docker exec -it $POSTGRES_CONTAINER psql -U shopify_user -d shopify_db${NC}"
+echo -e "  Backup database:  ${YELLOW}docker exec $POSTGRES_CONTAINER pg_dump -U shopify_user shopify_db > backup.sql${NC}"
 
 # Verify schema is up to date
 print_status "Verifying database schema..."
-docker exec shopify_api python run_all_migrations.py --check > /dev/null 2>&1
+docker exec $API_CONTAINER python run_all_migrations.py --check > /dev/null 2>&1
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ Database schema is up to date${NC}"
 else
-    echo -e "${YELLOW}⚠ Database schema may need attention. Run: docker exec shopify_api python run_all_migrations.py${NC}"
+    echo -e "${YELLOW}⚠ Database schema may need attention. Run: docker exec $API_CONTAINER python run_all_migrations.py${NC}"
 fi
 echo
 echo -e "${BLUE}Environment:${NC} ${YELLOW}$DEPLOYMENT_MODE${NC}"
