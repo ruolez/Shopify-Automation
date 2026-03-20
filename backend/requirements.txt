@@ -12,6 +12,7 @@ pydantic-settings==2.1.0
 httpx==0.25.2
 cryptography==43.0.3
 python-dotenv==1.0.0
+slowapi==0.1.9
 # PostgreSQL support
 psycopg2-binary==2.9.9
 # Optional: async PostgreSQL support
