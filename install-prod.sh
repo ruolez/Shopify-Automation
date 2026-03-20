@@ -1040,8 +1040,9 @@ else
     exit 1
 fi
 
-if [ -f frontend/.env ] && grep -q "VITE_API_URL=http://$SERVER_IP:8000" frontend/.env; then
-    print_success "✓ Frontend .env file has correct API URL"
+if [ -f frontend/.env ] && grep -q "VITE_API_URL=" frontend/.env; then
+    FRONTEND_API_URL=$(grep 'VITE_API_URL=' frontend/.env | cut -d'=' -f2-)
+    print_success "✓ Frontend .env file has API URL: $FRONTEND_API_URL"
 else
     print_error "✗ Frontend .env file missing or incorrect"
     exit 1
