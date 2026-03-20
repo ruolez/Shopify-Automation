@@ -186,11 +186,18 @@ update_from_github() {
     # --- Step 3: Update configuration files ---
     print_status "Step 3/7: Updating configuration..."
 
-    # Update frontend .env
-    cat > frontend/.env <<ENVEOF
+    # Update frontend .env based on deployment mode
+    if [ "$DEPLOYMENT_MODE" = "production" ]; then
+        cat > frontend/.env <<ENVEOF
+VITE_API_URL=/api
+ENVEOF
+        print_success "Frontend .env updated (nginx proxy mode)"
+    else
+        cat > frontend/.env <<ENVEOF
 VITE_API_URL=http://$SERVER_IP:8000
 ENVEOF
-    print_success "Frontend .env updated"
+        print_success "Frontend .env updated (direct API mode)"
+    fi
 
     # Ensure any new required env vars exist in .env (added by code updates)
     # ENCRYPTION_KEY: required for token encryption (added in audit fix #5)
@@ -1010,10 +1017,19 @@ print_success "CORS will be configured via CORS_ORIGINS environment variable."
 
 # Step 5: Create frontend environment file
 print_status "Creating frontend environment configuration..."
-cat > frontend/.env <<EOF
+if [ "$DEPLOYMENT_MODE" = "production" ]; then
+    # In production, frontend goes through nginx /api/ proxy (no CORS needed)
+    cat > frontend/.env <<EOF
+VITE_API_URL=/api
+EOF
+    print_success "Frontend configured to use nginx proxy (/api)"
+else
+    # In development, frontend calls API directly
+    cat > frontend/.env <<EOF
 VITE_API_URL=http://$SERVER_IP:8000
 EOF
-print_success "Frontend environment configuration created!"
+    print_success "Frontend configured for direct API access"
+fi
 
 # Step 6: Verify configuration
 print_status "Verifying configuration..."
