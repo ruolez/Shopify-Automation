@@ -236,6 +236,25 @@ ENVEOF
     fi
     print_success "Docker images rebuilt"
 
+    # --- Step 5b: Cleanup old images and logs ---
+    print_status "Cleaning up old Docker images and logs..."
+    docker image prune -f 2>/dev/null || true
+    docker images --filter "dangling=true" -q | xargs -r docker rmi -f 2>/dev/null || true
+    CLEANED_IMAGES=$(docker images --filter "dangling=true" -q 2>/dev/null | wc -l)
+
+    # Truncate Docker container logs (not app logs)
+    for container_id in $(docker ps -aq --filter "name=shopify" 2>/dev/null); do
+        LOG_FILE=$(docker inspect --format='{{.LogPath}}' "$container_id" 2>/dev/null)
+        if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+            sudo truncate -s 0 "$LOG_FILE" 2>/dev/null || true
+        fi
+    done
+
+    # Clean app logs older than 7 days
+    find ./logs -name "*.log" -mtime +7 -delete 2>/dev/null || true
+
+    print_success "Cleanup complete"
+
     # --- Step 6: Start services ---
     print_status "Step 6/7: Starting all services..."
     docker compose -f $COMPOSE_FILE up -d
