@@ -277,7 +277,8 @@ async def get_fraud_analyses(
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": result
+            "analyses": result,
+            "data": result,
         }
 
     except HTTPException:
