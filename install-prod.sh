@@ -343,17 +343,17 @@ cleanup_previous_installation() {
                 VOLUME_PREFIX="shopify-automation"
             fi
             
-            # Backup PostgreSQL database
+            # Backup PostgreSQL database (safety net only — volumes are preserved)
             if docker ps | grep -q $POSTGRES_CONTAINER; then
                 docker exec $POSTGRES_CONTAINER pg_dump -U shopify_user -d shopify_db | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"
                 print_success "PostgreSQL database backed up to $BACKUP_DIR/postgres_backup.sql.gz"
-                export RESTORE_DB_PATH="$BACKUP_DIR"
             elif docker volume inspect ${VOLUME_PREFIX}_postgres_data >/dev/null 2>&1; then
                 # If container not running but volume exists, backup the volume
                 docker run --rm -v ${VOLUME_PREFIX}_postgres_data:/source -v "$(pwd)/$BACKUP_DIR:/backup" alpine tar czf /backup/postgres_data.tar.gz -C /source .
                 print_success "PostgreSQL data volume backed up to $BACKUP_DIR/postgres_data.tar.gz"
-                export RESTORE_DB_PATH="$BACKUP_DIR"
             fi
+            # NOTE: Do NOT set RESTORE_DB_PATH here. The database volume is preserved,
+            # so restore is unnecessary. The backup is just a safety net.
             
             # Backup Redis data
             if docker volume inspect ${VOLUME_PREFIX}_redis_data >/dev/null 2>&1; then
@@ -900,15 +900,46 @@ EXISTING_ADMIN_SECRET_KEY=""
 EXISTING_JWT_SECRET_KEY=""
 EXISTING_ENCRYPTION_KEY=""
 
-if [ "$KEEP_DATABASE" = "true" ] && [ -f .env ]; then
-    print_status "Preserving existing secrets from .env..."
-    EXISTING_POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d'=' -f2- || true)
-    EXISTING_SECRET_KEY=$(grep '^SECRET_KEY=' .env | cut -d'=' -f2- || true)
-    EXISTING_ADMIN_SECRET_KEY=$(grep '^ADMIN_SECRET_KEY=' .env | cut -d'=' -f2- || true)
-    EXISTING_JWT_SECRET_KEY=$(grep '^JWT_SECRET_KEY=' .env | cut -d'=' -f2- || true)
-    EXISTING_ENCRYPTION_KEY=$(grep '^ENCRYPTION_KEY=' .env | cut -d'=' -f2- || true)
-    if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
-        print_success "Existing secrets preserved (DB password, JWT keys, etc.)"
+if [ "$KEEP_DATABASE" = "true" ]; then
+    if [ -f .env ]; then
+        print_status "Preserving existing secrets from .env..."
+        EXISTING_POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d'=' -f2- || true)
+        EXISTING_SECRET_KEY=$(grep '^SECRET_KEY=' .env | cut -d'=' -f2- || true)
+        EXISTING_ADMIN_SECRET_KEY=$(grep '^ADMIN_SECRET_KEY=' .env | cut -d'=' -f2- || true)
+        EXISTING_JWT_SECRET_KEY=$(grep '^JWT_SECRET_KEY=' .env | cut -d'=' -f2- || true)
+        EXISTING_ENCRYPTION_KEY=$(grep '^ENCRYPTION_KEY=' .env | cut -d'=' -f2- || true)
+        if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
+            print_success "Existing secrets preserved (DB password, JWT keys, etc.)"
+        else
+            print_error "Could not read POSTGRES_PASSWORD from .env!"
+            print_error "The database volume expects the original password."
+            print_error "Check your backup at: ./backups/ for a .env.backup file"
+            exit 1
+        fi
+    else
+        # Check if there's a backup .env we can recover from
+        LATEST_BACKUP_ENV=$(ls -t ./backups/*/\.env.backup 2>/dev/null | head -1)
+        if [ -n "$LATEST_BACKUP_ENV" ]; then
+            print_warning ".env not found, but found backup: $LATEST_BACKUP_ENV"
+            print_status "Recovering secrets from backup..."
+            EXISTING_POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' "$LATEST_BACKUP_ENV" | cut -d'=' -f2- || true)
+            EXISTING_SECRET_KEY=$(grep '^SECRET_KEY=' "$LATEST_BACKUP_ENV" | cut -d'=' -f2- || true)
+            EXISTING_ADMIN_SECRET_KEY=$(grep '^ADMIN_SECRET_KEY=' "$LATEST_BACKUP_ENV" | cut -d'=' -f2- || true)
+            EXISTING_JWT_SECRET_KEY=$(grep '^JWT_SECRET_KEY=' "$LATEST_BACKUP_ENV" | cut -d'=' -f2- || true)
+            EXISTING_ENCRYPTION_KEY=$(grep '^ENCRYPTION_KEY=' "$LATEST_BACKUP_ENV" | cut -d'=' -f2- || true)
+            if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
+                print_success "Secrets recovered from backup"
+            else
+                print_error "Could not recover POSTGRES_PASSWORD from backup!"
+                print_error "Cannot keep database without the original password."
+                exit 1
+            fi
+        else
+            print_error ".env file not found and no backup available!"
+            print_error "Cannot keep database without the original password."
+            print_error "Use --clean for a fresh installation instead."
+            exit 1
+        fi
     fi
 fi
 
