@@ -168,7 +168,7 @@ restore_database() {
         # Wait for PostgreSQL to be ready
         print_status "Waiting for PostgreSQL to be ready..."
         for i in {1..30}; do
-            if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user &>/dev/null; then
+            if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user -d shopify_db &>/dev/null; then
                 break
             fi
             sleep 2
@@ -762,7 +762,7 @@ else
     # Wait for PostgreSQL to be ready
     print_status "Waiting for PostgreSQL to initialize..."
     for i in {1..30}; do
-        if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user &>/dev/null; then
+        if docker exec $POSTGRES_CONTAINER pg_isready -U shopify_user -d shopify_db &>/dev/null; then
             print_success "PostgreSQL is ready"
             break
         fi
