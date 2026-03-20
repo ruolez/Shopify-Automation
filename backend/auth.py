@@ -63,6 +63,9 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
 def verify_token(token: str) -> Optional[str]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = payload.get("type")
+        if token_type not in (None, "access"):
+            return None
         email: str = payload.get("sub")
         if email is None:
             return None

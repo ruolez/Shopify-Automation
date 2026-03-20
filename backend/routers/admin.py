@@ -134,28 +134,52 @@ async def get_all_users(
     admin_user: AdminUser = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
-    users = db.query(User).offset(skip).limit(limit).all()
+    from sqlalchemy import func
 
-    user_list = []
-    for user in users:
-        stores_count = db.query(ShopifyStore).filter(ShopifyStore.user_id == user.id).count()
-        rules_count = db.query(ProcessingRule).filter(ProcessingRule.user_id == user.id).count()
+    stores_count_sub = (
+        db.query(func.count(ShopifyStore.id))
+        .filter(ShopifyStore.user_id == User.id)
+        .correlate(User)
+        .scalar_subquery()
+    )
+    rules_count_sub = (
+        db.query(func.count(ProcessingRule.id))
+        .filter(ProcessingRule.user_id == User.id)
+        .correlate(User)
+        .scalar_subquery()
+    )
+    last_activity_sub = (
+        db.query(func.max(OrderLog.created_at))
+        .filter(OrderLog.user_id == User.id)
+        .correlate(User)
+        .scalar_subquery()
+    )
 
-        last_log = db.query(OrderLog).filter(OrderLog.user_id == user.id).order_by(OrderLog.created_at.desc()).first()
-        last_activity = last_log.created_at if last_log else None
+    rows = (
+        db.query(
+            User,
+            stores_count_sub.label("stores_count"),
+            rules_count_sub.label("rules_count"),
+            last_activity_sub.label("last_activity"),
+        )
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
-        user_list.append(UserManagementResponse(
+    return [
+        UserManagementResponse(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
             is_active=user.is_active,
             created_at=user.created_at,
-            stores_count=stores_count,
-            rules_count=rules_count,
-            last_activity=last_activity
-        ))
-
-    return user_list
+            stores_count=stores_count or 0,
+            rules_count=rules_count or 0,
+            last_activity=last_activity,
+        )
+        for user, stores_count, rules_count, last_activity in rows
+    ]
 
 
 @router.put("/users/{user_id}/toggle-active")

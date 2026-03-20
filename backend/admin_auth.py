@@ -112,8 +112,11 @@ def log_admin_action(
         db.add(audit_log)
         db.commit()
     except Exception as e:
-        logger.error(f"Failed to log admin action: {e}")
-        db.rollback()
+        logger.error(f"Failed to log admin action '{action}': {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 def require_admin_role(required_roles: list = None):
     """Decorator to require specific admin roles"""

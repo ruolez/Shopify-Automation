@@ -133,6 +133,7 @@ async def get_fraud_analyses(
 ):
     """Get all fraud analyses with filtering and pagination"""
     try:
+        limit = min(limit, 1000)
         # Build query
         query = db.query(FraudAnalysis).filter(FraudAnalysis.user_id == current_user.id)
 

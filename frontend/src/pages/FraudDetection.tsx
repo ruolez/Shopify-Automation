@@ -93,7 +93,6 @@ const FraudDetection: React.FC = () => {
     queryKey: ["settings"],
     queryFn: async () => {
       const response = await api.get("/settings");
-      console.log("Fraud Detection: Fetched settings", response.data);
       return response.data;
     },
     staleTime: 30000, // Consider data fresh for 30 seconds

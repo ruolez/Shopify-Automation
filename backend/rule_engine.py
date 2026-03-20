@@ -364,43 +364,30 @@ class RuleEngine:
                 if store_context and hasattr(store_context, 'id'):
                     try:
                         logger.info(f"Starting alias resolution for store {store_context.id}")
-                        # Import here to avoid circular imports
-                        from tasks import resolve_location_alias
-                        from sqlalchemy.orm import Session
-                        from database import get_db
-                        
-                        # Get database session to query aliases
-                        db_gen = get_db()
-                        db = next(db_gen)
-                        try:
-                            # Find aliases that resolve to any of our location IDs
-                            from models import LocationAlias, LocationMapping
-                            location_ids = [loc for loc in locations if loc.startswith("gid://")]
-                            logger.info(f"Location IDs to resolve: {location_ids}")
-                            
-                            if location_ids:  # Only query if we have location IDs to match
+                        from database import get_db_session
+                        from models import LocationAlias, LocationMapping
+
+                        location_ids = [loc for loc in locations if loc.startswith("gid://")]
+                        logger.info(f"Location IDs to resolve: {location_ids}")
+
+                        if location_ids:
+                            with get_db_session() as db:
                                 aliases = db.query(LocationAlias).join(LocationMapping).filter(
                                     LocationMapping.store_id == store_context.id,
                                     LocationMapping.shopify_location_id.in_(location_ids),
                                     LocationMapping.is_active == True,
                                     LocationAlias.is_active == True
                                 ).all()
-                                
+
                                 logger.info(f"Found {len(aliases)} aliases: {[a.alias_name for a in aliases]}")
-                                
-                                # Add alias names to the list for matching
+
                                 for alias in aliases:
                                     if alias.alias_name not in locations:
                                         locations.append(alias.alias_name)
                                         logger.info(f"Added alias: {alias.alias_name}")
-                                    else:
-                                        logger.info(f"Alias already in list: {alias.alias_name}")
-                            else:
-                                logger.info("No location IDs found to resolve aliases for")
-                                        
-                        finally:
-                            db.close()
-                            
+                        else:
+                            logger.info("No location IDs found to resolve aliases for")
+
                     except Exception as e:
                         logger.warning(f"Could not resolve location aliases: {e}", exc_info=True)
                 else:

@@ -253,10 +253,7 @@ class OutOfStockIncident(Base):
     store = relationship("ShopifyStore")
     
     # Index for efficient queries
-    __table_args__ = (
-        # Index for product-based queries
-        {'mysql_key_block_size': '1024'}
-    )
+    __table_args__ = ()
 
 class ExcludedSKU(Base):
     __tablename__ = "excluded_skus"

@@ -1,6 +1,7 @@
 import httpx
 import json
 import asyncio
+import os
 from typing import Dict, List, Optional, Any
 
 from logging_config import get_logger, debug_log, DEBUG_LOGGING
@@ -11,7 +12,8 @@ class ShopifyClient:
     def __init__(self, shop_domain: str, access_token: str):
         self.shop_domain = shop_domain
         self.access_token = access_token
-        self.base_url = f"https://{shop_domain}/admin/api/2025-04"
+        api_version = os.getenv("SHOPIFY_API_VERSION", "2025-04")
+        self.base_url = f"https://{shop_domain}/admin/api/{api_version}"
         self.headers = {
             "X-Shopify-Access-Token": access_token,
             "Content-Type": "application/json"
@@ -51,7 +53,7 @@ class ShopifyClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify API error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                         logger.info(f"Retrying after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -60,7 +62,7 @@ class ShopifyClient:
                 logger.error(f"Shopify API timeout after 60 seconds: {str(e)}")
                 last_exception = Exception(f"Shopify API timeout: Request took too long to complete")
                 if attempt < retry_count - 1:
-                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     logger.info(f"Retrying after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -68,7 +70,7 @@ class ShopifyClient:
                 logger.error(f"Request failed: {str(e)}")
                 last_exception = e
                 if attempt < retry_count - 1:
-                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     logger.info(f"Retrying after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -143,7 +145,7 @@ class ShopifyClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify GraphQL error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                         logger.info(f"Retrying GraphQL request after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -152,7 +154,7 @@ class ShopifyClient:
                 logger.error(f"Shopify GraphQL timeout after 60 seconds: {str(e)}")
                 last_exception = Exception(f"Shopify GraphQL timeout: Request took too long to complete")
                 if attempt < retry_count - 1:
-                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     logger.info(f"Retrying GraphQL request after timeout, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue
@@ -160,7 +162,7 @@ class ShopifyClient:
                 logger.error(f"GraphQL request failed: {str(e)}")
                 last_exception = e
                 if attempt < retry_count - 1:
-                    wait_time = 0.5 * (attempt + 1)  # Reduced backoff: 0.5s, 1s, 1.5s
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     logger.info(f"Retrying GraphQL request after error, waiting {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                     await asyncio.sleep(wait_time)
                     continue

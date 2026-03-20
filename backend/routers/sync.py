@@ -1,5 +1,6 @@
 """Sync and debug endpoints"""
 import logging
+import os
 import traceback
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -61,6 +62,8 @@ async def debug_locations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if os.getenv("ENVIRONMENT", "development") == "production":
+        raise HTTPException(status_code=404, detail="Not found")
     store = db.query(ShopifyStore).filter(
         ShopifyStore.id == store_id,
         ShopifyStore.user_id == current_user.id
@@ -89,6 +92,8 @@ async def debug_query_costs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if os.getenv("ENVIRONMENT", "development") == "production":
+        raise HTTPException(status_code=404, detail="Not found")
     store = db.query(ShopifyStore).filter(
         ShopifyStore.id == store_id,
         ShopifyStore.user_id == current_user.id
@@ -107,6 +112,8 @@ async def debug_orders(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if os.getenv("ENVIRONMENT", "development") == "production":
+        raise HTTPException(status_code=404, detail="Not found")
     store = db.query(ShopifyStore).filter(
         ShopifyStore.id == store_id,
         ShopifyStore.user_id == current_user.id

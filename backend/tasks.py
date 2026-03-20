@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.schedules import crontab
 import os
 import sys
@@ -15,6 +16,10 @@ sys.path.insert(0, '/app')
 
 from database import SessionLocal, engine, get_db_session
 from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Settings, ProcessedOrder, LocationAlias, LocationMapping, OutOfStockIncident, ExcludedSKU, FraudAnalysis, ProcessedFraudOrder
+
+# Redis client for distributed locking
+import redis as _redis
+_redis_client = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 from shopify_client import ShopifyClient
 from enhanced_shopify_client import EnhancedShopifyClient
 from rule_engine import RuleEngine
@@ -65,12 +70,13 @@ celery.conf.beat_schedule = {
 }
 
 def get_db():
-    """Get a database session. DEPRECATED: Use get_db_session() context manager instead.
-
-    Note: caller is responsible for closing it. This function is kept for backwards
-    compatibility but new code should use `with get_db_session() as db:` for automatic
-    cleanup and proper transaction handling.
-    """
+    """Get a database session. DEPRECATED: Use get_db_session() context manager instead."""
+    import warnings
+    warnings.warn(
+        "get_db() in tasks.py is deprecated. Use 'with get_db_session() as db:' instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return SessionLocal()
 
 def _combine_product_and_variant_title(product_title: str, variant_title: str) -> str:
@@ -468,13 +474,15 @@ async def _check_inventory_availability(
                 # API errors (timeouts, network issues) should not trigger false OOS incidents
                 logger.warning(f"Inventory check failed for {product_title} - will attempt fulfillment anyway to determine actual availability")
                 # Add to available_items to allow fulfillment attempt (conservative approach)
+                # The fulfillment API will be the final source of truth on availability
                 available_items.append({
                     "product_title": product_title,
                     "variant_id": variant_id,
                     "sku": sku,
                     "required_quantity": required_quantity,
                     "available_quantity": "unknown_due_to_api_error",
-                    "check_error": str(item_error)
+                    "check_error": str(item_error),
+                    "inventory_check_failed": True
                 })
         
         all_available = len(unavailable_items) == 0 and len(line_items) > 0
@@ -681,8 +689,8 @@ async def _process_fraud_rules_for_order(
             except Exception:
                 try:
                     fraud_db.rollback()
-                except:
-                    pass
+                except Exception:
+                    logger.warning("Failed to rollback after ProcessedFraudOrder error")
             return {
                 "fraud_analysis_completed": True,
                 "fraud_analysis_id": fraud_analysis_id,
@@ -723,8 +731,8 @@ async def _process_fraud_rules_for_order(
             # CRITICAL: Always rollback on any error to clear session state
             try:
                 fraud_db.rollback()
-            except:
-                pass  # Session might be in a bad state
+            except Exception:
+                logger.warning("Failed to rollback session after ProcessedFraudOrder error")
             
             # If there's a duplicate key error, it means the order was already processed
             # This is fine - just log and continue
@@ -835,6 +843,10 @@ def process_store_orders(self, user_id: int, store_id: int):
 
             return result
 
+    except SoftTimeLimitExceeded:
+        logger.warning(f"Soft time limit exceeded for store orders task {task_id}, wrapping up gracefully")
+        update_task_status(task_id, "failed", error_message="Task exceeded soft time limit (25 minutes)")
+        raise
     except Exception as e:
         logger.error(f"Failed to process store orders: {str(e)}")
         update_task_status(task_id, "failed", error_message=str(e))
@@ -937,7 +949,14 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     continue
                 
                 logger.info(f"Order {order_number}: created {order_created_at}, status '{fulfillment_status}' - processing")
-                
+
+                # Acquire distributed lock to prevent concurrent processing of same order
+                lock_key = f"order_lock:{order_id}"
+                lock = _redis_client.lock(lock_key, timeout=300, blocking_timeout=0)
+                if not lock.acquire(blocking=False):
+                    logger.info(f"Order {order_number} is being processed by another worker, skipping")
+                    continue
+
                 try:
                     # Apply rules to order
                     rules_applied = False
@@ -1033,15 +1052,20 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 except Exception as e:
                     # Rollback the session if there's any database error
                     db.rollback()
-                    
+
                     logger.error(f"Error processing order {order_number}: {str(e)}")
                     _log_order_action(
-                        db, store.user_id, store.id, order_id, 
-                        order_number, "processing_error", "error", 
+                        db, store.user_id, store.id, order_id,
+                        order_number, "processing_error", "error",
                         error_message=str(e),
                         order_created_at=order_created_at
                     )
-            
+                finally:
+                    try:
+                        lock.release()
+                    except Exception:
+                        pass
+
             # Check for next page
             page_info = orders_data["pageInfo"]
             if not page_info["hasNextPage"]:
@@ -1788,11 +1812,14 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                 "total_orders": len(all_orders)
             }
 
+    except SoftTimeLimitExceeded:
+        logger.warning(f"Soft time limit exceeded for fraud detection task {task_id}, wrapping up gracefully")
+        update_task_status(task_id, "failed", error_message="Task exceeded soft time limit (25 minutes)")
+        raise
     except Exception as e:
         error_msg = f"Failed to process fraud detection for store {store_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)  # Add full traceback to logs
+        logger.error(error_msg, exc_info=True)
         try:
-            # Ensure error is properly saved to task status
             update_task_status(task_id, "failed", error_message=error_msg)
         except Exception as update_error:
             logger.error(f"Failed to update task status: {str(update_error)}")

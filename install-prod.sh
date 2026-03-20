@@ -51,6 +51,257 @@ print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+# Function: Update from GitHub
+update_from_github() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║     Shopify Multi-Store Order Management System           ║"
+    echo "║           UPDATE FROM GITHUB                              ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    # --- Pre-flight checks ---
+    if [ ! -d ".git" ]; then
+        print_error "Not a git repository! Run this from the project root."
+        exit 1
+    fi
+
+    if ! command -v docker &> /dev/null || ! docker info >/dev/null 2>&1; then
+        print_error "Docker is not installed or not running. Cannot update."
+        exit 1
+    fi
+
+    if [ ! -f .env ]; then
+        print_error ".env file not found! Run a full install first."
+        exit 1
+    fi
+
+    # Load SERVER_IP from existing .env
+    SERVER_IP=$(grep '^SERVER_IP=' .env | cut -d'=' -f2-)
+    if [ -z "$SERVER_IP" ]; then
+        print_error "SERVER_IP not found in .env. Run a full install first."
+        exit 1
+    fi
+    print_status "Server IP: $SERVER_IP"
+
+    # Determine the git remote branch to pull from
+    GIT_BRANCH="${UPDATE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+    GIT_REMOTE="${UPDATE_REMOTE:-origin}"
+    CURRENT_COMMIT=$(git rev-parse --short HEAD)
+    print_status "Current branch: $GIT_BRANCH (commit: $CURRENT_COMMIT)"
+
+    # --- Step 1: Backup database ---
+    print_status "Step 1/7: Backing up database..."
+    BACKUP_DIR="./backups/update_backup_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+
+    if docker ps --format '{{.Names}}' | grep -q "$POSTGRES_CONTAINER"; then
+        if docker exec $POSTGRES_CONTAINER pg_dump -U shopify_user -d shopify_db 2>/dev/null | gzip > "$BACKUP_DIR/postgres_backup.sql.gz"; then
+            BACKUP_SIZE=$(du -h "$BACKUP_DIR/postgres_backup.sql.gz" | cut -f1)
+            print_success "Database backed up ($BACKUP_SIZE) -> $BACKUP_DIR/postgres_backup.sql.gz"
+        else
+            print_error "Database backup failed!"
+            read -p "Continue without backup? (y/N) " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        fi
+    else
+        print_warning "PostgreSQL container not running. Skipping database backup."
+        print_warning "Data volumes will be preserved."
+    fi
+
+    # Backup .env files
+    cp .env "$BACKUP_DIR/.env.backup"
+    [ -f frontend/.env ] && cp frontend/.env "$BACKUP_DIR/frontend.env.backup"
+    print_success "Configuration files backed up"
+
+    # --- Step 2: Pull latest code from GitHub ---
+    print_status "Step 2/7: Pulling latest code from $GIT_REMOTE/$GIT_BRANCH..."
+
+    # Stash any local changes (uncommitted work)
+    LOCAL_CHANGES=false
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+        LOCAL_CHANGES=true
+        print_warning "Local changes detected, stashing them..."
+        git stash push -m "auto-stash before update $(date +%Y%m%d_%H%M%S)"
+        print_success "Local changes stashed"
+    fi
+
+    # Fetch and pull
+    if ! git fetch "$GIT_REMOTE" "$GIT_BRANCH"; then
+        print_error "Failed to fetch from $GIT_REMOTE/$GIT_BRANCH"
+        if [ "$LOCAL_CHANGES" = true ]; then
+            print_status "Restoring stashed changes..."
+            git stash pop
+        fi
+        exit 1
+    fi
+
+    NEW_COMMIT=$(git rev-parse --short "$GIT_REMOTE/$GIT_BRANCH")
+    if [ "$CURRENT_COMMIT" = "$NEW_COMMIT" ]; then
+        print_success "Already up to date (commit: $CURRENT_COMMIT)"
+        if [ "$FORCE_UPDATE" != "true" ]; then
+            print_status "Use --force to rebuild anyway."
+            if [ "$LOCAL_CHANGES" = true ]; then
+                git stash pop
+            fi
+            exit 0
+        fi
+        print_warning "Forcing rebuild..."
+    else
+        print_status "Updating: $CURRENT_COMMIT -> $NEW_COMMIT"
+    fi
+
+    if ! git merge "$GIT_REMOTE/$GIT_BRANCH" --ff-only; then
+        print_error "Fast-forward merge failed. You may have diverged commits."
+        print_error "Resolve manually: git merge $GIT_REMOTE/$GIT_BRANCH"
+        if [ "$LOCAL_CHANGES" = true ]; then
+            print_status "Restoring stashed changes..."
+            git stash pop
+        fi
+        exit 1
+    fi
+
+    UPDATED_COMMIT=$(git rev-parse --short HEAD)
+    print_success "Code updated to commit: $UPDATED_COMMIT"
+
+    # Show what changed
+    echo
+    print_status "Changes pulled:"
+    git log --oneline "$CURRENT_COMMIT..$UPDATED_COMMIT" 2>/dev/null | head -20
+    echo
+
+    # Re-apply stashed changes if any
+    if [ "$LOCAL_CHANGES" = true ]; then
+        print_status "Re-applying stashed local changes..."
+        if git stash pop; then
+            print_success "Local changes restored"
+        else
+            print_warning "Could not auto-apply local changes. They are saved in git stash."
+        fi
+    fi
+
+    # --- Step 3: Update configuration files ---
+    print_status "Step 3/7: Updating configuration..."
+
+    # Update frontend .env
+    cat > frontend/.env <<ENVEOF
+VITE_API_URL=http://$SERVER_IP:8000
+ENVEOF
+    print_success "Frontend .env updated"
+
+    # Ensure any new required env vars exist in .env (added by code updates)
+    # ENCRYPTION_KEY: required for token encryption (added in audit fix #5)
+    if ! grep -q '^ENCRYPTION_KEY=' .env; then
+        print_warning "Adding missing ENCRYPTION_KEY to .env..."
+        ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)
+        echo "" >> .env
+        echo "# Encryption key (auto-added during update)" >> .env
+        echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}" >> .env
+        print_success "ENCRYPTION_KEY added to .env"
+    fi
+
+    # SHOPIFY_API_VERSION: configurable API version (added in audit fix #26)
+    if ! grep -q '^SHOPIFY_API_VERSION=' .env; then
+        echo "" >> .env
+        echo "# Shopify API version (auto-added during update)" >> .env
+        echo "SHOPIFY_API_VERSION=2025-04" >> .env
+        print_success "SHOPIFY_API_VERSION added to .env"
+    fi
+
+    # --- Step 4: Stop running containers ---
+    print_status "Step 4/7: Stopping running containers..."
+    docker compose -f $COMPOSE_FILE stop api worker scheduler frontend nginx 2>/dev/null || true
+    print_success "Application containers stopped (database kept running)"
+
+    # --- Step 5: Rebuild images ---
+    print_status "Step 5/7: Rebuilding Docker images..."
+    if ! docker compose -f $COMPOSE_FILE build --no-cache api worker scheduler frontend nginx 2>/dev/null; then
+        # Fallback: try building all services if specific ones fail
+        if ! docker compose -f $COMPOSE_FILE build --no-cache; then
+            print_error "Build failed! Rolling back..."
+            print_error "Your database backup is at: $BACKUP_DIR"
+            print_error "To revert code: git checkout $CURRENT_COMMIT"
+            exit 1
+        fi
+    fi
+    print_success "Docker images rebuilt"
+
+    # --- Step 6: Start services ---
+    print_status "Step 6/7: Starting all services..."
+    docker compose -f $COMPOSE_FILE up -d
+
+    # Wait for services
+    print_status "Waiting for services to initialize..."
+    for i in {1..60}; do
+        if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
+            break
+        fi
+        echo -n "."
+        sleep 2
+    done
+    echo
+
+    # Check services
+    if docker compose -f $COMPOSE_FILE ps 2>/dev/null | grep -q "Exit"; then
+        print_error "Some services failed to start!"
+        docker compose -f $COMPOSE_FILE logs --tail=30 api worker scheduler 2>/dev/null
+        print_error "Your database backup is at: $BACKUP_DIR"
+        exit 1
+    fi
+
+    # --- Step 7: Run migrations ---
+    print_status "Step 7/7: Checking for database migrations..."
+    sleep 5  # Give the API container time to fully start
+
+    if docker exec $API_CONTAINER python run_all_migrations.py --check 2>/dev/null; then
+        print_success "Database schema is up to date"
+    else
+        print_warning "Running pending migrations..."
+        if docker exec $API_CONTAINER python run_all_migrations.py 2>/dev/null; then
+            print_success "Database migrations completed"
+        else
+            print_warning "Migration runner returned an error. Check manually:"
+            print_warning "  docker exec $API_CONTAINER python run_all_migrations.py"
+        fi
+    fi
+
+    # --- Health check ---
+    if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
+        print_success "API is healthy"
+    else
+        print_error "API health check failed after update!"
+        print_error "Check logs: docker compose -f $COMPOSE_FILE logs api --tail=50"
+        print_error "Database backup: $BACKUP_DIR"
+        exit 1
+    fi
+
+    # --- Done ---
+    echo
+    echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║             Update completed successfully!                ║${NC}"
+    echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
+    echo
+    echo -e "${BLUE}Update summary:${NC}"
+    echo -e "  Previous commit: ${YELLOW}$CURRENT_COMMIT${NC}"
+    echo -e "  Current commit:  ${GREEN}$UPDATED_COMMIT${NC}"
+    echo -e "  Database backup: ${YELLOW}$BACKUP_DIR${NC}"
+    echo
+    echo -e "${BLUE}Access the application:${NC}"
+    echo -e "  Main App:    ${GREEN}http://$SERVER_IP${NC}"
+    echo -e "  Admin Panel: ${GREEN}http://$SERVER_IP/admin${NC}"
+    echo
+    echo -e "${BLUE}If something went wrong:${NC}"
+    echo -e "  Revert code:      ${YELLOW}git checkout $CURRENT_COMMIT${NC}"
+    echo -e "  Restore database: ${YELLOW}gunzip -c $BACKUP_DIR/postgres_backup.sql.gz | docker exec -i $POSTGRES_CONTAINER psql -U shopify_user -d shopify_db${NC}"
+    echo -e "  View logs:        ${YELLOW}docker compose -f $COMPOSE_FILE logs -f${NC}"
+    echo
+    print_success "Update complete!"
+    exit 0
+}
+
 # Banner
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
@@ -233,9 +484,29 @@ KEEP_DATABASE=false
 CLEAN_INSTALL=false
 MIGRATE_FROM_SQLITE=false
 SQLITE_PATH="./backend/app.db"
+UPDATE_MODE=false
+FORCE_UPDATE=false
+UPDATE_BRANCH=""
+UPDATE_REMOTE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --update)
+            UPDATE_MODE=true
+            shift
+            ;;
+        --force)
+            FORCE_UPDATE=true
+            shift
+            ;;
+        --branch)
+            UPDATE_BRANCH="$2"
+            shift 2
+            ;;
+        --remote)
+            UPDATE_REMOTE="$2"
+            shift 2
+            ;;
         --production)
             DEPLOYMENT_MODE="production"
             COMPOSE_FILE="docker-compose.postgres.prod.yml"
@@ -279,7 +550,15 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "Options:"
+            echo "Commands:"
+            echo "  --update                  Pull latest code from GitHub, backup DB, rebuild & restart"
+            echo ""
+            echo "Update options (use with --update):"
+            echo "  --force                   Rebuild even if already up to date"
+            echo "  --branch <branch>         Pull from specific branch (default: current branch)"
+            echo "  --remote <remote>         Pull from specific remote (default: origin)"
+            echo ""
+            echo "Install options:"
             echo "  --production              Run in production mode (default)"
             echo "  --development             Run in development mode"
             echo "  --clean                   Clean installation (remove all previous data)"
@@ -289,11 +568,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --help, -h                Show this help message"
             echo ""
             echo "Examples:"
+            echo "  $0 --update               # Pull latest from GitHub, backup DB, rebuild"
+            echo "  $0 --update --force       # Force rebuild even if no new commits"
+            echo "  $0 --update --branch dev  # Update from a specific branch"
             echo "  $0                        # Fresh PostgreSQL production installation"
-            echo "  $0 --development          # PostgreSQL development installation"
             echo "  $0 --clean                # Clean installation (remove all data)"
             echo "  $0 --keep-db              # Reinstall but keep existing database"
-            echo "  $0 --migrate-from-sqlite  # Migrate from SQLite to PostgreSQL"
             exit 0
             ;;
         *)
@@ -303,6 +583,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# If --update was passed, run the update flow and exit
+if [ "$UPDATE_MODE" = true ]; then
+    update_from_github
+fi
 
 print_status "Starting installation process..."
 
@@ -599,6 +884,7 @@ EXISTING_POSTGRES_PASSWORD=""
 EXISTING_SECRET_KEY=""
 EXISTING_ADMIN_SECRET_KEY=""
 EXISTING_JWT_SECRET_KEY=""
+EXISTING_ENCRYPTION_KEY=""
 
 if [ "$KEEP_DATABASE" = "true" ] && [ -f .env ]; then
     print_status "Preserving existing secrets from .env..."
@@ -606,6 +892,7 @@ if [ "$KEEP_DATABASE" = "true" ] && [ -f .env ]; then
     EXISTING_SECRET_KEY=$(grep '^SECRET_KEY=' .env | cut -d'=' -f2- || true)
     EXISTING_ADMIN_SECRET_KEY=$(grep '^ADMIN_SECRET_KEY=' .env | cut -d'=' -f2- || true)
     EXISTING_JWT_SECRET_KEY=$(grep '^JWT_SECRET_KEY=' .env | cut -d'=' -f2- || true)
+    EXISTING_ENCRYPTION_KEY=$(grep '^ENCRYPTION_KEY=' .env | cut -d'=' -f2- || true)
     if [ -n "$EXISTING_POSTGRES_PASSWORD" ]; then
         print_success "Existing secrets preserved (DB password, JWT keys, etc.)"
     fi
@@ -622,6 +909,7 @@ fi
 SECRET_KEY="${EXISTING_SECRET_KEY:-$(openssl rand -hex 32)}"
 ADMIN_SECRET_KEY="${EXISTING_ADMIN_SECRET_KEY:-$(openssl rand -hex 32)}"
 JWT_SECRET_KEY="${EXISTING_JWT_SECRET_KEY:-$(openssl rand -hex 32)}"
+ENCRYPTION_KEY="${EXISTING_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)}"
 
 # Create .env file
 print_status "Creating environment configuration..."
@@ -652,6 +940,7 @@ CORS_ORIGINS=http://$SERVER_IP,http://$SERVER_IP:3000,http://localhost,http://lo
 SECRET_KEY=${SECRET_KEY}
 ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
 JWT_SECRET_KEY=${JWT_SECRET_KEY}
+ENCRYPTION_KEY=${ENCRYPTION_KEY}
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
 

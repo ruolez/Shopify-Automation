@@ -175,7 +175,7 @@ class FraudAnalysisService:
                 'days_since_last_delivery': days_since_last_delivery,
                 'previous_order_cancelled': prev_order_cancelled,
                 # Store supporting data for analysis and debugging
-                'raw_shopify_data': order_data,
+                'raw_shopify_data': self._strip_pii_from_order_data(order_data),
                 'duplicate_match_details': order_data.get('custom_attributes', []),
                 'transaction_details': order_data.get('transactions', []),
                 'risk_assessment_details': order_data.get('risk_assessments', []),
@@ -221,6 +221,32 @@ class FraudAnalysisService:
             self.db.rollback()
             return None
     
+    def _strip_pii_from_order_data(self, order_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Strip personally identifiable information from order data before storage."""
+        import copy
+        stripped = copy.deepcopy(order_data)
+
+        pii_fields = ['email', 'phone', 'firstName', 'lastName', 'displayName',
+                       'first_name', 'last_name', 'name', 'address1', 'address2',
+                       'company']
+
+        def redact_dict(d):
+            if not isinstance(d, dict):
+                return d
+            for key in list(d.keys()):
+                if key in pii_fields and isinstance(d[key], str):
+                    d[key] = "[REDACTED]"
+                elif isinstance(d[key], dict):
+                    redact_dict(d[key])
+                elif isinstance(d[key], list):
+                    for item in d[key]:
+                        if isinstance(item, dict):
+                            redact_dict(item)
+            return d
+
+        redact_dict(stripped)
+        return stripped
+
     async def analyze_order_fraud_with_enhanced_delivery(self, order_name: str) -> Optional['FraudAnalysis']:
         """Analyze an order for fraud using enhanced delivery tracking with MCP-optimized GraphQL.
         
