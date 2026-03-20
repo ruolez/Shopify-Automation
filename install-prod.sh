@@ -457,15 +457,39 @@ get_server_config() {
     echo
     print_status "Server Configuration Setup"
     echo
-    
-    # Get server IP address
-    echo -e "${BLUE}Please enter the server IP address that will host this application:${NC}"
-    echo -e "${YELLOW}  - For local installation: use 'localhost' or '127.0.0.1'${NC}"
-    echo -e "${YELLOW}  - For network installation: use the server's LAN IP (e.g., 192.168.1.112)${NC}"
-    echo -e "${YELLOW}  - For internet access: use the server's public IP${NC}"
-    echo
-    read -p "Server IP address: " SERVER_IP
-    
+
+    # Auto-detect LAN IP address
+    DETECTED_IP=""
+    if command -v ip &> /dev/null; then
+        DETECTED_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' | head -1)
+    fi
+    if [ -z "$DETECTED_IP" ] && command -v hostname &> /dev/null; then
+        DETECTED_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    if [ -z "$DETECTED_IP" ] && command -v ifconfig &> /dev/null; then
+        DETECTED_IP=$(ifconfig 2>/dev/null | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | head -1 | awk '{print $NF}')
+    fi
+
+    if [ -n "$DETECTED_IP" ]; then
+        echo -e "${BLUE}Detected network IP: ${GREEN}$DETECTED_IP${NC}"
+        echo
+        read -p "Use $DETECTED_IP? (Y/n) " -n 1 -r
+        echo
+        if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
+            SERVER_IP="$DETECTED_IP"
+        else
+            echo
+            echo -e "${BLUE}Enter the server IP address:${NC}"
+            read -p "Server IP address: " SERVER_IP
+        fi
+    else
+        echo -e "${BLUE}Could not auto-detect IP. Please enter the server IP address:${NC}"
+        echo -e "${YELLOW}  - For local installation: use 'localhost' or '127.0.0.1'${NC}"
+        echo -e "${YELLOW}  - For network installation: use the server's LAN IP${NC}"
+        echo
+        read -p "Server IP address: " SERVER_IP
+    fi
+
     if [ -z "$SERVER_IP" ]; then
         print_error "Server IP address is required!"
         exit 1
