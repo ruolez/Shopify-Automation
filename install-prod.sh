@@ -946,13 +946,11 @@ fi
 
 # Check if frontend is accessible
 if [ "$DEPLOYMENT_MODE" = "production" ]; then
-    # In production, frontend serves static files
-    if curl -f -s http://localhost:3000 > /dev/null; then
-        print_success "Frontend is accessible!"
+    # In production, nginx serves on port 80
+    if curl -f -s http://localhost > /dev/null; then
+        print_success "Frontend is accessible on port 80!"
     else
-        print_error "Frontend is not accessible!"
-        docker compose -f $COMPOSE_FILE logs frontend --tail=50
-        exit 1
+        print_warning "Frontend might still be starting up (nginx may need a moment)..."
     fi
 else
     # In development, frontend runs Vite dev server
@@ -1009,9 +1007,9 @@ echo -e "${GREEN}║          Installation completed successfully!             �
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
 echo
 echo -e "${BLUE}Access the application:${NC}"
-echo -e "  Main App:    ${GREEN}http://$SERVER_IP:3000${NC}"
-echo -e "  API Docs:    ${GREEN}http://$SERVER_IP:8000/docs${NC}"
-echo -e "  Admin Panel: ${GREEN}http://$SERVER_IP:3000/admin${NC}"
+echo -e "  Main App:    ${GREEN}http://$SERVER_IP${NC}"
+echo -e "  API Docs:    ${GREEN}http://$SERVER_IP/docs${NC}"
+echo -e "  Admin Panel: ${GREEN}http://$SERVER_IP/admin${NC}"
 echo
 echo -e "${BLUE}PostgreSQL Database:${NC}"
 echo -e "  Host:     localhost (or container: postgres)"

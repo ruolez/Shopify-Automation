@@ -130,17 +130,10 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
       args:
-        - NODE_ENV=production
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     container_name: shopify_frontend_prod
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
-    volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
     restart: always
 
   nginx:
@@ -148,20 +141,12 @@ services:
     container_name: shopify_nginx_prod
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./frontend/dist:/usr/share/nginx/html:ro
-      # Add Let's Encrypt support
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
     depends_on:
       - api
       - frontend
     restart: always
-    # Add command for auto-reload when certificates change
-    command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
 
   # Optional: Add pgAdmin for database management
   pgadmin:
