@@ -1,0 +1,207 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (Production)
+  postgres:
+    image: postgres:15-alpine
+    container_name: shopify_postgres_prod
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=shopify_db
+      - POSTGRES_USER=shopify_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=en_US.UTF-8
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations/init_postgres.sql:/docker-entrypoint-initdb.d/01-init.sql
+      # Add backup volume for production
+      - ./backups/postgres:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopify_user -d shopify_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    restart: always
+    # Production-specific settings
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=1310kB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=4
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=4
+      -c max_parallel_maintenance_workers=2
+
+  redis:
+    image: redis:7-alpine
+    container_name: shopify_redis_prod
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    restart: always
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_api_prod
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ENVIRONMENT=production
+      # PostgreSQL connection pool settings (production)
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
+      - DB_ECHO=false
+    volumes:
+      - ./backend:/app:ro  # Read-only in production
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: always
+    # Production command without reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_worker_prod
+    environment:
+      - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ENVIRONMENT=production
+      # PostgreSQL connection pool settings (production)
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
+      - DB_ECHO=false
+    volumes:
+      - ./backend:/app:ro  # Read-only in production
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: always
+    # Production worker configuration
+    command: celery -A tasks.celery worker --loglevel=warning --concurrency=8 --max-tasks-per-child=100
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopify_scheduler_prod
+    environment:
+      - DATABASE_URL=postgresql://shopify_user:${POSTGRES_PASSWORD}@postgres:5432/shopify_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - ENVIRONMENT=production
+      # PostgreSQL connection pool settings (production)
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
+      - DB_ECHO=false
+    volumes:
+      - ./backend:/app:ro  # Read-only in production
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: always
+    command: celery -A tasks.celery beat --loglevel=warning
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+    container_name: shopify_frontend_prod
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    container_name: shopify_nginx_prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      # Add Let's Encrypt support
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - api
+      - frontend
+    restart: always
+    # Add command for auto-reload when certificates change
+    command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+
+  # Optional: Add pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: shopify_pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@example.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    restart: always
+    profiles:
+      - tools  # Only start when explicitly requested
+
+volumes:
+  redis_data:
+  postgres_data:
+  pgadmin_data:
