@@ -5,7 +5,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, text
 
 from database import get_db
@@ -187,31 +187,41 @@ async def get_fraud_analyses(
         if matched_rules:
             rules_list = [r.strip() for r in matched_rules.split(",") if r.strip()]
             if rules_list:
-                # Get all analyses and filter in Python for complex JSON filtering
-                all_analyses = query.all()
+                # Filter using lightweight tuples in chunks to avoid loading all full ORM objects
                 filtered_ids = []
+                chunk_size = 500
+                offset_val = 0
 
-                for analysis in all_analyses:
-                    if analysis.rule_processing_results:
-                        results = analysis.rule_processing_results
-                        if isinstance(results, dict):
-                            rule_results = results.get("results", [])
+                while True:
+                    chunk = query.with_entities(
+                        FraudAnalysis.id,
+                        FraudAnalysis.rule_processing_results
+                    ).offset(offset_val).limit(chunk_size).all()
+
+                    if not chunk:
+                        break
+
+                    for analysis_id, rule_results_data in chunk:
+                        if rule_results_data and isinstance(rule_results_data, dict):
+                            rule_results = rule_results_data.get("results", [])
                             matched_rule_names = [
                                 r.get("rule_name", "")
                                 for r in rule_results
                                 if isinstance(r, dict) and r.get("matched", False)
                             ]
 
-                            # Check for "No rules matched" special case
                             if "No rules matched" in rules_list and not matched_rule_names:
-                                filtered_ids.append(analysis.id)
+                                filtered_ids.append(analysis_id)
                             elif any(rule_name in rules_list for rule_name in matched_rule_names):
-                                filtered_ids.append(analysis.id)
+                                filtered_ids.append(analysis_id)
+                        elif "No rules matched" in rules_list:
+                            filtered_ids.append(analysis_id)
+
+                    offset_val += chunk_size
 
                 if filtered_ids:
                     query = db.query(FraudAnalysis).filter(FraudAnalysis.id.in_(filtered_ids))
                 else:
-                    # No matches found
                     return {
                         "total": 0,
                         "skip": skip,
@@ -237,15 +247,13 @@ async def get_fraud_analyses(
         else:
             query = query.order_by(sort_column.desc())
 
-        # Apply pagination
-        analyses = query.offset(skip).limit(limit).all()
+        # Apply pagination with eager loading to avoid N+1 store queries
+        analyses = query.options(selectinload(FraudAnalysis.store)).offset(skip).limit(limit).all()
 
         # Convert to response format
         result = []
         for analysis in analyses:
-            store = db.query(ShopifyStore).filter(
-                ShopifyStore.id == analysis.store_id
-            ).first()
+            store = analysis.store
 
             result.append({
                 "id": analysis.id,

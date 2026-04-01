@@ -46,7 +46,9 @@ celery.conf.update(
     task_time_limit=30 * 60,  # 30 minutes
     task_soft_time_limit=25 * 60,  # 25 minutes
     worker_prefetch_multiplier=1,
-    worker_max_tasks_per_child=1000,
+    worker_max_tasks_per_child=100,
+    result_expires=300,
+    task_ignore_result=True,
 )
 
 # Schedule periodic tasks - Dynamic scheduling based on user settings
@@ -1066,11 +1068,15 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     except Exception:
                         pass
 
+            # Release accumulated ORM objects from session identity map after each page
+            # to prevent memory growth when processing stores with many orders
+            db.expire_all()
+
             # Check for next page
             page_info = orders_data["pageInfo"]
             if not page_info["hasNextPage"]:
                 break
-            
+
             cursor = page_info["endCursor"]
     
     except Exception as e:
