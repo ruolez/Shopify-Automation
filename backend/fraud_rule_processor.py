@@ -471,8 +471,8 @@ class FraudRuleProcessor:
             }
     
     async def _action_place_on_hold(self, parameters: Dict[str, Any], fraud_data: Dict[str, Any], order_name: str, rule_name: str) -> Dict[str, Any]:
-        """Execute place_on_hold action using Shopify client."""
-        # Get order ID from fraud_data
+        """Execute place_on_hold action — places a hold on EVERY eligible fulfillment
+        order on the Shopify order so that all locations are locked down, not just one."""
         order_id = fraud_data.get("order_id")
         if not order_id:
             return {
@@ -480,11 +480,10 @@ class FraudRuleProcessor:
                 "success": False,
                 "error": "Order ID not available in fraud data"
             }
-        
+
         try:
-            # Get fulfillment orders for this order
             fulfillment_orders = await self.shopify_client.get_fulfillment_orders_for_order(order_id)
-            
+
             if not fulfillment_orders:
                 logger.warning(f"No fulfillment orders found for order {order_name}. Order may be too new or already fulfilled.")
                 return {
@@ -492,59 +491,101 @@ class FraudRuleProcessor:
                     "success": False,
                     "error": "No fulfillment orders available for hold"
                 }
-            
-            # Apply hold to the first available fulfillment order
-            # Use the first fulfillment order that is not already on hold
-            hold_applied = False
-            errors = []
-            
+
+            # Statuses that cannot or should not be (re-)held.
+            INELIGIBLE_STATUSES = {"ON_HOLD", "CANCELLED", "CLOSED", "INCOMPLETE"}
+
+            held: List[Dict[str, Any]] = []
+            skipped: List[Dict[str, Any]] = []
+            failed: List[Dict[str, Any]] = []
+
             for fulfillment_order in fulfillment_orders:
                 fo_id = fulfillment_order.get("id")
-                fo_status = fulfillment_order.get("status", "").upper()
-                
-                # Skip if already on hold or in a state that can't be held
-                if fo_status in ["ON_HOLD", "CANCELLED", "CLOSED", "INCOMPLETE"]:
-                    logger.debug(f"Skipping fulfillment order {fo_id} with status {fo_status}")
+                fo_status = (fulfillment_order.get("status") or "").upper()
+                location_name = (
+                    fulfillment_order.get("assignedLocation", {})
+                    .get("location", {})
+                    .get("name")
+                ) or "unknown location"
+
+                if fo_status in INELIGIBLE_STATUSES:
+                    logger.info(
+                        f"Skipping fulfillment order {fo_id} at '{location_name}' "
+                        f"for order {order_name} — status={fo_status}"
+                    )
+                    skipped.append({"id": fo_id, "status": fo_status, "location": location_name})
                     continue
-                
-                # Apply hold with fraud reason and rule context
+
                 result = await self.shopify_client.apply_fulfillment_hold(
                     fulfillment_order_id=fo_id,
                     reason="HIGH_RISK_OF_FRAUD",
                     reason_notes=f"Fraud rule '{rule_name}' triggered",
                     notify_merchant=True
                 )
-                
+
                 if result.get("success"):
-                    hold_applied = True
-                    logger.info(f"Successfully placed hold on order {order_name} (fulfillment order: {fo_id}) due to fraud rule '{rule_name}'")
-                    
-                    return {
-                        "type": "place_on_hold",
-                        "success": True,
-                        "fulfillment_order_id": fo_id,
-                        "hold_reason": "HIGH_RISK_OF_FRAUD",
-                        "message": f"Order placed on hold due to fraud rule '{rule_name}'"
-                    }
+                    logger.info(
+                        f"Placed hold on fulfillment order {fo_id} at '{location_name}' "
+                        f"for order {order_name} (rule='{rule_name}')"
+                    )
+                    held.append({"id": fo_id, "location": location_name})
                 else:
-                    error_msg = result.get("errors", [{"message": "Unknown error"}])[0].get("message", "Unknown error")
-                    errors.append(f"FO {fo_id}: {error_msg}")
-                    logger.warning(f"Failed to place hold on fulfillment order {fo_id}: {error_msg}")
-            
-            # If we couldn't apply hold to any fulfillment order
-            if not hold_applied:
-                error_summary = "Failed to place hold on any fulfillment order. " + "; ".join(errors) if errors else "No eligible fulfillment orders found."
-                logger.error(f"Could not place hold on order {order_name}: {error_summary}")
-                
-                return {
-                    "type": "place_on_hold",
-                    "success": False,
-                    "error": error_summary
-                }
-                
+                    error_msg = (
+                        result.get("errors", [{"message": "Unknown error"}])[0]
+                        .get("message", "Unknown error")
+                    )
+                    logger.error(
+                        f"Failed to place hold on fulfillment order {fo_id} at '{location_name}' "
+                        f"for order {order_name}: {error_msg}"
+                    )
+                    failed.append({"id": fo_id, "location": location_name, "error": error_msg})
+
+            total_considered = len(held) + len(failed)
+            total_fos = len(fulfillment_orders)
+            # Success = every eligible FO was held AND the order is effectively locked
+            # (either something was held now, or every FO was already in an ineligible state
+            # such as ON_HOLD, meaning the order is already locked down).
+            success = len(failed) == 0 and (len(held) > 0 or len(skipped) == total_fos)
+
+            if failed:
+                message = (
+                    f"Partial hold on order {order_name}: "
+                    f"{len(held)}/{total_considered} fulfillment orders held, "
+                    f"{len(failed)} failed, {len(skipped)} skipped."
+                )
+                logger.error(
+                    f"Partial hold failure on order {order_name}: "
+                    f"held={[h['id'] for h in held]} failed={failed} skipped={skipped}"
+                )
+            elif held:
+                message = (
+                    f"Placed hold on {len(held)}/{total_fos} fulfillment orders "
+                    f"across {len({h['location'] for h in held})} location(s) "
+                    f"for order {order_name} due to fraud rule '{rule_name}'."
+                )
+            else:
+                # Nothing to hold — every FO was already ineligible (e.g. all ON_HOLD).
+                message = (
+                    f"No hold applied to order {order_name}: all {total_fos} fulfillment "
+                    f"order(s) were already in an ineligible state ({skipped})."
+                )
+
+            return {
+                "type": "place_on_hold",
+                "success": success,
+                "hold_reason": "HIGH_RISK_OF_FRAUD",
+                "fulfillment_orders_held": held,
+                "fulfillment_orders_skipped": skipped,
+                "fulfillment_orders_failed": failed,
+                "message": message,
+                # Backwards-compatibility: older consumers read a single fulfillment_order_id.
+                "fulfillment_order_id": held[0]["id"] if held else None,
+                "error": None if success else message,
+            }
+
         except Exception as e:
             logger.error(f"Error placing hold on order {order_name}: {str(e)}")
-            
+
             return {
                 "type": "place_on_hold",
                 "success": False,

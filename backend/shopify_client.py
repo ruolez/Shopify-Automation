@@ -1535,13 +1535,19 @@ class ShopifyClient:
             return 0
     
     async def get_fulfillment_orders_for_order(self, order_id: str) -> List[Dict]:
-        """Get all fulfillment orders for a given order ID"""
+        """Get ALL fulfillment orders for a given order ID, paginating through
+        every page so callers (e.g. the fraud Hold action) can act on every
+        fulfillment location on the order without silently dropping the tail."""
         query = """
-        query getFulfillmentOrders($orderId: ID!) {
+        query getFulfillmentOrders($orderId: ID!, $cursor: String) {
             order(id: $orderId) {
                 id
                 name
-                fulfillmentOrders(first: 10) {
+                fulfillmentOrders(first: 50, after: $cursor) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
                     edges {
                         node {
                             id
@@ -1584,26 +1590,38 @@ class ShopifyClient:
             }
         }
         """
-        
-        variables = {"orderId": order_id}
-        
+
+        fulfillment_orders: List[Dict] = []
+        cursor: Optional[str] = None
+
         try:
-            result = await self._make_graphql_request(query, variables)
-            order = result.get("data", {}).get("order", {})
-            
-            if not order:
-                logger.warning(f"Order {order_id} not found")
-                return []
-            
-            fulfillment_orders = []
-            for edge in order.get("fulfillmentOrders", {}).get("edges", []):
-                fulfillment_orders.append(edge["node"])
-            
+            while True:
+                result = await self._make_graphql_request(query, {"orderId": order_id, "cursor": cursor})
+                order = result.get("data", {}).get("order") or {}
+
+                if not order:
+                    logger.warning(f"Order {order_id} not found")
+                    return fulfillment_orders
+
+                fo_conn = order.get("fulfillmentOrders") or {}
+                for edge in fo_conn.get("edges", []):
+                    fulfillment_orders.append(edge["node"])
+
+                page_info = fo_conn.get("pageInfo") or {}
+                if not page_info.get("hasNextPage"):
+                    break
+                cursor = page_info.get("endCursor")
+                if not cursor:
+                    break
+
+            logger.debug(
+                f"Fetched {len(fulfillment_orders)} fulfillment order(s) for order {order_id}"
+            )
             return fulfillment_orders
-            
+
         except Exception as e:
             logger.error(f"Failed to get fulfillment orders for order {order_id}: {str(e)}")
-            return []
+            return fulfillment_orders
     
     async def apply_fulfillment_hold(self, fulfillment_order_id: str, reason: str, reason_notes: str = "", notify_merchant: bool = True) -> Dict:
         """Apply a hold to a fulfillment order"""
