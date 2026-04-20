@@ -55,6 +55,7 @@ class ShopifyStore(Base):
     order_logs = relationship("OrderLog", back_populates="store", cascade="all, delete-orphan")
     location_mappings = relationship("LocationMapping", back_populates="store", cascade="all, delete-orphan")
     fraud_analyses = relationship("FraudAnalysis", back_populates="store", cascade="all, delete-orphan")
+    fraud_rule_stores = relationship("FraudRuleStore", back_populates="store", cascade="all, delete-orphan")
 
 class ProcessingRule(Base):
     __tablename__ = "processing_rules"
@@ -91,6 +92,27 @@ class FraudDetectionRule(Base):
     
     # Relationships
     user = relationship("User", back_populates="fraud_detection_rules")
+    store_mappings = relationship("FraudRuleStore", back_populates="rule", cascade="all, delete-orphan")
+    applicable_stores = relationship(
+        "ShopifyStore",
+        secondary="fraud_rule_stores",
+        viewonly=True,
+    )
+
+class FraudRuleStore(Base):
+    __tablename__ = "fraud_rule_stores"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fraud_rule_id = Column(Integer, ForeignKey("fraud_detection_rules.id", ondelete="CASCADE"), nullable=False)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    rule = relationship("FraudDetectionRule", back_populates="store_mappings")
+    store = relationship("ShopifyStore", back_populates="fraud_rule_stores")
+
+    __table_args__ = (
+        UniqueConstraint('fraud_rule_id', 'store_id', name='unique_fraud_rule_store'),
+    )
 
 class OrderLog(Base):
     __tablename__ = "order_logs"

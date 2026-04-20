@@ -1366,6 +1366,23 @@ const FraudDetection: React.FC = () => {
                                       {rule.description}
                                     </p>
                                   )}
+                                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    {rule.stores && rule.stores.length > 0 ? (
+                                      rule.stores.map((s) => (
+                                        <span
+                                          key={s.id}
+                                          className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+                                          title={s.shop_domain}
+                                        >
+                                          {s.shop_name}
+                                        </span>
+                                      ))
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-700 dark:bg-dark-200 dark:text-dark-600">
+                                        All stores
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
                                     Created:{" "}
                                     {formatDate(rule.created_at, {

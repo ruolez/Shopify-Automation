@@ -25,6 +25,7 @@ MIGRATION_ORDER = [
     "add_user_id_to_task_status",
     "add_fraud_analyses_archive",
     "remove_age_checker_from_archive",
+    "add_fraud_rule_stores",
 ]
 
 

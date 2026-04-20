@@ -16,6 +16,12 @@ export interface FraudRuleAction {
   parameters: Record<string, any>;
 }
 
+export interface FraudRuleStoreBrief {
+  id: number;
+  shop_name: string;
+  shop_domain: string;
+}
+
 export interface FraudRule {
   id: number;
   name: string;
@@ -25,6 +31,7 @@ export interface FraudRule {
   priority: number;
   delay_ms: number;
   is_active: boolean;
+  stores?: FraudRuleStoreBrief[];
   created_at: string;
 }
 
@@ -36,6 +43,7 @@ export interface FraudRuleForm {
   priority: number;
   delay_ms: number;
   is_active: boolean;
+  store_ids?: number[];
 }
 
 export interface FraudRuleField {

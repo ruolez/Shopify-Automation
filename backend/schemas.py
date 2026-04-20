@@ -473,6 +473,7 @@ class FraudRuleCreate(BaseModel):
     priority: int = 0
     delay_ms: int = 10  # Delay in milliseconds after rule execution
     is_active: bool = True
+    store_ids: Optional[List[int]] = None  # None or [] = applies to all stores
     
     @validator('name')
     def validate_name(cls, v):
@@ -495,6 +496,15 @@ class FraudRuleCreate(BaseModel):
             return FraudRuleConditionGroup(conditions=v)
         return v
 
+class FraudRuleStoreBrief(BaseModel):
+    id: int
+    shop_name: str
+    shop_domain: str
+
+    class Config:
+        from_attributes = True
+
+
 class FraudRuleResponse(BaseModel):
     id: int
     name: str
@@ -504,9 +514,10 @@ class FraudRuleResponse(BaseModel):
     priority: int
     delay_ms: int
     is_active: bool
+    stores: List[FraudRuleStoreBrief] = []
     created_at: datetime
     updated_at: Optional[datetime]
-    
+
     class Config:
         from_attributes = True
 

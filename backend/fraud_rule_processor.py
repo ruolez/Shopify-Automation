@@ -7,9 +7,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 
-from models import FraudDetectionRule, FraudAnalysis, OrderLog, User, ShopifyStore
+from models import FraudDetectionRule, FraudAnalysis, OrderLog, User, ShopifyStore, FraudRuleStore
 from rule_engine import RuleEngine
 from fraud_service import FraudAnalysisService
 from logging_config import get_logger, debug_log, DEBUG_LOGGING
@@ -79,10 +79,21 @@ class FraudRuleProcessor:
             debug_log(logger, f"  - customer_name (DB): {fraud_analysis.customer_name}")
             debug_log(logger, f"  - first_time_customer (DB): {fraud_analysis.is_first_time_customer}")
             
-            # Get all active fraud rules for the user, ordered by priority
+            # Get active fraud rules for the user, filtered by store scope.
+            # A rule with NO entries in fraud_rule_stores applies to all of the user's stores
+            # (backward-compatible). One or more entries restricts the rule to those stores.
+            has_any_mapping = self.db.query(FraudRuleStore.fraud_rule_id).filter(
+                FraudRuleStore.fraud_rule_id == FraudDetectionRule.id
+            ).exists()
+            applies_to_this_store = self.db.query(FraudRuleStore.fraud_rule_id).filter(
+                FraudRuleStore.fraud_rule_id == FraudDetectionRule.id,
+                FraudRuleStore.store_id == self.store.id,
+            ).exists()
+
             fraud_rules = self.db.query(FraudDetectionRule).filter(
                 FraudDetectionRule.user_id == self.user.id,
-                FraudDetectionRule.is_active == True
+                FraudDetectionRule.is_active == True,
+                or_(~has_any_mapping, applies_to_this_store),
             ).order_by(FraudDetectionRule.priority.asc()).all()
             
             if not fraud_rules:

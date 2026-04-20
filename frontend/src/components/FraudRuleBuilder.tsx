@@ -13,6 +13,8 @@ import {
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import { fraudRuleApi, type FraudRuleForm, type FraudRule, type FraudRuleConditionGroup, type FraudRuleSchema } from "../utils/fraudRuleApi";
+import api from "../utils/api";
+import type { Store } from "../types";
 import LoadingSpinner from "./LoadingSpinner";
 
 const fraudRuleSchema = z.object({
@@ -52,6 +54,7 @@ const fraudRuleSchema = z.object({
   priority: z.number().min(0).max(100),
   delay_ms: z.number().min(0).max(60000),
   is_active: z.boolean(),
+  store_ids: z.array(z.number()).optional().default([]),
 });
 
 interface FraudRuleBuilderProps {
@@ -93,6 +96,15 @@ const FraudRuleBuilder: React.FC<FraudRuleBuilderProps> = ({
     enabled: isEditing && !!ruleId,
   });
 
+  // Fetch stores for the per-rule store selector
+  const { data: stores } = useQuery<Store[]>({
+    queryKey: ["stores"],
+    queryFn: async () => {
+      const response = await api.get("/stores");
+      return response.data;
+    },
+  });
+
   const {
     register,
     control,
@@ -113,8 +125,21 @@ const FraudRuleBuilder: React.FC<FraudRuleBuilderProps> = ({
       priority: 0,
       delay_ms: 10,
       is_active: true,
+      store_ids: [],
     },
   });
+
+  const selectedStoreIds = (watch("store_ids") ?? []) as number[];
+
+  const toggleStoreId = (storeId: number) => {
+    const current = new Set(selectedStoreIds);
+    if (current.has(storeId)) {
+      current.delete(storeId);
+    } else {
+      current.add(storeId);
+    }
+    setValue("store_ids", Array.from(current), { shouldDirty: true });
+  };
 
   const {
     fields: conditionFields,
@@ -195,6 +220,10 @@ const FraudRuleBuilder: React.FC<FraudRuleBuilderProps> = ({
       setValue("priority", existingRule.priority);
       setValue("delay_ms", existingRule.delay_ms || 10);
       setValue("is_active", existingRule.is_active);
+      setValue(
+        "store_ids",
+        (existingRule.stores ?? []).map((s) => s.id),
+      );
     }
   }, [existingRule, setValue, replaceConditions]);
 
@@ -400,6 +429,52 @@ const FraudRuleBuilder: React.FC<FraudRuleBuilderProps> = ({
               Activate this fraud rule immediately
             </span>
           </label>
+        </div>
+
+        <div className="mt-6">
+          <label className="label">Apply to stores</label>
+          <p className="mt-1 mb-3 text-xs text-gray-500 dark:text-dark-400">
+            Leave empty to apply to all active stores. Pick specific stores to
+            restrict this rule.
+          </p>
+          {!stores ? (
+            <div className="text-sm text-gray-500 dark:text-dark-400">
+              Loading stores…
+            </div>
+          ) : stores.length === 0 ? (
+            <div className="text-sm text-gray-500 dark:text-dark-400">
+              No stores connected yet.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {stores.map((store) => {
+                const checked = selectedStoreIds.includes(store.id);
+                return (
+                  <button
+                    type="button"
+                    key={store.id}
+                    onClick={() => toggleStoreId(store.id)}
+                    className={`inline-flex items-center px-3 py-1.5 rounded-full border text-sm transition-colors ${
+                      checked
+                        ? "bg-red-600 border-red-600 text-white hover:bg-red-700"
+                        : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50 dark:bg-dark-100 dark:border-dark-200 dark:text-dark-600 dark:hover:bg-dark-200"
+                    }`}
+                  >
+                    {store.shop_name}
+                    {!store.is_active && (
+                      <span className="ml-2 text-xs opacity-70">(inactive)</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {selectedStoreIds.length === 0 && stores && stores.length > 0 && (
+            <p className="mt-2 text-xs text-gray-500 dark:text-dark-400">
+              Currently applies to all {stores.length} store
+              {stores.length === 1 ? "" : "s"}.
+            </p>
+          )}
         </div>
       </motion.div>
 

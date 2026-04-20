@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, text
 
 from database import get_db
-from models import User, ShopifyStore, OrderLog, Settings, FraudAnalysis, FraudDetectionRule
+from models import User, ShopifyStore, OrderLog, Settings, FraudAnalysis, FraudDetectionRule, FraudRuleStore
 from auth import get_current_user
-from schemas import FraudRuleCreate, FraudRuleResponse
+from schemas import FraudRuleCreate, FraudRuleResponse, FraudRuleStoreBrief
 from shopify_client import ShopifyClient
 from fraud_service import FraudAnalysisService
 from dependencies import _format_timestamp_with_user_timezone
@@ -981,6 +981,55 @@ async def bulk_archive_fulfilled_cancelled_orders(
         )
 
 
+def _validate_store_ids_for_user(db: Session, user_id: int, store_ids: List[int]) -> List[int]:
+    """Return the unique, user-owned subset of store_ids. Raises 400 on any foreign id."""
+    if not store_ids:
+        return []
+    unique_ids = list({int(sid) for sid in store_ids})
+    owned = {
+        row[0]
+        for row in db.query(ShopifyStore.id).filter(
+            ShopifyStore.id.in_(unique_ids),
+            ShopifyStore.user_id == user_id,
+        ).all()
+    }
+    missing = [sid for sid in unique_ids if sid not in owned]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Store ids do not belong to this user: {missing}",
+        )
+    return unique_ids
+
+
+def _replace_rule_store_mappings(db: Session, rule_id: int, store_ids: List[int]) -> None:
+    """Delete existing mappings for the rule and insert the new set (no commit)."""
+    db.query(FraudRuleStore).filter(FraudRuleStore.fraud_rule_id == rule_id).delete(synchronize_session=False)
+    for sid in store_ids:
+        db.add(FraudRuleStore(fraud_rule_id=rule_id, store_id=sid))
+
+
+def _serialize_fraud_rule(rule: FraudDetectionRule) -> FraudRuleResponse:
+    """Build a response payload including the rule's applicable stores."""
+    stores = [
+        FraudRuleStoreBrief(id=s.id, shop_name=s.shop_name, shop_domain=s.shop_domain)
+        for s in (rule.applicable_stores or [])
+    ]
+    return FraudRuleResponse(
+        id=rule.id,
+        name=rule.name,
+        description=rule.description,
+        conditions=rule.conditions,
+        actions=rule.actions,
+        priority=rule.priority,
+        delay_ms=rule.delay_ms,
+        is_active=rule.is_active,
+        stores=stores,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
 # Fraud Rule Management endpoints
 @router.post("/fraud-rules", status_code=status.HTTP_201_CREATED, response_model=FraudRuleResponse)
 async def create_fraud_rule(
@@ -999,6 +1048,10 @@ async def create_fraud_rule(
         # Normalize fraud risk level values to uppercase
         conditions_to_save = _normalize_fraud_rule_conditions(conditions_to_save)
 
+        validated_store_ids = _validate_store_ids_for_user(
+            db, current_user.id, rule_data.store_ids or []
+        )
+
         db_rule = FraudDetectionRule(
             user_id=current_user.id,
             name=rule_data.name,
@@ -1010,23 +1063,20 @@ async def create_fraud_rule(
             is_active=rule_data.is_active
         )
         db.add(db_rule)
+        db.flush()  # obtain db_rule.id without committing yet
+
+        for sid in validated_store_ids:
+            db.add(FraudRuleStore(fraud_rule_id=db_rule.id, store_id=sid))
+
         db.commit()
         db.refresh(db_rule)
 
-        logger.info(f"Created fraud detection rule '{rule_data.name}' for user {current_user.id}")
-
-        return FraudRuleResponse(
-            id=db_rule.id,
-            name=db_rule.name,
-            description=db_rule.description,
-            conditions=db_rule.conditions,
-            actions=db_rule.actions,
-            priority=db_rule.priority,
-            delay_ms=db_rule.delay_ms,
-            is_active=db_rule.is_active,
-            created_at=db_rule.created_at,
-            updated_at=db_rule.updated_at
+        logger.info(
+            f"Created fraud detection rule '{rule_data.name}' for user {current_user.id} "
+            f"(stores={validated_store_ids or 'all'})"
         )
+
+        return _serialize_fraud_rule(db_rule)
 
     except Exception as e:
         logger.error(f"Error creating fraud rule: {str(e)}")
@@ -1044,25 +1094,15 @@ async def get_fraud_rules(
 ):
     """Get all fraud detection rules for the current user"""
     try:
-        rules = db.query(FraudDetectionRule).filter(
-            FraudDetectionRule.user_id == current_user.id
-        ).order_by(FraudDetectionRule.priority.asc()).all()
+        rules = (
+            db.query(FraudDetectionRule)
+            .options(selectinload(FraudDetectionRule.applicable_stores))
+            .filter(FraudDetectionRule.user_id == current_user.id)
+            .order_by(FraudDetectionRule.priority.asc())
+            .all()
+        )
 
-        return [
-            FraudRuleResponse(
-                id=rule.id,
-                name=rule.name,
-                description=rule.description,
-                conditions=rule.conditions,
-                actions=rule.actions,
-                priority=rule.priority,
-                delay_ms=rule.delay_ms,
-                is_active=rule.is_active,
-                created_at=rule.created_at,
-                updated_at=rule.updated_at
-            )
-            for rule in rules
-        ]
+        return [_serialize_fraud_rule(rule) for rule in rules]
 
     except Exception as e:
         logger.error(f"Error fetching fraud rules: {str(e)}")
@@ -1160,10 +1200,15 @@ async def get_fraud_rule(
 ):
     """Get a specific fraud detection rule"""
     try:
-        rule = db.query(FraudDetectionRule).filter(
-            FraudDetectionRule.id == rule_id,
-            FraudDetectionRule.user_id == current_user.id
-        ).first()
+        rule = (
+            db.query(FraudDetectionRule)
+            .options(selectinload(FraudDetectionRule.applicable_stores))
+            .filter(
+                FraudDetectionRule.id == rule_id,
+                FraudDetectionRule.user_id == current_user.id,
+            )
+            .first()
+        )
 
         if not rule:
             raise HTTPException(
@@ -1171,18 +1216,7 @@ async def get_fraud_rule(
                 detail="Fraud rule not found"
             )
 
-        return FraudRuleResponse(
-            id=rule.id,
-            name=rule.name,
-            description=rule.description,
-            conditions=rule.conditions,
-            actions=rule.actions,
-            priority=rule.priority,
-            delay_ms=rule.delay_ms,
-            is_active=rule.is_active,
-            created_at=rule.created_at,
-            updated_at=rule.updated_at
-        )
+        return _serialize_fraud_rule(rule)
 
     except HTTPException:
         raise
@@ -1223,6 +1257,10 @@ async def update_fraud_rule(
         # Normalize fraud risk level values to uppercase
         conditions_to_save = _normalize_fraud_rule_conditions(conditions_to_save)
 
+        validated_store_ids = _validate_store_ids_for_user(
+            db, current_user.id, rule_data.store_ids or []
+        )
+
         # Update rule fields
         rule.name = rule_data.name
         rule.description = rule_data.description
@@ -1233,23 +1271,17 @@ async def update_fraud_rule(
         rule.is_active = rule_data.is_active
         rule.updated_at = func.now()
 
+        _replace_rule_store_mappings(db, rule.id, validated_store_ids)
+
         db.commit()
         db.refresh(rule)
 
-        logger.info(f"Updated fraud detection rule '{rule_data.name}' for user {current_user.id}")
-
-        return FraudRuleResponse(
-            id=rule.id,
-            name=rule.name,
-            description=rule.description,
-            conditions=rule.conditions,
-            actions=rule.actions,
-            priority=rule.priority,
-            delay_ms=rule.delay_ms,
-            is_active=rule.is_active,
-            created_at=rule.created_at,
-            updated_at=rule.updated_at
+        logger.info(
+            f"Updated fraud detection rule '{rule_data.name}' for user {current_user.id} "
+            f"(stores={validated_store_ids or 'all'})"
         )
+
+        return _serialize_fraud_rule(rule)
 
     except HTTPException:
         raise
