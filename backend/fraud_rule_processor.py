@@ -518,6 +518,10 @@ class FraudRuleProcessor:
                     .get("location", {})
                     .get("name")
                 ) or "unknown location"
+                supported_actions = {
+                    (a or {}).get("action")
+                    for a in (fulfillment_order.get("supportedActions") or [])
+                }
 
                 if fo_status in INELIGIBLE_STATUSES:
                     logger.info(
@@ -525,6 +529,31 @@ class FraudRuleProcessor:
                         f"for order {order_name} — status={fo_status}"
                     )
                     skipped.append({"id": fo_id, "status": fo_status, "location": location_name})
+                    continue
+
+                # If Shopify doesn't list HOLD as a supported action, attempting the
+                # mutation will fail with a userError (typically because the FO is
+                # assigned to a third-party fulfillment service like Navidium and the
+                # app lacks the `write_third_party_fulfillment_orders` scope). Skip
+                # with an actionable reason instead of silently logging a failure.
+                if supported_actions and "HOLD" not in supported_actions:
+                    reason = (
+                        "HOLD not in supportedActions — likely a third-party "
+                        "fulfillment service. Add the `write_third_party_fulfillment_orders` "
+                        "scope to the Shopify app and re-issue the access token to hold this FO."
+                    )
+                    logger.warning(
+                        f"Skipping fulfillment order {fo_id} at '{location_name}' "
+                        f"for order {order_name} — {reason} "
+                        f"(supportedActions={sorted(a for a in supported_actions if a)})"
+                    )
+                    skipped.append({
+                        "id": fo_id,
+                        "status": fo_status,
+                        "location": location_name,
+                        "reason": reason,
+                        "supported_actions": sorted(a for a in supported_actions if a),
+                    })
                     continue
 
                 result = await self.shopify_client.apply_fulfillment_hold(
@@ -551,22 +580,30 @@ class FraudRuleProcessor:
                     )
                     failed.append({"id": fo_id, "location": location_name, "error": error_msg})
 
-            total_considered = len(held) + len(failed)
             total_fos = len(fulfillment_orders)
-            # Success = every eligible FO was held AND the order is effectively locked
-            # (either something was held now, or every FO was already in an ineligible state
-            # such as ON_HOLD, meaning the order is already locked down).
-            success = len(failed) == 0 and (len(held) > 0 or len(skipped) == total_fos)
+            # Separate benign skips (already on hold / closed — no action needed)
+            # from unheld skips (HOLD unsupported — order is NOT fully locked).
+            unheld_skipped = [s for s in skipped if s.get("reason")]
+            benign_skipped = [s for s in skipped if not s.get("reason")]
 
-            if failed:
+            # Success only if we held everything we could AND nothing is left
+            # unheld because of a scope/supportedActions gap.
+            success = len(failed) == 0 and len(unheld_skipped) == 0 and (
+                len(held) > 0 or len(benign_skipped) == total_fos
+            )
+
+            if failed or unheld_skipped:
                 message = (
                     f"Partial hold on order {order_name}: "
-                    f"{len(held)}/{total_considered} fulfillment orders held, "
-                    f"{len(failed)} failed, {len(skipped)} skipped."
+                    f"{len(held)}/{total_fos} fulfillment order(s) held, "
+                    f"{len(failed)} failed, "
+                    f"{len(unheld_skipped)} could not be held (third-party or scope), "
+                    f"{len(benign_skipped)} already-ineligible."
                 )
                 logger.error(
-                    f"Partial hold failure on order {order_name}: "
-                    f"held={[h['id'] for h in held]} failed={failed} skipped={skipped}"
+                    f"Partial hold on order {order_name}: held={[h['id'] for h in held]} "
+                    f"failed={failed} unheld_skipped={unheld_skipped} "
+                    f"benign_skipped={benign_skipped}"
                 )
             elif held:
                 message = (
@@ -578,7 +615,7 @@ class FraudRuleProcessor:
                 # Nothing to hold — every FO was already ineligible (e.g. all ON_HOLD).
                 message = (
                     f"No hold applied to order {order_name}: all {total_fos} fulfillment "
-                    f"order(s) were already in an ineligible state ({skipped})."
+                    f"order(s) were already in an ineligible state ({benign_skipped})."
                 )
 
             return {

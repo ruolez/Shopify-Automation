@@ -1553,6 +1553,9 @@ class ShopifyClient:
                             id
                             status
                             requestStatus
+                            supportedActions {
+                                action
+                            }
                             assignedLocation {
                                 location {
                                     id
