@@ -47,6 +47,7 @@ celery.conf.update(
     task_soft_time_limit=25 * 60,  # 25 minutes
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=100,
+    worker_max_memory_per_child=350000,  # KB (~350 MB): gracefully replace a child after a task once it exceeds this
     result_expires=300,
     task_ignore_result=True,
 )

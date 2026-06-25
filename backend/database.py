@@ -25,8 +25,8 @@ if not DATABASE_URL:
 engine = create_engine(
     DATABASE_URL,
     poolclass=pool.QueuePool,
-    pool_size=int(os.getenv("DB_POOL_SIZE", "20")),
-    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "40")),
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
     pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
     pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "3600")),
     echo=os.getenv("DB_ECHO", "false").lower() == "true",
