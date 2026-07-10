@@ -532,7 +532,7 @@ async def debug_fulfillment_orders_raw(
         logger.info(f"Making GraphQL request with variables: {variables}")
 
         try:
-            raw_result = await client._make_graphql_request(query, variables)
+            raw_result = await client.execute_graphql(query, variables)
             logger.info(f"GraphQL request successful - Response keys: {list(raw_result.keys()) if isinstance(raw_result, dict) else 'Not a dict'}")
 
             # Check if there are any errors in the GraphQL response

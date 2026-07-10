@@ -8,12 +8,29 @@ from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
 logger = get_logger(__name__)
 
+
+class ShopifyGraphQLError(Exception):
+    """Non-retryable GraphQL error (schema/validation failures). Retrying the
+    same document cannot succeed, so callers fail fast instead of burning the
+    retry budget."""
+
+
+def quote_search_value(value: str) -> str:
+    """Quote a value for interpolation into a Shopify search query string.
+
+    Prevents values containing spaces, quotes, or search operators (OR, AND,
+    wildcards, '#') from changing the query semantics."""
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 class ShopifyClient:
     def __init__(self, shop_domain: str, access_token: str):
         self.shop_domain = shop_domain
         self.access_token = access_token
-        api_version = os.getenv("SHOPIFY_API_VERSION", "2025-04")
-        self.base_url = f"https://{shop_domain}/admin/api/{api_version}"
+        self.api_version = os.getenv("SHOPIFY_API_VERSION", "2026-04")
+        self.base_url = f"https://{shop_domain}/admin/api/{self.api_version}"
+        self._version_mismatch_logged = False
         self.headers = {
             "X-Shopify-Access-Token": access_token,
             "Content-Type": "application/json"
@@ -53,7 +70,11 @@ class ShopifyClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify API error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        retry_after = e.response.headers.get("Retry-After")
+                        try:
+                            wait_time = min(float(retry_after), 60.0) if retry_after else float(2 ** attempt)
+                        except ValueError:
+                            wait_time = float(2 ** attempt)
                         logger.info(f"Retrying after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -99,7 +120,9 @@ class ShopifyClient:
                     response = await client.post(url, headers=self.headers, json=payload)
                     response.raise_for_status()
                     result = response.json()
-                    
+
+                    self._check_served_api_version(response)
+
                     # Track GraphQL query costs
                     if "extensions" in result and "cost" in result["extensions"]:
                         cost_data = result["extensions"]["cost"]
@@ -134,18 +157,48 @@ class ShopifyClient:
                                     logger.info("Auto-adjusting optimization level from 'balanced' to 'minimal' due to high query costs")
                     
                     if "errors" in result:
-                        logger.error(f"GraphQL errors: {result['errors']}")
-                        raise Exception(f"GraphQL errors: {result['errors']}")
-                    
+                        errors = result["errors"]
+                        throttled = any(
+                            isinstance(err, dict)
+                            and (err.get("extensions") or {}).get("code") == "THROTTLED"
+                            for err in errors
+                        )
+                        if throttled:
+                            # Wait long enough for the cost bucket to refill
+                            cost_ext = (result.get("extensions") or {}).get("cost") or {}
+                            throttle_status = cost_ext.get("throttleStatus") or {}
+                            requested = cost_ext.get("requestedQueryCost") or 1000
+                            available = throttle_status.get("currentlyAvailable") or 0
+                            restore_rate = throttle_status.get("restoreRate") or 50
+                            wait_time = min(max((requested - available) / restore_rate, 1.0), 30.0)
+                            last_exception = Exception("Shopify GraphQL request throttled (THROTTLED)")
+                            if attempt < retry_count - 1:
+                                logger.warning(
+                                    f"GraphQL THROTTLED: need {requested} points, {available} available "
+                                    f"(restore {restore_rate}/s) — waiting {wait_time:.1f}s "
+                                    f"(attempt {attempt + 1}/{retry_count})"
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                            raise last_exception
+                        logger.error(f"GraphQL errors: {errors}")
+                        raise ShopifyGraphQLError(f"GraphQL errors: {errors}")
+
                     return result
-                    
+
+            except ShopifyGraphQLError:
+                raise  # schema/validation errors cannot succeed on retry
             except httpx.HTTPStatusError as e:
                 logger.error(f"Shopify GraphQL error: {e.response.status_code} - {e.response.text}")
                 # Don't retry on HTTP errors (4xx) except for 429 (rate limit) and 5xx errors
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     last_exception = Exception(f"Shopify GraphQL error: {e.response.status_code}")
                     if attempt < retry_count - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        retry_after = e.response.headers.get("Retry-After")
+                        try:
+                            wait_time = min(float(retry_after), 60.0) if retry_after else float(2 ** attempt)
+                        except ValueError:
+                            wait_time = float(2 ** attempt)
                         logger.info(f"Retrying GraphQL request after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue
@@ -172,6 +225,26 @@ class ShopifyClient:
             raise last_exception
         raise Exception("GraphQL request failed after all retry attempts")
     
+    async def execute_graphql(self, query: str, variables: Optional[Dict] = None) -> Dict:
+        """Public entry point for ad-hoc GraphQL documents (e.g. debug endpoints),
+        with the same retry/throttle/cost handling as the built-in methods."""
+        return await self._make_graphql_request(query, variables)
+
+    def _check_served_api_version(self, response: httpx.Response) -> None:
+        """Warn when Shopify serves a different API version than requested.
+
+        A mismatched X-Shopify-API-Version header means the requested version
+        is no longer accessible and Shopify has fallen forward to the oldest
+        supported version — schema behavior may silently differ."""
+        served_version = response.headers.get("X-Shopify-API-Version")
+        if served_version and served_version != self.api_version and not self._version_mismatch_logged:
+            self._version_mismatch_logged = True
+            logger.warning(
+                f"Shopify API version mismatch for {self.shop_domain}: requested "
+                f"{self.api_version} but was served {served_version}. The requested "
+                f"version is unsupported — update SHOPIFY_API_VERSION."
+            )
+
     def get_query_cost_stats(self) -> Dict[str, Any]:
         """Get GraphQL query cost statistics"""
         return {
@@ -320,6 +393,9 @@ class ShopifyClient:
                                 }
                             }
                             lineItems(first: 20) {
+                                pageInfo {
+                                    hasNextPage
+                                }
                                 edges {
                                     node {
                                         id
@@ -472,6 +548,9 @@ class ShopifyClient:
                                 }
                             }
                             lineItems(first: 20) {
+                                pageInfo {
+                                    hasNextPage
+                                }
                                 edges {
                                     node {
                                         id
@@ -679,6 +758,9 @@ class ShopifyClient:
                                 }}
                             }}
                             lineItems(first: {line_item_limit}) {{
+                                pageInfo {{
+                                    hasNextPage
+                                }}
                                 edges {{
                                     node {{
                                         id
@@ -822,6 +904,9 @@ class ShopifyClient:
                                 }}
                             }}
                             lineItems(first: {line_item_limit}) {{
+                                pageInfo {{
+                                    hasNextPage
+                                }}
                                 edges {{
                                     node {{
                                         id
@@ -1254,6 +1339,9 @@ class ShopifyClient:
                         }
                     }
                     lineItems(first: 100) {
+                        pageInfo {
+                            hasNextPage
+                        }
                         edges {
                             node {
                                 id
@@ -1398,6 +1486,9 @@ class ShopifyClient:
                         }
                     }
                     lineItems(first: 100) {
+                        pageInfo {
+                            hasNextPage
+                        }
                         edges {
                             node {
                                 id
@@ -1975,17 +2066,26 @@ class ShopifyClient:
         }
         """
         
-        variables = {"query": f"name:{order_name}"}
-        
+        variables = {"query": f"name:{quote_search_value(order_name)}"}
+
         try:
             result = await self._make_graphql_request(query, variables)
-            
+
             if not result.get("data", {}).get("orders", {}).get("edges"):
                 logger.warning(f"No order found with name {order_name}")
                 return None
-                
+
             order_data = result["data"]["orders"]["edges"][0]["node"]
-            
+
+            # name search can partial-match; never analyze the wrong order
+            returned_name = (order_data.get("name") or "").lstrip("#")
+            if returned_name != str(order_name).lstrip("#"):
+                logger.warning(
+                    f"Order name search mismatch: requested {order_name!r} but "
+                    f"Shopify returned {order_data.get('name')!r} — skipping"
+                )
+                return None
+
             # Structure fraud data for service consumption
             fraud_data = {
                 "order_info": {
@@ -2037,13 +2137,15 @@ class ShopifyClient:
         query_parts = []
         
         if email:
-            query_parts.append(f"email:{email}")
-        
+            query_parts.append(f"email:{quote_search_value(email)}")
+
         if phone:
-            # Clean phone number for search
+            # Clean phone number for search. Shopify's search syntax does not
+            # support leading wildcards, so match on the raw digits; the
+            # client-side last-10-digit comparison below does the real filtering.
             clean_phone = ''.join(filter(str.isdigit, phone))
             if len(clean_phone) >= 10:
-                query_parts.append(f"phone:*{clean_phone[-10:]}*")
+                query_parts.append(f"phone:{quote_search_value(clean_phone[-10:])}")
         
         # If we have address information, we'll search by customer and then filter
         if not query_parts:
@@ -3209,12 +3311,29 @@ class ShopifyClient:
             # Calculate date range
             cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
             
+            # Shopify's order search has no barcode filter and SKU frequently
+            # differs from barcode — filtering by sku:"<barcode>" finds nothing
+            # in that case. Resolve the barcode to its variants' SKUs first and
+            # search on those; the barcode comparison below stays authoritative.
+            sku_terms = [f"sku:{quote_search_value(barcode)}"]
+            try:
+                matching_variants = await self.get_product_by_barcode(barcode)
+                skus = {v.get("sku") for v in matching_variants if v.get("sku")}
+                if skus:
+                    sku_terms = [f"sku:{quote_search_value(s)}" for s in sorted(skus)]
+            except Exception as e:
+                logger.warning(
+                    f"Could not resolve barcode {barcode} to SKUs, falling back to "
+                    f"sku:{barcode} filter: {e}"
+                )
+            sku_filter = f"({' OR '.join(sku_terms)})" if len(sku_terms) > 1 else sku_terms[0]
+
             # Build query filter
             query_parts = [
                 f"created_at:>={cutoff_date}",
                 "(fulfillment_status:unshipped OR fulfillment_status:partial)",
                 "NOT status:cancelled",
-                f'sku:"{barcode}"'  # Add SKU filter to reduce result set
+                sku_filter  # SKU filter to reduce result set
             ]
             
             # Add tag exclusion if specified
@@ -3456,19 +3575,23 @@ class ShopifyClient:
         available_updates = []
         on_hand_updates = []
         
+        # changeFromQuantity: None opts out of the compare-and-set check
+        # (replaces ignoreCompareQuantity, removed in API 2026-04)
         for update in updates:
             if "available" in update:
                 available_updates.append({
                     "inventoryItemId": update["inventory_item_id"],
                     "locationId": update["location_id"],
-                    "quantity": update["available"]
+                    "quantity": update["available"],
+                    "changeFromQuantity": None
                 })
-            
+
             if "on_hand" in update:
                 on_hand_updates.append({
                     "inventoryItemId": update["inventory_item_id"],
                     "locationId": update["location_id"],
-                    "quantity": update["on_hand"]
+                    "quantity": update["on_hand"],
+                    "changeFromQuantity": None
                 })
         
         # Process available quantity updates
@@ -3477,8 +3600,7 @@ class ShopifyClient:
                 "input": {
                     "reason": "correction",
                     "name": "available",
-                    "quantities": available_updates,
-                    "ignoreCompareQuantity": True
+                    "quantities": available_updates
                 }
             }
             
@@ -3525,8 +3647,7 @@ class ShopifyClient:
                 "input": {
                     "reason": "correction",
                     "name": "on_hand",
-                    "quantities": on_hand_updates,
-                    "ignoreCompareQuantity": True
+                    "quantities": on_hand_updates
                 }
             }
             

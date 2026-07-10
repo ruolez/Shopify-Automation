@@ -206,9 +206,13 @@ class RuleEngine:
                     break
             
             # Handle special field mappings
+            # NOTE: .get(key, {}) does not protect against JSON null values —
+            # Shopify returns shippingAddress: null (digital orders),
+            # customer: null (guest checkout), variant: null (deleted products) —
+            # so every nested access below uses `or {}` / `or ""`.
             if field == "order_total":
-                total_price = order.get("totalPriceSet", {}).get("shopMoney", {})
-                return float(total_price.get("amount", 0))
+                total_price = (order.get("totalPriceSet") or {}).get("shopMoney") or {}
+                return float(total_price.get("amount") or 0)
             
             elif field == "order_weight":
                 # Shopify returns weight in grams via currentTotalWeight field
@@ -219,7 +223,11 @@ class RuleEngine:
                 weight_grams = float(weight_grams)
 
                 # Calculate weight from individual line items, excluding specified SKUs
-                line_items = order.get("lineItems", {}).get("edges", [])
+                line_items_conn = order.get("lineItems") or {}
+                line_items = line_items_conn.get("edges", [])
+                # Sync queries fetch a bounded number of line items; when the
+                # connection has more pages the calculated sum is a partial total
+                line_items_truncated = bool((line_items_conn.get("pageInfo") or {}).get("hasNextPage"))
                 total_calculated_weight = 0
                 excluded_skus = excluded_skus or []
                 excluded_count = 0
@@ -228,8 +236,8 @@ class RuleEngine:
                 
                 for item_edge in line_items:
                     item = item_edge["node"]
-                    variant = item.get("variant", {})
-                    sku = variant.get("sku", "")
+                    variant = item.get("variant") or {}
+                    sku = variant.get("sku") or ""
                     
                     # Check if this SKU should be excluded
                     skip_item = False
@@ -244,13 +252,13 @@ class RuleEngine:
                     if skip_item:
                         continue
                     
-                    quantity = item.get("quantity", 0)
-                    inventory_item = variant.get("inventoryItem", {})
-                    measurement = inventory_item.get("measurement", {})
-                    weight_obj = measurement.get("weight", {})
-                    
-                    item_weight_value = weight_obj.get("value", 0) if weight_obj else 0
-                    item_weight_unit = weight_obj.get("unit", "GRAMS") if weight_obj else "GRAMS"
+                    quantity = item.get("quantity") or 0
+                    inventory_item = variant.get("inventoryItem") or {}
+                    measurement = inventory_item.get("measurement") or {}
+                    weight_obj = measurement.get("weight") or {}
+
+                    item_weight_value = weight_obj.get("value") or 0
+                    item_weight_unit = weight_obj.get("unit") or "GRAMS"
                     
                     # Convert to grams if needed
                     if item_weight_unit == "POUNDS":
@@ -275,33 +283,44 @@ class RuleEngine:
                 
                 # When SKUs are excluded, always use calculated weight instead of Shopify's total
                 if excluded_skus and excluded_count > 0:
+                    if line_items_truncated:
+                        logger.warning(
+                            f"Order {order.get('name', 'unknown')}: line items truncated by page size — "
+                            f"SKU-excluded weight ({total_calculated_weight}g) may undercount"
+                        )
                     debug_log(logger, f"Order {order.get('name', 'unknown')}: Using calculated weight due to SKU exclusions")
                     return total_calculated_weight
-                
+
+                # A truncated line-item list means the calculated sum is partial —
+                # Shopify's own total is authoritative in that case
+                if line_items_truncated:
+                    debug_log(logger, f"Order {order.get('name', 'unknown')}: line items truncated, using Shopify currentTotalWeight")
+                    return weight_grams
+
                 # Use calculated weight if it's significantly different from Shopify's value
                 # This handles cases where Shopify's currentTotalWeight is incorrect
                 if abs(total_calculated_weight - weight_grams) > 1:  # More than 1g difference
                     logger.warning(f"Order {order.get('name', 'unknown')}: Large discrepancy between Shopify currentTotalWeight ({weight_grams}g) and calculated weight ({total_calculated_weight}g). Using calculated weight.")
                     return total_calculated_weight
-                
+
                 return weight_grams
             
             elif field == "shipping_province":
-                shipping_addr = order.get("shippingAddress", {})
-                province = shipping_addr.get("province", "").strip()
+                shipping_addr = order.get("shippingAddress") or {}
+                province = (shipping_addr.get("province") or "").strip()
                 debug_log(logger, f"Order {order.get('name', 'unknown')}: Raw shipping province = '{province}', Uppercase = '{province.upper()}'")
                 return province.upper()
-            
+
             elif field == "shipping_country":
-                shipping_addr = order.get("shippingAddress", {})
-                return shipping_addr.get("country", "").strip().upper()
-            
+                shipping_addr = order.get("shippingAddress") or {}
+                return (shipping_addr.get("country") or "").strip().upper()
+
             elif field == "shipping_city":
-                shipping_addr = order.get("shippingAddress", {})
-                return shipping_addr.get("city", "").strip()
-            
+                shipping_addr = order.get("shippingAddress") or {}
+                return (shipping_addr.get("city") or "").strip()
+
             elif field == "shipping_method":
-                shipping_lines = order.get("shippingLines", {}).get("edges", [])
+                shipping_lines = (order.get("shippingLines") or {}).get("edges", [])
                 if shipping_lines:
                     return shipping_lines[0]["node"].get("title", "")
                 return ""

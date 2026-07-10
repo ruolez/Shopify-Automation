@@ -3,6 +3,7 @@ Enhanced Shopify client with MCP-inspired delivery tracking
 """
 import httpx
 import json
+import os
 from typing import Dict, List, Optional, Any
 import logging
 
@@ -12,7 +13,8 @@ class EnhancedShopifyClient:
     def __init__(self, shop_domain: str, access_token: str):
         self.shop_domain = shop_domain
         self.access_token = access_token
-        self.base_url = f"https://{shop_domain}/admin/api/2025-04"
+        api_version = os.getenv("SHOPIFY_API_VERSION", "2026-04")
+        self.base_url = f"https://{shop_domain}/admin/api/{api_version}"
         self.headers = {
             "X-Shopify-Access-Token": access_token,
             "Content-Type": "application/json"
@@ -313,16 +315,27 @@ class EnhancedShopifyClient:
         }
         """
         
-        variables = {"query": f"name:{order_name}"}
-        
+        from shopify_client import quote_search_value
+
+        variables = {"query": f"name:{quote_search_value(order_name)}"}
+
         try:
             result = await self._make_graphql_request(query, variables)
-            
+
             if not result.get("data", {}).get("orders", {}).get("edges"):
                 logger.warning(f"No order found with name {order_name}")
                 return None
-                
+
             order_data = result["data"]["orders"]["edges"][0]["node"]
+
+            # name search can partial-match; never analyze the wrong order
+            returned_name = (order_data.get("name") or "").lstrip("#")
+            if returned_name != str(order_name).lstrip("#"):
+                logger.warning(
+                    f"Order name search mismatch: requested {order_name!r} but "
+                    f"Shopify returned {order_data.get('name')!r} — skipping"
+                )
+                return None
             
             # Structure the data for fraud analysis compatibility
             fraud_data = {
@@ -389,7 +402,6 @@ class EnhancedShopifyClient:
                             createdAt
                             message
                             address1
-                            address2
                             city
                             province
                             country
