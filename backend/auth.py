@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
+import logging
+import secrets
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -9,6 +11,8 @@ import os
 
 from database import get_db
 from models import User
+
+logger = logging.getLogger(__name__)
 
 # Security configuration
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -55,7 +59,7 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    to_encode.update({"exp": expire, "type": "refresh", "jti": secrets.token_hex(16)})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -74,18 +78,58 @@ def verify_token(token: str) -> Optional[str]:
         return None
 
 
-def verify_refresh_token(token: str) -> Optional[str]:
+def decode_refresh_token(token: str) -> Optional[dict]:
+    """Decode and validate a refresh token, returning its full payload."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        token_type = payload.get("type")
-        if token_type != "refresh":
+        if payload.get("type") != "refresh" or payload.get("sub") is None:
             return None
-        email: str = payload.get("sub")
-        if email is None:
-            return None
-        return email
+        return payload
     except JWTError:
         return None
+
+
+def verify_refresh_token(token: str) -> Optional[str]:
+    payload = decode_refresh_token(token)
+    return payload.get("sub") if payload else None
+
+
+# --- Refresh-token revocation (Redis-backed denylist) ---
+
+_revocation_redis = None
+
+
+def _get_revocation_store():
+    global _revocation_redis
+    if _revocation_redis is None:
+        import redis as _redis
+        _revocation_redis = _redis.from_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        )
+    return _revocation_redis
+
+
+def revoke_refresh_token(payload: dict) -> None:
+    """Denylist a refresh token's jti until its natural expiry."""
+    jti = payload.get("jti")
+    if not jti:
+        return  # legacy token issued before jti support; cannot be revoked
+    ttl = max(int(payload.get("exp", 0) - datetime.now(timezone.utc).timestamp()), 1)
+    try:
+        _get_revocation_store().setex(f"revoked_refresh:{jti}", ttl, "1")
+    except Exception as e:
+        logger.warning(f"Could not revoke refresh token (Redis unavailable): {e}")
+
+
+def is_refresh_token_revoked(payload: dict) -> bool:
+    jti = payload.get("jti")
+    if not jti:
+        return False  # legacy token without jti
+    try:
+        return _get_revocation_store().exists(f"revoked_refresh:{jti}") > 0
+    except Exception as e:
+        logger.warning(f"Could not check refresh token revocation (Redis unavailable): {e}")
+        return False
 
 
 async def get_current_user(
@@ -108,5 +152,10 @@ async def get_current_user(
     user = db.query(User).filter(User.email == email).first()
     if user is None:
         raise credentials_exception
-    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled"
+        )
+
     return user

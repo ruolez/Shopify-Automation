@@ -78,6 +78,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const logout = () => {
+    const refreshToken = localStorage.getItem("refreshToken");
+    if (refreshToken) {
+      // Revoke server-side; best-effort, local cleanup happens regardless
+      api
+        .post("/auth/logout", { refresh_token: refreshToken })
+        .catch(() => {});
+    }
     localStorage.removeItem("token");
     localStorage.removeItem("refreshToken");
     setUser(null);

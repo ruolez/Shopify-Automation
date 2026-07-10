@@ -4,7 +4,7 @@ services:
     image: postgres:15-alpine
     container_name: shopify_postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_DB=shopify_db
       - POSTGRES_USER=shopify_user
@@ -29,7 +29,7 @@ services:
     image: redis:7-alpine
     container_name: shopify_redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -52,7 +52,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2025-04}
+      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2026-04}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       # PostgreSQL connection pool settings
       - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
@@ -86,7 +86,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2025-04}
+      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2026-04}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       # PostgreSQL connection pool settings
       - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
@@ -122,7 +122,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2025-04}
+      - SHOPIFY_API_VERSION=${SHOPIFY_API_VERSION:-2026-04}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       # PostgreSQL connection pool settings
       - DB_POOL_SIZE=${DB_POOL_SIZE:-20}

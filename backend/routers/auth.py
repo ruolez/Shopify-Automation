@@ -9,7 +9,9 @@ from auth import (
     get_current_user,
     create_access_token,
     create_refresh_token,
-    verify_refresh_token,
+    decode_refresh_token,
+    revoke_refresh_token,
+    is_refresh_token_revoked,
     verify_password,
     get_password_hash,
     ACCESS_TOKEN_EXPIRE_MINUTES
@@ -20,7 +22,8 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(user_data: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit(REGISTER_LIMIT)
+async def register(request: Request, user_data: UserCreate, db: Session = Depends(get_db)):
     # Check if user exists
     db_user = db.query(User).filter(User.email == user_data.email).first()
     if db_user:
@@ -52,12 +55,18 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(user_data: UserLogin, db: Session = Depends(get_db)):
+@limiter.limit(AUTH_LIMIT)
+async def login(request: Request, user_data: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == user_data.email).first()
     if not user or not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password"
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled"
         )
 
     access_token = create_access_token(data={"sub": user.email})
@@ -71,23 +80,26 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(token_data: RefreshTokenRequest, db: Session = Depends(get_db)):
-    email = verify_refresh_token(token_data.refresh_token)
-    if email is None:
+@limiter.limit(AUTH_LIMIT)
+async def refresh_token(request: Request, token_data: RefreshTokenRequest, db: Session = Depends(get_db)):
+    payload = decode_refresh_token(token_data.refresh_token)
+    if payload is None or is_refresh_token_revoked(payload):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
         )
 
     # Verify user still exists and is active
-    user = db.query(User).filter(User.email == email).first()
-    if user is None:
+    user = db.query(User).filter(User.email == payload["sub"]).first()
+    if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
+            detail="User not found or disabled"
         )
 
-    # Create new tokens
+    # Rotate: revoke the used refresh token before issuing a new pair
+    revoke_refresh_token(payload)
+
     access_token = create_access_token(data={"sub": user.email})
     new_refresh_token = create_refresh_token(data={"sub": user.email})
     return TokenResponse(
@@ -96,6 +108,15 @@ async def refresh_token(token_data: RefreshTokenRequest, db: Session = Depends(g
         token_type="bearer",
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
+
+
+@router.post("/logout")
+async def logout(token_data: RefreshTokenRequest):
+    """Revoke the refresh token server-side; the client discards both tokens."""
+    payload = decode_refresh_token(token_data.refresh_token)
+    if payload is not None:
+        revoke_refresh_token(payload)
+    return {"detail": "Logged out"}
 
 
 @router.get("/me")

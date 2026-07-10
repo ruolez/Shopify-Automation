@@ -4,7 +4,7 @@ services:
     image: postgres:15-alpine
     container_name: shopify_postgres_prod
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_DB=shopify_db
       - POSTGRES_USER=shopify_user
@@ -51,7 +51,7 @@ services:
     image: redis:7-alpine
     container_name: shopify_redis_prod
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru

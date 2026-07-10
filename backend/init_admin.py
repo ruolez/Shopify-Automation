@@ -38,30 +38,44 @@ def create_default_admin(ensure_tables=True):
             print(f"  Active: {existing_admin.is_active}")
             return
         
-        # Create default admin user
+        # Password comes from env or is generated — never a fixed default
+        admin_password = os.getenv("ADMIN_INITIAL_PASSWORD")
+        generated = False
+        if not admin_password:
+            import secrets
+            admin_password = secrets.token_urlsafe(12)
+            generated = True
+
         admin_user = AdminUser(
             username="admin",
             email="admin@shopify-automation.local",
             full_name="System Administrator",
-            hashed_password=get_admin_password_hash("admin"),
+            hashed_password=get_admin_password_hash(admin_password),
             role="super_admin",
             is_active=True
         )
-        
+
         db.add(admin_user)
         db.commit()
         db.refresh(admin_user)
-        
+
         print("✅ Default admin user created successfully!")
         print("")
         print("🔐 Admin Login Credentials:")
         print("  Username: admin")
-        print("  Password: admin")
+        if generated:
+            print(f"  Password: {admin_password}")
+        else:
+            print("  Password: (from ADMIN_INITIAL_PASSWORD)")
         print("")
         print("🌐 Admin Panel URL: http://localhost:3000/admin/login")
         print("")
-        print("⚠️  IMPORTANT: Change the default password immediately after logging in!")
-        print("   Use the 'Change Password' button in the admin dashboard.")
+        if generated:
+            print("⚠️  IMPORTANT: This generated password is shown ONCE. Save it now,")
+            print("   then change it after logging in (or set ADMIN_INITIAL_PASSWORD")
+            print("   before first run to choose your own).")
+        else:
+            print("⚠️  IMPORTANT: Change the initial password after logging in!")
         
     except Exception as e:
         db.rollback()
