@@ -1,4 +1,6 @@
 #!/bin/bash
+# NOTE: superseded by ./install.sh (option 2: Update from GitHub) — kept for legacy automation.
+echo "NOTE: this script is superseded by ./install.sh (Update option)."
 
 # Shopify Automation - Update Script with Schema Migration Support
 # Safely updates the application while preserving data and handling schema changes

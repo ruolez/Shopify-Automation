@@ -214,7 +214,7 @@ ENVEOF
     if ! grep -q '^SHOPIFY_API_VERSION=' .env; then
         echo "" >> .env
         echo "# Shopify API version (auto-added during update)" >> .env
-        echo "SHOPIFY_API_VERSION=2025-04" >> .env
+        echo "SHOPIFY_API_VERSION=2026-04" >> .env
         print_success "SHOPIFY_API_VERSION added to .env"
     fi
 
@@ -1040,7 +1040,7 @@ JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
 
 # Shopify Configuration
-SHOPIFY_API_VERSION=2025-04
+SHOPIFY_API_VERSION=2026-04
 
 # Redis Configuration
 REDIS_URL=redis://redis:6379/0

@@ -1,3 +1,28 @@
+# Shopify Multi-Store Order Management
+
+## Quick start (recommended)
+
+`install.sh` is the unified installer — it prompts for everything (server
+address, Shopify OAuth keys, admin password) and auto-generates all secrets,
+so there is no manual `.env` editing:
+
+```bash
+git clone https://github.com/ruolez/Shopify-Automation.git
+cd Shopify-Automation
+sudo ./install.sh
+```
+
+Menu options:
+1. **Install** — fresh installation (prompts for keys, generates secrets, builds and starts the stack, runs migrations, creates the admin account)
+2. **Update from GitHub** — backs up `.env` + PostgreSQL, `git pull`, rebuild, pending migrations, then prunes unused Docker images/build cache
+3. **Backup** — settings + database dump into `backups/<timestamp>/`
+4. **Remove** — stops the stack; optionally deletes data volumes (typed confirmation) and images
+
+For HTTPS with Let's Encrypt use `install-ssl-production.sh` (below).
+`update.sh` and `update-with-migration.sh` are superseded by `./install.sh` → Update.
+
+---
+
 ⏺ Summary
 
   I've created a comprehensive production installation script for Ubuntu Server 24 with SSL/TLS support using Let's Encrypt. Here's what was created:
