@@ -45,6 +45,12 @@ celery.conf.update(
     task_track_started=True,
     task_time_limit=30 * 60,  # 30 minutes
     task_soft_time_limit=25 * 60,  # 25 minutes
+    # At-least-once delivery: a worker crash/OOM mid-task requeues the task
+    # instead of silently losing it. Safe because order/fraud processing is
+    # idempotent (ProcessedOrder/ProcessedFraudOrder unique constraints +
+    # per-order Redis locks).
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=100,
     worker_max_memory_per_child=350000,  # KB (~350 MB): gracefully replace a child after a task once it exceeds this
@@ -71,6 +77,21 @@ celery.conf.beat_schedule = {
         'schedule': crontab(minute=0),  # Every hour
     },
 }
+
+def _flag_store_reauth_on_401(store_id: int, error: Exception) -> None:
+    """After a Shopify 401 the token is dead (revoked/uninstalled) — flag the
+    store so the UI can prompt for re-authorization instead of retrying forever."""
+    if "error: 401" not in str(error):
+        return
+    try:
+        with get_db_session() as db:
+            store = db.query(ShopifyStore).filter(ShopifyStore.id == store_id).first()
+            if store:
+                store.needs_reauth = True
+                logger.warning(f"Store {store_id} flagged for re-authorization (Shopify 401)")
+    except Exception as flag_error:
+        logger.error(f"Could not flag store {store_id} for re-auth: {flag_error}")
+
 
 def get_db():
     """Get a database session. DEPRECATED: Use get_db_session() context manager instead."""
@@ -800,10 +821,20 @@ def test_celery_connection(self):
         update_task_status(task_id, "failed", error_message=str(e))
         raise
 
-@celery.task(bind=True)
+@celery.task(bind=True, autoretry_for=(Exception,), max_retries=3,
+             retry_backoff=30, retry_backoff_max=300, retry_jitter=True)
 def process_store_orders(self, user_id: int, store_id: int):
     """Process orders for a specific store"""
     task_id = self.request.id
+
+    # Single-flight per store: beat dispatches every minute, so a sync that
+    # outlives the interval would otherwise run concurrently with its successor
+    # and double the Shopify API load.
+    store_lock = _redis_client.lock(f"store_orders_lock:{store_id}", timeout=30 * 60)
+    if not store_lock.acquire(blocking=False):
+        logger.info(f"Store {store_id} order sync already in progress — skipping this run")
+        return {"skipped": True, "reason": "sync already in progress"}
+
     create_task_status(task_id, "process_store_orders", "running", user_id=user_id)
 
     loop = asyncio.new_event_loop()
@@ -852,10 +883,15 @@ def process_store_orders(self, user_id: int, store_id: int):
         raise
     except Exception as e:
         logger.error(f"Failed to process store orders: {str(e)}")
+        _flag_store_reauth_on_401(store_id, e)
         update_task_status(task_id, "failed", error_message=str(e))
         raise
     finally:
         loop.close()
+        try:
+            store_lock.release()
+        except Exception:
+            pass
 
 async def _process_store_orders_async(store: ShopifyStore, rules: List[ProcessingRule], db: Session):
     """Async function to process store orders"""
@@ -911,7 +947,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 include_fraud_data=True
             )
             
-            orders = orders_data["edges"]
+            orders = orders_data.get("edges", [])
             if not orders:
                 break
             
@@ -1074,11 +1110,18 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
             db.expire_all()
 
             # Check for next page
-            page_info = orders_data["pageInfo"]
-            if not page_info["hasNextPage"]:
+            page_info = orders_data.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
                 break
 
-            cursor = page_info["endCursor"]
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                logger.warning(f"hasNextPage=True but no endCursor for {store.shop_domain} — stopping pagination")
+                break
+
+            # Pace page fetches: the fraud-data query is the most expensive one
+            # in the app, and back-to-back pages exhaust the GraphQL cost bucket
+            await asyncio.sleep(0.5)
     
     except Exception as e:
         # Ensure session is rolled back on any error
@@ -1620,10 +1663,18 @@ def process_all_orders(self):
         update_task_status(task_id, "failed", error_message=str(e))
         raise
 
-@celery.task(bind=True)
+@celery.task(bind=True, autoretry_for=(Exception,), max_retries=3,
+             retry_backoff=30, retry_backoff_max=300, retry_jitter=True)
 def process_store_fraud_detection(self, user_id: int, store_id: int):
     """Process fraud detection for a specific store independently"""
     task_id = self.request.id
+
+    # Single-flight per store (see process_store_orders)
+    store_lock = _redis_client.lock(f"store_fraud_lock:{store_id}", timeout=30 * 60)
+    if not store_lock.acquire(blocking=False):
+        logger.info(f"Store {store_id} fraud detection already in progress — skipping this run")
+        return {"skipped": True, "reason": "fraud detection already in progress"}
+
     create_task_status(task_id, "process_store_fraud_detection", "running", user_id=user_id)
 
     import asyncio
@@ -1696,6 +1747,8 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
 
             logger.info(f"Starting fraud detection sync for store {store.shop_domain}, looking back {fraud_sync_days} days")
 
+            throttle_retries = 0
+
             while orders_fetched < max_orders:
                 try:
                     # Use pageInfo for proper cursor-based pagination
@@ -1719,6 +1772,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                     new_orders = [edge["node"] for edge in edges]
                     all_orders.extend(new_orders)
                     orders_fetched += len(new_orders)
+                    throttle_retries = 0
 
                     # Check PageInfo for next page
                     page_info = orders_data.get("pageInfo", {})
@@ -1740,9 +1794,21 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
                 except Exception as e:
                     error_str = str(e)
                     if "THROTTLED" in error_str or "MAX_COST_EXCEEDED" in error_str:
-                        logger.warning(f"Rate limited while fetching orders, stopping at {orders_fetched} orders")
-                        # Wait a bit before continuing with what we have
-                        loop.run_until_complete(asyncio.sleep(2))
+                        # The client already retried with cost-aware waits; retry
+                        # the same page here with a longer pause before giving up
+                        throttle_retries += 1
+                        if throttle_retries <= 2:
+                            wait_s = 10 * throttle_retries
+                            logger.warning(
+                                f"Rate limited while fetching orders — waiting {wait_s}s "
+                                f"and retrying page (attempt {throttle_retries}/2)"
+                            )
+                            loop.run_until_complete(asyncio.sleep(wait_s))
+                            continue
+                        logger.warning(
+                            f"Rate limited repeatedly; proceeding with {orders_fetched} orders — "
+                            f"the remainder will be picked up on the next sync"
+                        )
                         break
                     else:
                         logger.error(f"Error fetching orders: {error_str}")
@@ -1826,6 +1892,7 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
     except Exception as e:
         error_msg = f"Failed to process fraud detection for store {store_id}: {str(e)}"
         logger.error(error_msg, exc_info=True)
+        _flag_store_reauth_on_401(store_id, e)
         try:
             update_task_status(task_id, "failed", error_message=error_msg)
         except Exception as update_error:
@@ -1836,8 +1903,13 @@ def process_store_fraud_detection(self, user_id: int, store_id: int):
             loop.close()
         except Exception as loop_error:
             logger.error(f"Failed to close event loop: {str(loop_error)}")
+        try:
+            store_lock.release()
+        except Exception:
+            pass
 
-@celery.task(bind=True)
+@celery.task(bind=True, autoretry_for=(Exception,), max_retries=2,
+             retry_backoff=60, retry_backoff_max=600, retry_jitter=True)
 def cleanup_old_logs(self):
     """Clean up old order logs, task status records, and archived fraud analyses"""
     task_id = self.request.id
@@ -1935,7 +2007,8 @@ def test_store_connection(self, store_id: int):
     finally:
         loop.close()
 
-@celery.task(bind=True)
+@celery.task(bind=True, autoretry_for=(Exception,), max_retries=2,
+             retry_backoff=60, retry_backoff_max=600, retry_jitter=True)
 def archive_fulfilled_fraud_analyses(self):
     """Archive fraud analyses for orders that are fulfilled or cancelled"""
     task_id = self.request.id
@@ -2193,8 +2266,16 @@ def trigger_fraud_analysis_all_recent(self, user_id: int, days_back: int = 7):
                     cursor = None
                     page_count = 0
 
+                    max_pages = 100  # safety cap: 2000 orders per store per run
+
                     while True:
                         page_count += 1
+                        if page_count > max_pages:
+                            logger.warning(
+                                f"Hit page cap of {max_pages} for store {store.shop_domain} — "
+                                f"processing the {len(all_orders)} orders fetched so far"
+                            )
+                            break
                         logger.info(f"Fetching page {page_count} of orders for store {store.shop_domain}")
 
                         orders_response = loop.run_until_complete(
@@ -2205,6 +2286,8 @@ def trigger_fraud_analysis_all_recent(self, user_id: int, days_back: int = 7):
                                 include_fraud_data=True
                             )
                         )
+                        # Pace fetches to avoid draining the GraphQL cost bucket
+                        loop.run_until_complete(asyncio.sleep(0.5))
 
                         if not orders_response or "edges" not in orders_response:
                             logger.warning(f"No orders found for store {store.shop_domain} on page {page_count}")
