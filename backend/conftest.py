@@ -48,52 +48,52 @@ def event_loop():
 def test_database():
     """Create test database for the session."""
     # Create PostgreSQL test database
-        conn = psycopg2.connect(
-            host=TEST_DATABASE_HOST,
-            port=TEST_DATABASE_PORT,
-            user=TEST_DATABASE_USER,
-            password=TEST_DATABASE_PASSWORD,
-            database="postgres"
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cursor = conn.cursor()
-        
-        # Drop test database if exists and create new one
-        cursor.execute(f"DROP DATABASE IF EXISTS {TEST_DATABASE_NAME}")
-        cursor.execute(f"CREATE DATABASE {TEST_DATABASE_NAME}")
-        
-        cursor.close()
-        conn.close()
-        
-        # Create engine for test database
-        engine = create_engine(
-            TEST_DATABASE_URL,
-            poolclass=NullPool,  # Disable pooling for tests
-            echo=False
-        )
-    
+    conn = psycopg2.connect(
+        host=TEST_DATABASE_HOST,
+        port=TEST_DATABASE_PORT,
+        user=TEST_DATABASE_USER,
+        password=TEST_DATABASE_PASSWORD,
+        database="postgres"
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    # Drop test database if exists and create new one
+    cursor.execute(f"DROP DATABASE IF EXISTS {TEST_DATABASE_NAME}")
+    cursor.execute(f"CREATE DATABASE {TEST_DATABASE_NAME}")
+
+    cursor.close()
+    conn.close()
+
+    # Create engine for test database
+    engine = create_engine(
+        TEST_DATABASE_URL,
+        poolclass=NullPool,  # Disable pooling for tests
+        echo=False
+    )
+
     # Create all tables
     Base.metadata.create_all(bind=engine)
-    
+
     yield engine
-    
+
     # Cleanup
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
-    
+
     # Drop test database
-        conn = psycopg2.connect(
-            host=TEST_DATABASE_HOST,
-            port=TEST_DATABASE_PORT,
-            user=TEST_DATABASE_USER,
-            password=TEST_DATABASE_PASSWORD,
-            database="postgres"
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cursor = conn.cursor()
-        cursor.execute(f"DROP DATABASE IF EXISTS {TEST_DATABASE_NAME}")
-        cursor.close()
-        conn.close()
+    conn = psycopg2.connect(
+        host=TEST_DATABASE_HOST,
+        port=TEST_DATABASE_PORT,
+        user=TEST_DATABASE_USER,
+        password=TEST_DATABASE_PASSWORD,
+        database="postgres"
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+    cursor.execute(f"DROP DATABASE IF EXISTS {TEST_DATABASE_NAME}")
+    cursor.close()
+    conn.close()
 
 
 @pytest.fixture(scope="function")

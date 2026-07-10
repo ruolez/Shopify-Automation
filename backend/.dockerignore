@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+tests/
+*.db
+*.sqlite*
+logs/
+.env*
+celerybeat-schedule
+*.backup
+*.md

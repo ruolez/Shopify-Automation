@@ -8,13 +8,17 @@ build/
 */dist/
 */build/
 
-# Environment files
+# Environment files (all variants except the template)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Backups (may contain secrets or data dumps)
+*.backup
+backups/
 
 # IDE files
 .vscode/
