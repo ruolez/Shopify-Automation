@@ -101,10 +101,40 @@ const Stores: React.FC = () => {
     register,
     handleSubmit,
     reset,
+    getValues,
     formState: { errors },
   } = useForm<StoreForm>({
     resolver: zodResolver(storeSchema),
   });
+
+  const [oauthLoading, setOauthLoading] = useState(false);
+
+  const startOAuthInstall = async () => {
+    let storeName = (getValues("shop_domain") || "").trim().toLowerCase();
+    if (storeName.endsWith(".myshopify.com")) {
+      storeName = storeName.replace(".myshopify.com", "");
+    }
+    if (!storeName) {
+      toast.error("Enter your store name first");
+      return;
+    }
+    if (storeName.includes(".")) {
+      toast.error("Please enter only the store name without the domain");
+      return;
+    }
+    setOauthLoading(true);
+    try {
+      const response = await api.get("/shopify/oauth/install", {
+        params: { shop: `${storeName}.myshopify.com` },
+      });
+      window.location.href = response.data.authorize_url;
+    } catch (error: any) {
+      toast.error(
+        error.response?.data?.detail || "Failed to start Shopify authorization",
+      );
+      setOauthLoading(false);
+    }
+  };
 
   const onSubmit = (data: StoreForm) => {
     // Clean the store name and ensure proper format
@@ -335,6 +365,31 @@ const Stores: React.FC = () => {
                   admin and copy the Admin API access token.
                 </p>
               </div>
+
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
+                <span className="text-xs text-gray-400 dark:text-dark-400">
+                  or
+                </span>
+                <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
+              </div>
+
+              <button
+                type="button"
+                onClick={startOAuthInstall}
+                disabled={oauthLoading}
+                className="btn-secondary w-full"
+              >
+                {oauthLoading ? (
+                  <LoadingSpinner size="sm" />
+                ) : (
+                  "Connect with Shopify (OAuth)"
+                )}
+              </button>
+              <p className="text-xs text-gray-500 dark:text-dark-400">
+                Uses the store name above — no token needed. You'll approve the
+                app in your Shopify admin and be redirected back here.
+              </p>
 
               <div className="flex justify-end space-x-3 pt-4">
                 <button

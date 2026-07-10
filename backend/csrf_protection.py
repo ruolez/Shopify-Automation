@@ -39,12 +39,18 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
     EXEMPT_PATHS = {"/health", "/metrics", "/"}
+    # Shopify webhooks POST with neither Origin nor Authorization; their
+    # authentication is the X-Shopify-Hmac-Sha256 signature checked in the router
+    EXEMPT_PREFIXES = ("/webhooks/",)
 
     async def dispatch(self, request: Request, call_next):
         if request.method in self.SAFE_METHODS:
             return await call_next(request)
 
         if request.url.path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        if request.url.path.startswith(self.EXEMPT_PREFIXES):
             return await call_next(request)
 
         origin = request.headers.get("origin")

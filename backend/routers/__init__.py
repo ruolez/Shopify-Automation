@@ -12,6 +12,8 @@ from .fraud import router as fraud_router
 from .admin import router as admin_router
 from .inventory import router as inventory_router
 from .dashboard import router as dashboard_router
+from .shopify_oauth import router as shopify_oauth_router
+from .webhooks import router as webhooks_router
 
 __all__ = [
     'health_router',
@@ -26,4 +28,6 @@ __all__ = [
     'admin_router',
     'inventory_router',
     'dashboard_router',
+    'shopify_oauth_router',
+    'webhooks_router',
 ]

@@ -40,6 +40,14 @@ class ShopifyStore(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    # OAuth connection metadata (auth_method="manual" for pasted admin tokens)
+    auth_method = Column(String, default="manual", nullable=False)  # manual | oauth
+    granted_scopes = Column(Text)
+    _refresh_token_encrypted = Column("oauth_refresh_token", Text)  # Encrypted using Fernet
+    token_expires_at = Column(DateTime(timezone=True))
+    installed_at = Column(DateTime(timezone=True))
+    needs_reauth = Column(Boolean, default=False)
+
     @hybrid_property
     def access_token(self) -> str:
         """Decrypt and return the access token."""
@@ -49,6 +57,16 @@ class ShopifyStore(Base):
     def access_token(self, value: str):
         """Encrypt and store the access token."""
         self._access_token_encrypted = encrypt_token(value)
+
+    @hybrid_property
+    def refresh_token(self):
+        """Decrypt and return the OAuth refresh token (None when not set)."""
+        return decrypt_token(self._refresh_token_encrypted) if self._refresh_token_encrypted else None
+
+    @refresh_token.setter
+    def refresh_token(self, value):
+        """Encrypt and store the OAuth refresh token."""
+        self._refresh_token_encrypted = encrypt_token(value) if value else None
 
     # Relationships
     user = relationship("User", back_populates="stores")

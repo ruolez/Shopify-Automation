@@ -32,6 +32,8 @@ from routers import (
     admin_router,
     inventory_router,
     dashboard_router,
+    shopify_oauth_router,
+    webhooks_router,
 )
 
 setup_logging()
@@ -52,11 +54,17 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# Interactive API docs enumerate the full attack surface — dev/staging only
+_is_production = os.getenv("ENVIRONMENT", "development") == "production"
+
 app = FastAPI(
     title="Shopify Multi-Store Order Management",
     description="Automated order processing and tagging system for multiple Shopify stores",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
 )
 
 # Rate limiting configuration
@@ -95,6 +103,8 @@ app.include_router(fraud_router)
 app.include_router(admin_router)
 app.include_router(inventory_router)
 app.include_router(dashboard_router)
+app.include_router(shopify_oauth_router)
+app.include_router(webhooks_router)
 
 
 if __name__ == "__main__":
