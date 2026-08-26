@@ -25,21 +25,36 @@ COLUMNS = [
 ]
 
 
-def run_migration(engine=None):
+def missing_columns(conn) -> list:
+    existing = {
+        row[0] for row in conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'shopify_stores'"
+        ))
+    }
+    return [(name, definition) for name, definition in COLUMNS if name not in existing]
+
+
+def run_migration(engine=None, lock_timeout: str = "10s"):
     engine = engine or create_engine(DATABASE_URL)
 
     with engine.connect() as conn:
-        trans = conn.begin()
+        missing = missing_columns(conn)
+        conn.rollback()
+        if not missing:
+            logger.info("shopify_stores OAuth columns already present")
+            return
+
         try:
-            for name, definition in COLUMNS:
-                conn.execute(text(
-                    f"ALTER TABLE shopify_stores ADD COLUMN IF NOT EXISTS {name} {definition}"
-                ))
-                logger.info(f"Ensured shopify_stores.{name} exists")
-            trans.commit()
+            with conn.begin():
+                # ALTER TABLE needs an exclusive lock; fail fast instead of queueing behind workers
+                conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+                for name, definition in missing:
+                    conn.execute(text(
+                        f"ALTER TABLE shopify_stores ADD COLUMN IF NOT EXISTS {name} {definition}"
+                    ))
+                    logger.info(f"Added shopify_stores.{name}")
             logger.info("OAuth store fields migration complete")
         except Exception as e:
-            trans.rollback()
             logger.error(f"Migration failed: {e}")
             raise
 

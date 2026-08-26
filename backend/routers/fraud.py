@@ -351,10 +351,8 @@ async def get_matched_rules(
                     rule_counts["No rules matched"] = rule_counts.get("No rules matched", 0) + 1
 
         return {
-            "rules": [
-                {"name": name, "count": count}
-                for name, count in sorted(rule_counts.items(), key=lambda x: -x[1])
-            ]
+            "rules": sorted(rule_counts, key=lambda name: -rule_counts[name]),
+            "rule_counts": rule_counts,
         }
 
     except Exception as e:

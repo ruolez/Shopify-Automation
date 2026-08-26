@@ -5,6 +5,7 @@ Main application entry point - handles FastAPI app initialization,
 middleware configuration, and router registration.
 """
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -48,7 +49,13 @@ async def lifespan(app: FastAPI):
     create_tables()
     # create_all() only creates missing tables; columns added to existing tables
     # must be applied explicitly so upgraded installs never boot with a stale schema
-    ensure_store_oauth_columns(engine)
+    for attempt in range(1, 4):
+        try:
+            ensure_store_oauth_columns(engine)
+            break
+        except Exception as e:
+            logger.error(f"Store OAuth column check failed (attempt {attempt}/3): {e}")
+            time.sleep(5)
     logger.info("Database tables created successfully")
 
     logger.info("Checking for rule migrations...")
