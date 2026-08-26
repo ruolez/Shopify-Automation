@@ -15,7 +15,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from logging_config import setup_logging, get_logger
 from csrf_protection import CSRFMiddleware
 from rate_limiting import limiter, rate_limit_exceeded_handler
-from database import create_tables
+from database import create_tables, engine
+from migrations.add_oauth_fields_to_stores import run_migration as ensure_store_oauth_columns
 from database_utils import migrate_rules_to_new_format
 from tasks import test_celery_connection
 
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown events."""
     logger.info("Creating database tables...")
     create_tables()
+    # create_all() only creates missing tables; columns added to existing tables
+    # must be applied explicitly so upgraded installs never boot with a stale schema
+    ensure_store_oauth_columns(engine)
     logger.info("Database tables created successfully")
 
     logger.info("Checking for rule migrations...")

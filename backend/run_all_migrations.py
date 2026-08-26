@@ -3,6 +3,7 @@
 Migration Runner - Checks and applies database migrations via PostgreSQL.
 """
 
+import importlib
 import os
 import sys
 import logging
@@ -28,6 +29,21 @@ MIGRATION_ORDER = [
     "add_fraud_rule_stores",
     "add_oauth_fields_to_stores",
 ]
+
+
+def apply_migration(migration_name: str) -> bool:
+    """Execute a migration module's run_migration(). Returns False if it has none."""
+    try:
+        module = importlib.import_module(f"migrations.{migration_name}")
+    except ModuleNotFoundError:
+        logger.warning(f"{migration_name} has no module (legacy entry); marking only")
+        return False
+    run = getattr(module, "run_migration", None)
+    if run is None:
+        logger.warning(f"{migration_name} has no run_migration(); marking only")
+        return False
+    run()
+    return True
 
 
 class MigrationRunner:
@@ -86,6 +102,15 @@ class MigrationRunner:
             self._mark_migration_applied(migration)
         logger.info(f"Marked all {len(MIGRATION_ORDER)} migrations as applied")
 
+    def apply_pending(self) -> int:
+        pending = self.get_pending_migrations()
+        for migration in pending:
+            logger.info(f"Applying {migration}...")
+            apply_migration(migration)
+            self._mark_migration_applied(migration)
+            self.applied_migrations.add(migration)
+        return len(pending)
+
 
 def main():
     logger.info("=== Shopify Automation Migration Runner ===")
@@ -113,8 +138,8 @@ def main():
                 logger.info("No pending migrations")
                 return 0
             logger.info(f"Found {len(pending)} pending migrations")
-            logger.info("Marking migrations as applied (schema managed by SQLAlchemy)...")
-            runner.mark_all_applied()
+            applied = runner.apply_pending()
+            logger.info(f"Applied {applied} migrations")
             return 0
 
     except Exception as e:

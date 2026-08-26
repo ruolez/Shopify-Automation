@@ -13,7 +13,6 @@ from sqlalchemy import create_engine, text
 from database import DATABASE_URL
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 COLUMNS = [
@@ -26,8 +25,8 @@ COLUMNS = [
 ]
 
 
-def run_migration():
-    engine = create_engine(DATABASE_URL)
+def run_migration(engine=None):
+    engine = engine or create_engine(DATABASE_URL)
 
     with engine.connect() as conn:
         trans = conn.begin()
@@ -46,4 +45,5 @@ def run_migration():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     run_migration()
