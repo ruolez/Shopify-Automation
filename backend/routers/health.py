@@ -14,7 +14,7 @@ async def root():
 
 
 @router.get("/health")
-async def health_check():
+def health_check():
     health = {"status": "healthy", "service": "api", "checks": {}}
 
     # Check Redis

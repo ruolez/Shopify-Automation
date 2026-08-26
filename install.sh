@@ -99,7 +99,7 @@ backup_now() {
 wait_for_api() {
     info "Waiting for the API to become healthy..."
     for _ in $(seq 1 60); do
-        if docker exec "$API_CONTAINER" python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/health', timeout=2)" >/dev/null 2>&1; then
+        if docker exec "$API_CONTAINER" python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/health', timeout=10)" >/dev/null 2>&1; then
             ok "API is up"
             return 0
         fi
