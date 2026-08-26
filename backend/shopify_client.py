@@ -126,9 +126,10 @@ class ShopifyClient:
                     # Track GraphQL query costs
                     if "extensions" in result and "cost" in result["extensions"]:
                         cost_data = result["extensions"]["cost"]
-                        actual_cost = cost_data.get("actualQueryCost", 0)
-                        requested_cost = cost_data.get("requestedQueryCost", 0)
-                        throttle_status = cost_data.get("throttleStatus", {})
+                        # Shopify sends explicit nulls on throttled/rejected requests
+                        actual_cost = cost_data.get("actualQueryCost") or 0
+                        requested_cost = cost_data.get("requestedQueryCost") or 0
+                        throttle_status = cost_data.get("throttleStatus") or {}
                         
                         self._last_query_cost = actual_cost
                         self._total_query_cost += actual_cost
