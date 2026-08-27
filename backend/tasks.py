@@ -1184,6 +1184,33 @@ async def _apply_rule_actions(
                 if not result:
                     success = False
                     
+            elif action_type == "place_on_hold":
+                from order_hold import hold_all_fulfillment_orders, normalize_hold_reason
+                reason = normalize_hold_reason(parameters.get("reason"))
+                notes = (parameters.get("notes") or "").strip() or f"Order rule '{rule.name}' triggered"
+                order_name = order.get("name", order.get("id"))
+                logger.info(f"Placing order {order_name} on hold (reason={reason}) for rule '{rule.name}'")
+                hold_result = await hold_all_fulfillment_orders(
+                    client, order["id"], order_name, reason=reason, reason_notes=notes,
+                    trigger=f"order rule '{rule.name}'",
+                )
+                _log_order_action(
+                    db, store.user_id, store.id, order["id"], order_name,
+                    "order_hold", "success" if hold_result["success"] else "error",
+                    {
+                        "rule_name": rule.name,
+                        "hold_reason": reason,
+                        "notes": notes,
+                        "fulfillment_orders_held": hold_result["fulfillment_orders_held"],
+                        "fulfillment_orders_skipped": hold_result["fulfillment_orders_skipped"],
+                        "fulfillment_orders_failed": hold_result["fulfillment_orders_failed"],
+                        "message": hold_result["message"],
+                    },
+                    error_message=hold_result["error"],
+                )
+                if not hold_result["success"]:
+                    success = False
+
             elif action_type == "set_fulfillment_location":
                 # Support both old format (location_id) and new format (location_alias)
                 location_id = parameters.get("location_id")

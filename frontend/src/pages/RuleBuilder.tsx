@@ -694,6 +694,30 @@ const RuleBuilder: React.FC = () => {
                           </p>
                         )}
                       </div>
+                    ) : watch()?.actions?.[index]?.type === "place_on_hold" ? (
+                      <div className="space-y-2">
+                        <select
+                          {...register(`actions.${index}.parameters.reason`)}
+                          className="input"
+                        >
+                          {(schema.hold_reasons || [{ value: "OTHER", label: "Other" }]).map(
+                            (reason) => (
+                              <option key={reason.value} value={reason.value}>
+                                Hold reason: {reason.label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                        <input
+                          {...register(`actions.${index}.parameters.notes`)}
+                          type="text"
+                          className="input"
+                          placeholder="Hold note shown in Shopify (optional)"
+                        />
+                        <p className="text-xs text-gray-500">
+                          Holds every open fulfillment order of the order; release it in Shopify.
+                        </p>
+                      </div>
                     ) : (
                       <input
                         {...register(`actions.${index}.parameters.tags`)}

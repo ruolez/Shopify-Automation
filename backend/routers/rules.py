@@ -8,6 +8,7 @@ from database import get_db
 from models import User, ProcessingRule
 from auth import get_current_user
 from schemas import RuleCreate
+from order_hold import HOLD_REASONS
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,10 @@ async def get_rule_schema(current_user: User = Depends(get_current_user)):
         "action_types": [
             {"type": "add_tag", "label": "Add Tag", "parameters": ["tags"]},
             {"type": "remove_tag", "label": "Remove Tag", "parameters": ["tags"]},
-            {"type": "set_fulfillment_location", "label": "Set Fulfillment Location", "parameters": ["location_id"]}
-        ]
+            {"type": "set_fulfillment_location", "label": "Set Fulfillment Location", "parameters": ["location_id"]},
+            {"type": "place_on_hold", "label": "Place Order on Hold", "parameters": ["reason", "notes"]},
+        ],
+        "hold_reasons": HOLD_REASONS,
     }
 
 

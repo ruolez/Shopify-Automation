@@ -86,6 +86,7 @@ export interface RuleSchema {
   fields: RuleField[];
   operators: RuleOperator[];
   action_types: ActionType[];
+  hold_reasons?: { value: string; label: string }[];
 }
 
 export interface Location {
