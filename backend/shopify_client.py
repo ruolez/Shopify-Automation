@@ -2,9 +2,40 @@ import httpx
 import json
 import asyncio
 import os
+import re
 from typing import Dict, List, Optional, Any
 
 from logging_config import get_logger, debug_log, DEBUG_LOGGING
+
+# Shopify rejects any single GraphQL query whose *requested* cost exceeds this
+MAX_SINGLE_QUERY_COST = 1000
+QUERY_COST_WARNING_RATIO = 0.9
+
+
+def _query_name(query: str) -> str:
+    match = re.search(r"\b(?:query|mutation)\s+(\w+)", query or "")
+    return match.group(1) if match else "anonymous"
+
+
+def query_cost_rejection_message(query: str, requested_cost: Any) -> str:
+    return (
+        f"Shopify rejected the '{_query_name(query)}' query: requested cost "
+        f"{requested_cost or 'unknown'} exceeds the {MAX_SINGLE_QUERY_COST}-point limit "
+        f"for a single query. Reduce the order page size (get_orders limit) so the query fits."
+    )
+
+
+def query_cost_headroom_warning(stats: Dict[str, Any]) -> Optional[str]:
+    """Warning text when the most expensive query seen is close to Shopify's per-query limit"""
+    requested = stats.get("max_requested_cost") or 0
+    if requested < MAX_SINGLE_QUERY_COST * QUERY_COST_WARNING_RATIO:
+        return None
+    return (
+        f"Shopify GraphQL query '{stats.get('max_requested_cost_query')}' requests {requested} of the "
+        f"{MAX_SINGLE_QUERY_COST} cost points allowed per query ({requested / MAX_SINGLE_QUERY_COST:.0%}). "
+        f"Shopify will reject order syncs if it grows past the limit — reduce the order page size "
+        f"(get_orders limit) to add headroom."
+    )
 
 logger = get_logger(__name__)
 
@@ -40,6 +71,8 @@ class ShopifyClient:
         self._total_query_cost = 0
         self._query_count = 0
         self._high_cost_query_count = 0
+        self._max_requested_cost = 0
+        self._max_requested_cost_query = None
         self._auto_optimization_enabled = True
         self._current_optimization_level = "balanced"
     
@@ -134,6 +167,9 @@ class ShopifyClient:
                         self._last_query_cost = actual_cost
                         self._total_query_cost += actual_cost
                         self._query_count += 1
+                        if requested_cost > self._max_requested_cost:
+                            self._max_requested_cost = requested_cost
+                            self._max_requested_cost_query = _query_name(query)
                         
                         # Log cost information
                         logger.info(f"GraphQL Query Cost: {actual_cost}/{requested_cost} "
@@ -182,6 +218,16 @@ class ShopifyClient:
                                 await asyncio.sleep(wait_time)
                                 continue
                             raise last_exception
+                        cost_exceeded = any(
+                            isinstance(err, dict)
+                            and (err.get("extensions") or {}).get("code") == "MAX_COST_EXCEEDED"
+                            for err in errors
+                        )
+                        if cost_exceeded:
+                            cost_ext = (result.get("extensions") or {}).get("cost") or {}
+                            message = query_cost_rejection_message(query, cost_ext.get("requestedQueryCost"))
+                            logger.error(message)
+                            raise ShopifyGraphQLError(message)
                         logger.error(f"GraphQL errors: {errors}")
                         raise ShopifyGraphQLError(f"GraphQL errors: {errors}")
 
@@ -254,6 +300,8 @@ class ShopifyClient:
             "query_count": self._query_count,
             "average_query_cost": self._total_query_cost / self._query_count if self._query_count > 0 else 0,
             "high_cost_query_count": self._high_cost_query_count,
+            "max_requested_cost": self._max_requested_cost,
+            "max_requested_cost_query": self._max_requested_cost_query,
             "current_optimization_level": self._current_optimization_level,
             "auto_optimization_enabled": self._auto_optimization_enabled
         }

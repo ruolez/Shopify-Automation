@@ -20,7 +20,7 @@ from models import User, ShopifyStore, ProcessingRule, OrderLog, TaskStatus, Set
 # Redis client for distributed locking
 import redis as _redis
 _redis_client = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-from shopify_client import ShopifyClient
+from shopify_client import ShopifyClient, query_cost_headroom_warning
 from enhanced_shopify_client import EnhancedShopifyClient
 from rule_engine import RuleEngine, calculate_order_profit, PROFIT_FIELDS
 from fraud_service import FraudAnalysisService
@@ -1127,8 +1127,13 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
         # Ensure session is rolled back on any error
         db.rollback()
         logger.error(f"Error fetching orders from {store.shop_domain}: {str(e)}")
+        _log_store_alert_once(db, store, "order_fetch_error", str(e), timedelta(hours=1))
         raise
-    
+
+    headroom_warning = query_cost_headroom_warning(client.get_query_cost_stats())
+    if headroom_warning:
+        _log_store_alert_once(db, store, "query_cost_warning", headroom_warning, timedelta(days=1))
+
     return {
         "processed_orders": processed_orders,
         "store_domain": store.shop_domain
@@ -1472,6 +1477,32 @@ def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool) -
     if _rule_condition_fields(rule) & set(PROFIT_FIELDS):
         details["profit"] = calculate_order_profit(order)
     return details
+
+
+
+def _log_store_alert_once(db: Session, store: ShopifyStore, action: str, message: str, within: timedelta) -> bool:
+    """Write a store-level problem to the order log (status "error", so it shows in the
+    dashboard's Recent Errors and the Order Logs page) unless the same alert was already
+    logged for this store within the given window — sync runs every minute."""
+    try:
+        since = datetime.now(timezone.utc) - within
+        already_logged = db.query(OrderLog.id).filter(
+            OrderLog.store_id == store.id,
+            OrderLog.action == action,
+            OrderLog.error_message == message,
+            OrderLog.created_at >= since
+        ).first()
+        if already_logged:
+            return False
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to check for existing store alert: {str(e)}")
+        return False
+    _log_order_action(
+        db, store.user_id, store.id, f"store:{store.id}", store.shop_domain,
+        action, "error", error_message=message
+    )
+    return True
 
 
 def _log_order_action(
