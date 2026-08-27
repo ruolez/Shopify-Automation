@@ -32,12 +32,17 @@ class TestPickSamples:
         samples = [sample(60, 4), sample(145, 8), sample(190, 11)]
         assert svc.pick_samples(samples, 100.0) == (100, [4.0, 8.0, 11.0])
 
+    @pytest.mark.parametrize("far_weight,expected_tier", [(290, 200), (390, 300), (590, 500)])
+    def test_keeps_widening_through_200_300_500g(self, far_weight, expected_tier):
+        samples = [sample(60, 4), sample(145, 8), sample(far_weight, 11)]
+        assert svc.pick_samples(samples, 100.0) == (expected_tier, [4.0, 8.0, 11.0])
+
     def test_uses_widest_tier_even_with_fewer_than_minimum(self):
-        samples = [sample(60, 4), sample(195, 8)]
-        assert svc.pick_samples(samples, 100.0) == (100, [4.0, 8.0])
+        samples = [sample(60, 4), sample(595, 8)]
+        assert svc.pick_samples(samples, 100.0) == (500, [4.0, 8.0])
 
     def test_no_samples_within_widest_tier(self):
-        assert svc.pick_samples([sample(250, 9)], 100.0) == (None, [])
+        assert svc.pick_samples([sample(650, 9)], 100.0) == (None, [])
 
     def test_boundary_is_inclusive(self):
         samples = [sample(90, 1), sample(110, 2), sample(100, 3)]

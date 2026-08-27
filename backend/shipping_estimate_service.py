@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 # Backfilling this far needs Settings.log_retention_days >= this, since samples are built
 # from archived fulfilled orders that retention deletes.
 SAMPLE_WINDOW_DAYS = 90
-TOLERANCE_TIERS_G = (10, 25, 50, 100)
+TOLERANCE_TIERS_G = (10, 25, 50, 100, 200, 300, 500)
 MIN_SAMPLES = 3
 NO_ESTIMATE = {"cost": None, "samples": 0, "tolerance_g": None}
 
