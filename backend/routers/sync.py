@@ -242,6 +242,8 @@ async def debug_test_rule(
     try:
         orders_data = await client.get_orders(limit=10)
         orders = [edge["node"] for edge in orders_data.get("edges", [])]
+        for order in orders:
+            await client.ensure_complete_line_items(order)
         results = []
 
         for order in orders:

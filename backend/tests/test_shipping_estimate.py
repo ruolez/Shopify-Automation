@@ -225,3 +225,30 @@ class TestDescribePymssqlError:
     def test_plain_exception_text(self):
         from shipper_db import _describe
         assert _describe(RuntimeError("login failed")) == "login failed"
+
+
+class TestRelativeToleranceTiers:
+    def test_light_orders_keep_only_fixed_bands(self):
+        assert svc.tolerance_tiers_for(400.0) == [10, 25, 50, 100, 200, 300, 500]
+
+    def test_heavy_orders_add_relative_bands_wider_than_500g(self):
+        assert svc.tolerance_tiers_for(100000.0) == [10, 25, 50, 100, 200, 300, 500, 5000, 10000, 20000, 35000]
+
+    def test_only_relative_bands_wider_than_the_last_fixed_band_are_added(self):
+        assert svc.tolerance_tiers_for(4000.0) == [10, 25, 50, 100, 200, 300, 500, 800, 1400]
+
+    def test_heavy_order_matches_within_relative_band(self):
+        samples = [sample(96000, 40), sample(108000, 44), sample(118000, 50), sample(150000, 70)]
+        assert svc.pick_samples(samples, 100000.0) == (20000, [40.0, 44.0, 50.0])
+
+    def test_heavy_order_uses_widest_relative_band_when_short(self):
+        assert svc.pick_samples([sample(134000, 60)], 100000.0) == (35000, [60.0])
+
+    def test_estimate_query_spans_the_widest_band(self):
+        db = Mock()
+        query = db.query.return_value
+        query.filter.return_value = query
+        query.all.return_value = []
+        svc.estimate_shipping_cost(db, 1, "OHIO", 100000.0)
+        bounds = [str(arg) for call in query.filter.call_args_list for arg in call.args]
+        assert any("weight_grams >= " in b for b in bounds) and any("weight_grams <= " in b for b in bounds)

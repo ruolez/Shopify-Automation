@@ -903,6 +903,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     """Async function to process store orders"""
     client = ShopifyClient(store.shop_domain, store.access_token)
     rule_engine = RuleEngine()
+    needs_full_line_items = _rules_need_full_line_items(rules)
     
     # Get excluded SKUs for this user
     excluded_skus_query = db.query(ExcludedSKU).filter(
@@ -1006,6 +1007,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     # Apply rules to order
                     rules_applied = False
                     current_order = order  # Start with the initial order data
+                    await _ensure_line_items_for_rules(client, current_order, needs_full_line_items)
                     
                     for rule in rules:
                         # Evaluate rule against current order state
@@ -1034,6 +1036,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             
                             if refreshed_order:
                                 current_order = refreshed_order
+                                await _ensure_line_items_for_rules(client, current_order, needs_full_line_items)
                                 logger.info(f"Order {order_number} refreshed - tags: {current_order.get('tags', [])}")
                             else:
                                 logger.warning(f"Failed to refresh order {order_number}, continuing with current state")
@@ -1466,6 +1469,27 @@ async def _apply_rule_actions(
             success = False
     
     return success
+
+
+# Rule fields whose value depends on the full line-item list; the sync query only
+# fetches the first 20 line items, so orders beyond that are completed on demand
+LINE_ITEM_DEPENDENT_FIELDS = set(PROFIT_FIELDS) | {
+    "order_weight", "product_types", "product_vendors", "product_skus", "line_item_count", "total_quantity",
+}
+
+
+def _rules_need_full_line_items(rules) -> bool:
+    return any(_rule_condition_fields(rule) & LINE_ITEM_DEPENDENT_FIELDS for rule in rules)
+
+
+async def _ensure_line_items_for_rules(client: ShopifyClient, order: Dict[str, Any], needed: bool) -> None:
+    """Fetch every line item of a truncated order before rules that depend on them run"""
+    if not needed:
+        return
+    try:
+        await client.ensure_complete_line_items(order)
+    except Exception as e:
+        logger.warning(f"Could not fetch all line items for order {order.get('name', 'unknown')}: {e}")
 
 
 def _rule_condition_fields(rule) -> set:
@@ -2284,6 +2308,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
             client = ShopifyClient(store.shop_domain, store.access_token)
             
             logger.info(f"Found {len(rules)} active rules for retry processing")
+            await _ensure_line_items_for_rules(client, order_data, _rules_need_full_line_items(rules))
             for rule in rules:
                 logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
                 if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns, store):

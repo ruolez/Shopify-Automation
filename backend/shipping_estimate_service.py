@@ -24,6 +24,9 @@ logger = get_logger(__name__)
 # from archived fulfilled orders that retention deletes.
 SAMPLE_WINDOW_DAYS = 90
 TOLERANCE_TIERS_G = (10, 25, 50, 100, 200, 300, 500)
+# After the fixed bands, widen relative to the order's own weight so heavy (wholesale)
+# orders can match: a 100 kg order tries +/-5 kg, 10 kg, 20 kg, 35 kg
+RELATIVE_TOLERANCE_TIERS = (0.05, 0.10, 0.20, 0.35)
 MIN_SAMPLES = 3
 NO_ESTIMATE = {"cost": None, "samples": 0, "tolerance_g": None}
 
@@ -44,14 +47,25 @@ def order_shipping_state(order: Dict[str, Any]) -> Optional[str]:
     return province or None
 
 
+def tolerance_tiers_for(weight_grams: float) -> List[int]:
+    """Fixed gram bands, then relative bands that are wider than the last fixed one"""
+    tiers = list(TOLERANCE_TIERS_G)
+    for fraction in RELATIVE_TOLERANCE_TIERS:
+        tolerance = int(round(weight_grams * fraction))
+        if tolerance > tiers[-1]:
+            tiers.append(tolerance)
+    return tiers
+
+
 def pick_samples(samples: Sequence[Tuple[float, float]], weight_grams: float) -> Tuple[Optional[int], List[float]]:
     """(tolerance used, costs) — first tier with at least MIN_SAMPLES, else whatever the widest tier has"""
     costs: List[float] = []
-    for tolerance in TOLERANCE_TIERS_G:
+    tiers = tolerance_tiers_for(weight_grams)
+    for tolerance in tiers:
         costs = [cost for weight, cost in samples if abs(weight - weight_grams) <= tolerance]
         if len(costs) >= MIN_SAMPLES:
             return tolerance, costs
-    return (TOLERANCE_TIERS_G[-1] if costs else None), costs
+    return (tiers[-1] if costs else None), costs
 
 
 def estimate_from_samples(samples: Sequence[Tuple[float, float]], weight_grams: float) -> Dict[str, Any]:
@@ -65,7 +79,7 @@ def estimate_shipping_cost(db, store_id: int, shipping_state: Optional[str], wei
                            exclude_order_name: Optional[str] = None, today: Optional[date] = None) -> Dict[str, Any]:
     if not shipping_state or not weight_grams or weight_grams <= 0:
         return dict(NO_ESTIMATE)
-    widest = TOLERANCE_TIERS_G[-1]
+    widest = tolerance_tiers_for(weight_grams)[-1]
     since = (today or date.today()) - timedelta(days=SAMPLE_WINDOW_DAYS)
     query = db.query(ShippingCostSample.weight_grams, ShippingCostSample.shipping_cost).filter(
         ShippingCostSample.store_id == store_id,

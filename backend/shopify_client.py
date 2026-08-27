@@ -1408,6 +1408,85 @@ class ShopifyClient:
         logger.info(f"Returning {len(locations)} active locations")
         return locations
     
+    LINE_ITEM_PAGE_SIZE = 250  # Shopify's maximum page size
+    LINE_ITEM_MAX_PAGES = 40
+
+    async def fetch_all_line_items(self, order_id: str) -> List[Dict]:
+        """Every line item of an order, paginated at Shopify's 250-per-page maximum,
+        with the same fields the order queries select (weights, unit cost, product flags)."""
+        query = """
+        query getOrderLineItemsPage($id: ID!, $first: Int!, $after: String) {
+            order(id: $id) {
+                id
+                lineItems(first: $first, after: $after) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    edges {
+                        node {
+                            id
+                            title
+                            quantity
+                            currentQuantity
+                            requiresShipping
+                            product {
+                                id
+                                productType
+                                vendor
+                                tags
+                                isGiftCard
+                            }
+                            variant {
+                                id
+                                title
+                                sku
+                                inventoryItem {
+                                    measurement {
+                                        weight {
+                                            value
+                                            unit
+                                        }
+                                    }
+                                    unitCost {
+                                        amount
+                                        currencyCode
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        edges: List[Dict] = []
+        cursor = None
+        for _ in range(self.LINE_ITEM_MAX_PAGES):
+            result = await self._make_graphql_request(
+                query, {"id": order_id, "first": self.LINE_ITEM_PAGE_SIZE, "after": cursor}
+            )
+            connection = (((result.get("data") or {}).get("order") or {}).get("lineItems")) or {}
+            edges.extend(connection.get("edges") or [])
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage") or not page_info.get("endCursor"):
+                break
+            cursor = page_info["endCursor"]
+        else:
+            logger.warning(f"Order {order_id}: stopped paginating line items after {self.LINE_ITEM_MAX_PAGES} pages")
+        return edges
+
+    async def ensure_complete_line_items(self, order: Dict) -> bool:
+        """Replace a truncated lineItems page (hasNextPage) with the complete list, in place.
+        Returns True when a fetch happened; orders that already fit in one page cost nothing."""
+        connection = order.get("lineItems") or {}
+        if not (connection.get("pageInfo") or {}).get("hasNextPage") or not order.get("id"):
+            return False
+        edges = await self.fetch_all_line_items(order["id"])
+        order["lineItems"] = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": edges}
+        logger.info(f"Order {order.get('name', order['id'])}: fetched all {len(edges)} line items (page was truncated)")
+        return True
+
     async def get_order_by_id(self, order_id: str, include_fraud_data: bool = False) -> Dict | None:
         """Get a specific order by ID for retry processing"""
         if include_fraud_data:
