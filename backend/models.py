@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, UniqueConstraint, Numeric
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, ForeignKey, JSON, UniqueConstraint, Numeric, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.sql import func
@@ -26,6 +26,7 @@ class User(Base):
     fraud_analyses = relationship("FraudAnalysis", back_populates="user", cascade="all, delete-orphan")
     fraud_detection_rules = relationship("FraudDetectionRule", back_populates="user", cascade="all, delete-orphan")
     task_statuses = relationship("TaskStatus", back_populates="user", cascade="all, delete-orphan")
+    shipping_cost_samples = relationship("ShippingCostSample", back_populates="user", cascade="all, delete-orphan")
 
 class ShopifyStore(Base):
     __tablename__ = "shopify_stores"
@@ -74,6 +75,7 @@ class ShopifyStore(Base):
     location_mappings = relationship("LocationMapping", back_populates="store", cascade="all, delete-orphan")
     fraud_analyses = relationship("FraudAnalysis", back_populates="store", cascade="all, delete-orphan")
     fraud_rule_stores = relationship("FraudRuleStore", back_populates="store", cascade="all, delete-orphan")
+    shipping_cost_samples = relationship("ShippingCostSample", back_populates="store", cascade="all, delete-orphan")
 
 class ProcessingRule(Base):
     __tablename__ = "processing_rules"
@@ -184,9 +186,28 @@ class Settings(Base):
     date_format = Column(String, default="MMM d, yyyy HH:mm")  # User's preferred date format
     inventory_verification_excluded_tag = Column(String(255), nullable=True)  # Tag to exclude from inventory verification
     inventory_verification_days_back = Column(Integer, default=5)  # How many days to look back for inventory verification
+    # Shipper platform MS SQL connection (shipping cost estimates); configured = host + name + user set
+    shipper_db_host = Column(String(255), nullable=True)
+    shipper_db_port = Column(Integer, default=1433)
+    shipper_db_name = Column(String(255), nullable=True)
+    shipper_db_user = Column(String(255), nullable=True)
+    _shipper_db_password_encrypted = Column("shipper_db_password", Text, nullable=True)  # Encrypted using Fernet
+    default_shipping_amount = Column(Numeric(10, 2), default=0)  # Used when no shipping estimate is possible; 0 = none
+    shipper_db_last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    shipper_db_last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
+    @hybrid_property
+    def shipper_db_password(self):
+        """Decrypt and return the shipper database password (None when not set)."""
+        return decrypt_token(self._shipper_db_password_encrypted) if self._shipper_db_password_encrypted else None
+
+    @shipper_db_password.setter
+    def shipper_db_password(self, value):
+        """Encrypt and store the shipper database password."""
+        self._shipper_db_password_encrypted = encrypt_token(value) if value else None
+
     # Relationships
     user = relationship("User", back_populates="settings")
 
@@ -413,4 +434,29 @@ class FraudAnalysis(Base):
     __table_args__ = (
         # Index for order-based queries
         UniqueConstraint('store_id', 'order_name', name='unique_store_order_fraud_analysis'),
+    )
+
+
+class ShippingCostSample(Base):
+    """A shipped order (one per Shopify order name) with its real shipping cost from the
+    shipper platform, used to estimate shipping for new orders by state and weight."""
+    __tablename__ = "shipping_cost_samples"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id"), nullable=False)
+    order_name = Column(String(64), nullable=False)  # Shopify order name == parcels.order_number
+    shipping_state = Column(String(64), nullable=False)  # UPPERCASE Shopify province name, as fraud_analyses.shipping_state
+    weight_grams = Column(Numeric(10, 2), nullable=False)  # Rule-engine order weight (with the user's SKU exclusions)
+    shipping_cost = Column(Numeric(10, 2), nullable=False)  # SUM(parcels.cost) for the order
+    parcel_count = Column(Integer, nullable=False, default=1)
+    shipped_at = Column(Date, nullable=False)
+    synced_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="shipping_cost_samples")
+    store = relationship("ShopifyStore", back_populates="shipping_cost_samples")
+
+    __table_args__ = (
+        UniqueConstraint("store_id", "order_name", name="uq_shipping_cost_samples_store_order"),
+        Index("ix_shipping_cost_samples_lookup", "store_id", "shipping_state", "shipped_at", "weight_grams"),
     )

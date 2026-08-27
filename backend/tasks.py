@@ -23,6 +23,8 @@ _redis_client = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0
 from shopify_client import ShopifyClient, query_cost_headroom_warning
 from enhanced_shopify_client import EnhancedShopifyClient
 from rule_engine import RuleEngine, calculate_order_profit, PROFIT_FIELDS
+from shipper_db import ShipperDbConfig, ShipperDbError, fetch_parcel_costs
+from shipping_estimate_service import sync_user_samples, prune_samples, profit_with_shipping
 from fraud_service import FraudAnalysisService
 from fraud_rule_processor import process_fraud_rules_for_order_async
 from fraud_archive_service import FraudArchiveService
@@ -75,6 +77,10 @@ celery.conf.beat_schedule = {
     'archive-fraud-analyses': {
         'task': 'tasks.archive_fulfilled_fraud_analyses',
         'schedule': crontab(minute=0),  # Every hour
+    },
+    'sync-shipping-cost-samples': {
+        'task': 'tasks.sync_shipping_cost_samples',
+        'schedule': crontab(minute='*/15'),  # Pull shipped-parcel costs from the shipper DB
     },
 }
 
@@ -1016,7 +1022,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             _log_order_action(
                                 db, store.user_id, store.id, order_id, 
                                 order_number, f"applied_rule_{rule.id}", 
-                                "match", _rule_match_details(rule, current_order, success),
+                                "match", _rule_match_details(rule, current_order, success, store, excluded_sku_patterns, db),
                                 order_created_at=order_created_at
                             )
                             
@@ -1471,11 +1477,18 @@ def _rule_condition_fields(rule) -> set:
     return {c.get("field") for c in conditions if isinstance(c, dict)}
 
 
-def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool) -> Dict[str, Any]:
-    """Order-log details for a matched rule; includes the profit breakdown when the rule uses it"""
+def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool,
+                        store=None, excluded_skus: List[str] = None, db: Session = None) -> Dict[str, Any]:
+    """Order-log details for a matched rule; includes the profit breakdown (with the
+    shipping estimate) when the rule uses a profit field"""
     details = {"rule_name": rule.name, "actions_successful": actions_successful}
     if _rule_condition_fields(rule) & set(PROFIT_FIELDS):
-        details["profit"] = calculate_order_profit(order)
+        try:
+            details["profit"] = (profit_with_shipping(order, store, excluded_skus, db)
+                                 if store is not None else calculate_order_profit(order))
+        except Exception as e:
+            logger.warning(f"Profit details unavailable for order {order.get('name', 'unknown')}: {e}")
+            details["profit"] = calculate_order_profit(order)
     return details
 
 
@@ -2056,6 +2069,69 @@ def test_store_connection(self, store_id: int):
     finally:
         loop.close()
 
+
+@celery.task(bind=True, soft_time_limit=600, time_limit=900)
+def sync_shipping_cost_samples(self):
+    """Pull shipped-parcel costs from each user's shipper database and refresh the
+    local shipping_cost_samples used for shipping estimates in Order Profit"""
+    task_id = self.request.id
+    create_task_status(task_id, "sync_shipping_cost_samples", "running")
+
+    try:
+        with get_db_session() as db:
+            users = db.query(User).join(Settings).filter(
+                Settings.shipper_db_host.isnot(None),
+                Settings.shipper_db_host != ""
+            ).all()
+            results = []
+
+            for user in users:
+                settings = db.query(Settings).filter(Settings.user_id == user.id).first()
+                config = ShipperDbConfig.from_settings(settings)
+                if not config:
+                    continue
+                stores = db.query(ShopifyStore).filter(
+                    ShopifyStore.user_id == user.id,
+                    ShopifyStore.is_active == True
+                ).all()
+
+                try:
+                    parcel_costs = fetch_parcel_costs(config)
+                except ShipperDbError as e:
+                    message = f"Shipper database unreachable: {e}"
+                    logger.error(f"User {user.id}: {message}")
+                    settings.shipper_db_last_error = message[:500]
+                    db.commit()
+                    for store in stores:
+                        _log_store_alert_once(db, store, "shipping_cost_sync", message, timedelta(hours=6))
+                    results.append({"user_id": user.id, "error": message})
+                    continue
+
+                excluded_skus = [
+                    sku.sku_pattern for sku in db.query(ExcludedSKU).filter(
+                        ExcludedSKU.user_id == user.id,
+                        ExcludedSKU.is_active == True
+                    ).all()
+                ]
+                stats = sync_user_samples(db, user, stores, parcel_costs, excluded_skus)
+                pruned = prune_samples(db, user.id)
+                settings.shipper_db_last_sync_at = datetime.now(timezone.utc)
+                settings.shipper_db_last_error = None
+                db.commit()
+                results.append({"user_id": user.id, "parcels": len(parcel_costs), "pruned": pruned, **stats})
+
+            result = {"users": results}
+            update_task_status(task_id, "success", result)
+            return result
+
+    except SoftTimeLimitExceeded:
+        update_task_status(task_id, "failed", error_message="Task exceeded soft time limit (10 minutes)")
+        raise
+    except Exception as e:
+        logger.error(f"Shipping cost sample sync failed: {str(e)}")
+        update_task_status(task_id, "failed", error_message=str(e))
+        raise
+
 @celery.task(bind=True, autoretry_for=(Exception,), max_retries=2,
              retry_backoff=60, retry_backoff_max=600, retry_jitter=True)
 def archive_fulfilled_fraud_analyses(self):
@@ -2224,7 +2300,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
                             "retry_type": "specific_rule" if rule_id else "all_rules",
                             "rule_id": rule_id,
                             "applied_rule_id": rule.id,
-                            **_rule_match_details(rule, order_data, success),
+                            **_rule_match_details(rule, order_data, success, store, excluded_sku_patterns, db),
                         }
                     )
                 else:

@@ -226,7 +226,8 @@ async def debug_test_rule(
             detail="Store not found"
         )
 
-    from rule_engine import RuleEngine, calculate_order_profit
+    from rule_engine import RuleEngine
+    from shipping_estimate_service import profit_with_shipping
     engine = RuleEngine()
 
     excluded_sku_patterns = [
@@ -248,7 +249,7 @@ async def debug_test_rule(
                 "order_name": order.get("name"),
                 "order_id": order.get("id"),
                 "matched": engine.evaluate_rule(rule, order, excluded_sku_patterns, store),
-                "profit": calculate_order_profit(order),
+                "profit": profit_with_shipping(order, store, excluded_sku_patterns, db),
             })
 
         return {

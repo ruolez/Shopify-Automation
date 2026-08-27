@@ -211,6 +211,36 @@ class SettingsUpdate(BaseModel):
             raise ValueError('Reconciliation batch size must be between 100 and 2000')
         return v
 
+class ShipperDatabaseUpdate(BaseModel):
+    """Shipper MS SQL connection for shipping-cost estimates; password omitted = keep stored"""
+    host: Optional[str] = None
+    port: int = 1433
+    database: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    default_shipping_amount: float = 0
+
+    @validator('port')
+    def validate_port(cls, v):
+        if v < 1 or v > 65535:
+            raise ValueError('Port must be between 1 and 65535')
+        return v
+
+    @validator('default_shipping_amount')
+    def validate_default_shipping_amount(cls, v):
+        if v < 0:
+            raise ValueError('Default shipping amount cannot be negative')
+        return round(v, 2)
+
+
+class ShipperDatabaseTest(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    database: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
 class SettingsResponse(SettingsBase):
     id: int
     user_id: int

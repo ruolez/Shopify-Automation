@@ -28,6 +28,7 @@ MIGRATION_ORDER = [
     "remove_age_checker_from_archive",
     "add_fraud_rule_stores",
     "add_oauth_fields_to_stores",
+    "add_shipper_db_settings",
 ]
 
 

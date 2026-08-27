@@ -8,7 +8,10 @@ from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
 logger = get_logger(__name__)
 
-PROFIT_FIELDS = ("order_profit", "order_profit_margin", "line_items_missing_cost")
+PROFIT_FIELDS = (
+    "order_profit", "order_profit_margin", "line_items_missing_cost",
+    "estimated_shipping_cost", "shipping_estimate_samples",
+)
 
 _UNKNOWN_PROFIT = {
     "revenue": None,
@@ -16,6 +19,7 @@ _UNKNOWN_PROFIT = {
     "profit": None,
     "margin_percent": None,
     "missing_cost_count": None,
+    "shipping_cost": None,
     "truncated": False,
 }
 
@@ -27,15 +31,16 @@ def _shop_money_amount(money_set: Any) -> Optional[float]:
     return float(amount)
 
 
-def calculate_order_profit(order: Dict[str, Any]) -> Dict[str, Any]:
+def calculate_order_profit(order: Dict[str, Any], shipping_cost: Optional[float] = None) -> Dict[str, Any]:
     """Order profit from a raw Shopify GraphQL order dict, in shop currency.
 
     revenue      = currentSubtotalPriceSet + currentShippingPriceSet
                    (minus currentTotalTaxSet when the store prices tax-inclusive)
     product_cost = sum(currentQuantity x variant.inventoryItem.unitCost)
-    profit       = revenue - product_cost
+    profit       = revenue - product_cost - shipping_cost
 
-    Real shipping cost is not included yet. Line items without a unit cost count as
+    shipping_cost is the caller's estimate (see shipping_estimate_service); None means
+    unknown and nothing is deducted. Line items without a unit cost count as
     $0 and are reported in missing_cost_count. Gift cards and tips/fees (no variant,
     not shippable) have no cost and are not counted as missing. When the line-item
     connection is truncated the cost would be partial, so every value is None.
@@ -93,7 +98,7 @@ def calculate_order_profit(order: Dict[str, Any]) -> Dict[str, Any]:
         product_cost += line_cost
         debug_log(logger, f"  - {item.get('title', 'Unknown')} (SKU: {variant.get('sku') or ''}): {quantity} x {unit_cost['amount']} = {line_cost}")
 
-    profit = revenue - product_cost
+    profit = revenue - product_cost - (shipping_cost or 0.0)
     margin_percent = round(profit / revenue * 100, 2) if revenue else None
     result = {
         "revenue": round(revenue, 2),
@@ -101,6 +106,7 @@ def calculate_order_profit(order: Dict[str, Any]) -> Dict[str, Any]:
         "profit": round(profit, 2),
         "margin_percent": margin_percent,
         "missing_cost_count": missing_cost_count,
+        "shipping_cost": round(shipping_cost, 2) if shipping_cost is not None else None,
         "truncated": False,
     }
     debug_log(logger, f"Order {order_name}: profit {result}")
@@ -112,6 +118,7 @@ class RuleEngine:
     
     def __init__(self, db_session: Session = None):
         self.db_session = db_session
+        self._profit_cache: Dict[Any, Dict[str, Any]] = {}
         self.operators = {
             "equals": self._equals,
             "not_equals": self._not_equals,
@@ -541,11 +548,15 @@ class RuleEngine:
                 return total_qty
 
             elif field in PROFIT_FIELDS:
-                profit_data = calculate_order_profit(order)
+                profit_data = self._profit_with_shipping(order, excluded_skus, store_context)
                 if field == "order_profit":
                     return profit_data["profit"]
                 if field == "order_profit_margin":
                     return profit_data["margin_percent"]
+                if field == "estimated_shipping_cost":
+                    return (profit_data.get("shipping_estimate") or {}).get("shipping_cost")
+                if field == "shipping_estimate_samples":
+                    return (profit_data.get("shipping_estimate") or {}).get("samples", 0)
                 return profit_data["missing_cost_count"]
 
             # Fraud-specific field extractors
@@ -558,8 +569,42 @@ class RuleEngine:
             logger.error(f"Error getting field {field}: {str(e)}")
             return None
     
+    def _profit_with_shipping(self, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> Dict[str, Any]:
+        """Profit net of the estimated shipping cost when a store is known; the plain
+        calculation otherwise. Memoized per order so several conditions cost one lookup,
+        and never lets an estimate failure block rule evaluation."""
+        store_id = getattr(store_context, "id", None)
+        if store_id is None:
+            return calculate_order_profit(order)
+        key = (store_id, order.get("id") or order.get("name"))
+        cached = self._profit_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            from shipping_estimate_service import profit_with_shipping
+            result = profit_with_shipping(order, store_context, excluded_skus, self.db_session)
+        except Exception as e:
+            logger.warning(f"Shipping estimate unavailable for order {order.get('name', 'unknown')}: {e}")
+            result = calculate_order_profit(order)
+        if len(self._profit_cache) >= 500:
+            self._profit_cache.clear()
+        self._profit_cache[key] = result
+        return result
+
     # Operator implementations
+    @staticmethod
+    def _coerce_numeric_pair(actual: Any, expected: Any):
+        """Rule values arrive from the UI as strings; compare numerically when the
+        order field is a number and the rule value parses as one"""
+        if isinstance(actual, (int, float)) and not isinstance(actual, bool) and isinstance(expected, str):
+            try:
+                return float(actual), float(expected)
+            except ValueError:
+                return actual, expected
+        return actual, expected
+
     def _equals(self, actual: Any, expected: Any) -> bool:
+        actual, expected = self._coerce_numeric_pair(actual, expected)
         # Special handling for boolean comparisons with string values
         if isinstance(actual, bool) and isinstance(expected, str):
             # Convert string boolean to actual boolean for comparison
@@ -579,6 +624,7 @@ class RuleEngine:
         return result
     
     def _not_equals(self, actual: Any, expected: Any) -> bool:
+        actual, expected = self._coerce_numeric_pair(actual, expected)
         # Use the same boolean conversion logic as _equals
         if isinstance(actual, bool) and isinstance(expected, str):
             if expected.lower() in ('true', '1', 'yes'):
@@ -940,9 +986,11 @@ class RuleEngine:
             {"field": "order_created_at", "label": "Order Created Date", "type": "datetime"},
             {"field": "line_item_count", "label": "Number of Line Items", "type": "number"},
             {"field": "total_quantity", "label": "Total Quantity", "type": "number"},
-            {"field": "order_profit", "label": "Order Profit (revenue − product cost, excl. tax)", "type": "number"},
+            {"field": "order_profit", "label": "Order Profit (revenue − product cost − est. shipping, excl. tax)", "type": "number"},
             {"field": "order_profit_margin", "label": "Order Profit Margin (%)", "type": "number"},
             {"field": "line_items_missing_cost", "label": "Line Items Missing Cost", "type": "number"},
+            {"field": "estimated_shipping_cost", "label": "Estimated Shipping Cost", "type": "number"},
+            {"field": "shipping_estimate_samples", "label": "Shipping Estimate Sample Count", "type": "number"},
 
             # Fraud analysis fields
             {"field": "fraud_is_first_time_customer", "label": "Fraud: Is First Time Customer", "type": "boolean"},

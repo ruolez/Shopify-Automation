@@ -14,6 +14,8 @@ cryptography==43.0.3
 python-dotenv==1.0.0
 slowapi==0.1.9
 regex==2024.11.6
+# Shipper platform MS SQL (read-only parcel costs); wheels bundle FreeTDS
+pymssql==2.3.13
 # PostgreSQL support
 psycopg2-binary==2.9.9
 # Optional: async PostgreSQL support

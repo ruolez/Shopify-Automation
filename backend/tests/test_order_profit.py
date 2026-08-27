@@ -63,6 +63,7 @@ class TestCalculateOrderProfit:
             "profit": 55.0,
             "margin_percent": 50.0,
             "missing_cost_count": 0,
+            "shipping_cost": None,
             "truncated": False,
         }
 
@@ -119,6 +120,7 @@ class TestCalculateOrderProfit:
             "profit": None,
             "margin_percent": None,
             "missing_cost_count": None,
+            "shipping_cost": None,
             "truncated": True,
         }
 
@@ -144,6 +146,8 @@ class TestProfitRuleFields:
             "order_profit": "number",
             "order_profit_margin": "number",
             "line_items_missing_cost": "number",
+            "estimated_shipping_cost": "number",
+            "shipping_estimate_samples": "number",
         }
 
     def test_field_extraction(self):
@@ -153,6 +157,8 @@ class TestProfitRuleFields:
             "order_profit": 70.0,
             "order_profit_margin": pytest.approx(63.64),
             "line_items_missing_cost": 1,
+            "estimated_shipping_cost": None,
+            "shipping_estimate_samples": 0,
         }
 
     @staticmethod
@@ -247,3 +253,26 @@ class TestOrderTotalNotShadowedByFraudFields:
     def test_fraud_dict_value_still_wins(self):
         engine = RuleEngine()
         assert engine._get_order_field_value("order_total", {"order_total": 42.5, "totalPriceSet": money("150.00")}) == 42.5
+
+
+class TestNumericEqualsCoercion:
+    """Rule values are strings from the UI; numeric order fields must still compare equal"""
+
+    def setup_method(self):
+        self.engine = RuleEngine()
+
+    @pytest.mark.parametrize("actual,expected,result", [(0, "0", True), (2, "2", True), (2.0, "2", True), (3, "2", False), (2, "abc", False)])
+    def test_equals_with_numeric_strings(self, actual, expected, result):
+        assert self.engine._equals(actual, expected) is result
+
+    @pytest.mark.parametrize("actual,expected,result", [(0, "0", False), (3, "2", True)])
+    def test_not_equals_with_numeric_strings(self, actual, expected, result):
+        assert self.engine._not_equals(actual, expected) is result
+
+    def test_boolean_and_string_semantics_unchanged(self):
+        assert (self.engine._equals(True, "true"), self.engine._equals("CA", "CA"), self.engine._equals(True, "1")) == (True, True, True)
+
+    def test_rule_with_equals_on_count_field_matches(self):
+        rule = Mock(); rule.id = 1; rule.name = "one item"
+        rule.conditions = {"operator": "AND", "conditions": [{"field": "line_item_count", "operator": "equals", "value": "1"}]}
+        assert self.engine.evaluate_rule(rule, order([line_item(1, "1.00")])) is True

@@ -18,6 +18,7 @@ from csrf_protection import CSRFMiddleware
 from rate_limiting import limiter, rate_limit_exceeded_handler
 from database import create_tables, engine
 from migrations.add_oauth_fields_to_stores import run_migration as ensure_store_oauth_columns
+from migrations.add_shipper_db_settings import run_migration as ensure_shipper_db_columns
 from database_utils import migrate_rules_to_new_format
 from tasks import test_celery_connection
 
@@ -52,9 +53,10 @@ async def lifespan(app: FastAPI):
     for attempt in range(1, 4):
         try:
             ensure_store_oauth_columns(engine)
+            ensure_shipper_db_columns(engine)
             break
         except Exception as e:
-            logger.error(f"Store OAuth column check failed (attempt {attempt}/3): {e}")
+            logger.error(f"Schema column check failed (attempt {attempt}/3): {e}")
             time.sleep(5)
     logger.info("Database tables created successfully")
 

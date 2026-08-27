@@ -19,7 +19,11 @@ from schemas import (
     SettingsUpdate, SettingsResponse, ExcludedSKUCreate, ExcludedSKUUpdate, ExcludedSKUResponse
 )
 from dependencies import _format_timestamp_with_user_timezone
-from tasks import trigger_fraud_analysis_all_recent, reprocess_fraud_rules_recent
+from tasks import trigger_fraud_analysis_all_recent, reprocess_fraud_rules_recent, sync_shipping_cost_samples
+from fastapi.concurrency import run_in_threadpool
+from shipper_db import ShipperDbConfig, ShipperDbError, test_connection as test_shipper_connection
+from schemas import ShipperDatabaseUpdate, ShipperDatabaseTest
+from models import ShippingCostSample
 import database_utils
 from db_utils import get_db_type
 
@@ -370,6 +374,112 @@ async def update_inventory_verification_settings(
         "days_back": settings.inventory_verification_days_back or 5,
         "enabled": os.getenv("ENABLE_INVENTORY_VERIFICATION", "true").lower() == "true"
     }
+
+
+def _shipper_database_response(db: Session, settings: Settings, user_id: int) -> Dict[str, Any]:
+    sample_count = db.query(func.count(ShippingCostSample.id)).filter(
+        ShippingCostSample.user_id == user_id
+    ).scalar() or 0
+    return {
+        "host": settings.shipper_db_host,
+        "port": settings.shipper_db_port or 1433,
+        "database": settings.shipper_db_name,
+        "username": settings.shipper_db_user,
+        "has_password": bool(settings._shipper_db_password_encrypted),
+        "default_shipping_amount": float(settings.default_shipping_amount or 0),
+        "last_sync_at": settings.shipper_db_last_sync_at.isoformat() if settings.shipper_db_last_sync_at else None,
+        "last_error": settings.shipper_db_last_error,
+        "sample_count": sample_count,
+    }
+
+
+def _get_or_create_settings(db: Session, user_id: int) -> Settings:
+    settings = db.query(Settings).filter(Settings.user_id == user_id).first()
+    if not settings:
+        settings = Settings(user_id=user_id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+
+@router.get("/shipper-database")
+async def get_shipper_database_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Shipper MS SQL connection used for shipping-cost estimates (password never returned)"""
+    settings = _get_or_create_settings(db, current_user.id)
+    return _shipper_database_response(db, settings, current_user.id)
+
+
+@router.put("/shipper-database")
+async def update_shipper_database_settings(
+    data: ShipperDatabaseUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Save the shipper connection; an omitted password keeps the stored one, an empty host clears the connection"""
+    settings = _get_or_create_settings(db, current_user.id)
+    host = (data.host or "").strip() or None
+    if host is None:
+        settings.shipper_db_host = None
+        settings.shipper_db_name = None
+        settings.shipper_db_user = None
+        settings.shipper_db_password = None
+        settings.shipper_db_last_error = None
+    else:
+        settings.shipper_db_host = host
+        settings.shipper_db_port = data.port
+        settings.shipper_db_name = (data.database or "").strip() or None
+        settings.shipper_db_user = (data.username or "").strip() or None
+        if data.password:
+            settings.shipper_db_password = data.password
+    settings.default_shipping_amount = data.default_shipping_amount
+    db.commit()
+    db.refresh(settings)
+    return _shipper_database_response(db, settings, current_user.id)
+
+
+@router.post("/shipper-database/test")
+@limiter.limit(TRIGGER_LIMIT)
+async def test_shipper_database_connection(
+    request: Request,
+    data: ShipperDatabaseTest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Try the posted connection details (falling back to stored values, incl. the saved password)"""
+    settings = _get_or_create_settings(db, current_user.id)
+    config = ShipperDbConfig(
+        host=(data.host or settings.shipper_db_host or "").strip(),
+        port=int(data.port or settings.shipper_db_port or 1433),
+        database=(data.database or settings.shipper_db_name or "").strip(),
+        user=(data.username or settings.shipper_db_user or "").strip(),
+        password=data.password or settings.shipper_db_password or "",
+    )
+    if not (config.host and config.database and config.user):
+        raise HTTPException(status_code=400, detail="Host, database and username are required")
+    try:
+        await run_in_threadpool(test_shipper_connection, config)
+    except ShipperDbError as e:
+        raise HTTPException(status_code=400, detail=f"Connection failed: {e}")
+    return {"ok": True}
+
+
+@router.post("/shipper-database/sync")
+@limiter.limit(TRIGGER_LIMIT)
+async def trigger_shipper_database_sync(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Queue an immediate shipping-cost sample sync"""
+    settings = _get_or_create_settings(db, current_user.id)
+    if not ShipperDbConfig.from_settings(settings):
+        raise HTTPException(status_code=400, detail="Configure and save the shipper database first")
+    task = sync_shipping_cost_samples.delay()
+    return {"task_id": task.id, "message": "Shipping cost sync queued"}
 
 
 @router.get("/date-formats")

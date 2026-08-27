@@ -922,6 +922,220 @@ const InventoryVerificationSection: React.FC = () => {
   );
 };
 
+const ShipperDatabaseSection: React.FC<{ timezone?: string; dateFormat?: string }> = ({
+  timezone,
+  dateFormat,
+}) => {
+  const queryClient = useQueryClient();
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState<number>(1433);
+  const [database, setDatabase] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [defaultShippingAmount, setDefaultShippingAmount] = useState("0");
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data: shipperSettings, isLoading } = useQuery({
+    queryKey: ["shipper-database-settings"],
+    queryFn: async () => {
+      const response = await api.get("/settings/shipper-database");
+      return response.data;
+    },
+  });
+
+  const resetForm = () => {
+    setHost(shipperSettings?.host || "");
+    setPort(shipperSettings?.port || 1433);
+    setDatabase(shipperSettings?.database || "");
+    setUsername(shipperSettings?.username || "");
+    setPassword("");
+    setDefaultShippingAmount(String(shipperSettings?.default_shipping_amount ?? 0));
+    setHasChanges(false);
+  };
+
+  useEffect(() => {
+    if (shipperSettings) resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipperSettings]);
+
+  const payload = () => ({
+    host: host.trim() || null,
+    port,
+    database: database.trim() || null,
+    username: username.trim() || null,
+    password: password || null,
+    default_shipping_amount: parseFloat(defaultShippingAmount) || 0,
+  });
+
+  const saveSettings = useMutation({
+    mutationFn: async () => (await api.put("/settings/shipper-database", payload())).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["shipper-database-settings"] });
+      toast.success("Shipper database settings saved");
+      setHasChanges(false);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || "Failed to save shipper database settings");
+    },
+  });
+
+  const testConnection = useMutation({
+    mutationFn: async () => (await api.post("/settings/shipper-database/test", payload())).data,
+    onSuccess: () => toast.success("Connection successful"),
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || "Connection failed");
+    },
+  });
+
+  const syncNow = useMutation({
+    mutationFn: async () => (await api.post("/settings/shipper-database/sync")).data,
+    onSuccess: () => {
+      toast.success("Shipping cost sync queued");
+      setTimeout(
+        () => queryClient.invalidateQueries({ queryKey: ["shipper-database-settings"] }),
+        5000
+      );
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || "Failed to queue sync");
+    },
+  });
+
+  const onChange = (setter: (v: any) => void) => (value: any) => {
+    setter(value);
+    setHasChanges(true);
+  };
+
+  const inputClass =
+    "block w-full rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm";
+  const labelClass = "block text-sm font-medium text-gray-700 dark:text-dark-600";
+  const isConfigured = Boolean(shipperSettings?.host && shipperSettings?.database && shipperSettings?.username);
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <div className="flex justify-center items-center h-24">
+            <LoadingSpinner size="sm" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white dark:bg-dark-100 shadow rounded-lg">
+      <div className="px-4 py-5 sm:p-6">
+        <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-dark-800">
+          Shipper Database
+        </h3>
+        <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
+          Real shipping costs from the shipper platform (MS SQL) are used to estimate shipping for
+          new orders in the Order Profit rule criteria. Similar fulfilled orders (same store, same
+          state, similar weight, last 30 days) are averaged.
+        </p>
+
+        <div className="mt-6 space-y-6">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm font-medium text-gray-700 dark:text-dark-600">Status:</span>
+            <span
+              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                isConfigured
+                  ? "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400"
+                  : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400"
+              }`}
+            >
+              {isConfigured ? "Configured" : "Not configured"}
+            </span>
+            <span className="text-xs text-gray-500 dark:text-dark-400">
+              {shipperSettings?.sample_count ?? 0} samples
+              {shipperSettings?.last_sync_at &&
+                ` · last synced ${formatDate(shipperSettings.last_sync_at, { timezone, dateFormat })}`}
+            </span>
+          </div>
+          {shipperSettings?.last_error && (
+            <p className="text-sm text-red-600 dark:text-red-400">Last sync error: {shipperSettings.last_error}</p>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-6">
+            <div className="sm:col-span-4">
+              <label htmlFor="shipper-host" className={labelClass}>Host</label>
+              <input id="shipper-host" type="text" value={host} placeholder="sql.example.local"
+                onChange={(e) => onChange(setHost)(e.target.value)} className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="shipper-port" className={labelClass}>Port</label>
+              <input id="shipper-port" type="number" min="1" max="65535" value={port}
+                onChange={(e) => onChange(setPort)(parseInt(e.target.value) || 1433)} className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="shipper-database" className={labelClass}>Database</label>
+              <input id="shipper-database" type="text" value={database}
+                onChange={(e) => onChange(setDatabase)(e.target.value)} className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="shipper-username" className={labelClass}>Username</label>
+              <input id="shipper-username" type="text" value={username} autoComplete="off"
+                onChange={(e) => onChange(setUsername)(e.target.value)} className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="shipper-password" className={labelClass}>Password</label>
+              <input id="shipper-password" type="password" value={password} autoComplete="new-password"
+                placeholder={shipperSettings?.has_password ? "•••••••• (unchanged)" : ""}
+                onChange={(e) => onChange(setPassword)(e.target.value)} className={inputClass} />
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="default-shipping-amount" className={labelClass}>Default Shipping Amount</label>
+            <p className="text-sm text-gray-500 dark:text-dark-400 mb-2">
+              Deducted from Order Profit when no similar shipped order is found. 0 = nothing deducted.
+            </p>
+            <input id="default-shipping-amount" type="number" min="0" step="0.01" value={defaultShippingAmount}
+              onChange={(e) => onChange(setDefaultShippingAmount)(e.target.value)} className={`${inputClass} w-32`} />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => testConnection.mutate()}
+              disabled={testConnection.isPending || !host.trim()}
+              className="px-4 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {testConnection.isPending ? "Testing..." : "Test Connection"}
+            </button>
+            <button
+              onClick={() => syncNow.mutate()}
+              disabled={syncNow.isPending || !isConfigured || hasChanges}
+              title={hasChanges ? "Save changes first" : "Pull shipping costs from the shipper database now"}
+              className="px-4 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {syncNow.isPending ? "Queuing..." : "Sync now"}
+            </button>
+            {hasChanges && (
+              <>
+                <button
+                  onClick={() => saveSettings.mutate()}
+                  disabled={saveSettings.isPending}
+                  className="px-4 py-2 bg-shopify-600 hover:bg-shopify-700 text-white rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {saveSettings.isPending ? "Saving..." : "Save"}
+                </button>
+                <button
+                  onClick={resetForm}
+                  disabled={saveSettings.isPending}
+                  className="px-4 py-2 bg-gray-300 hover:bg-gray-400 dark:bg-gray-600 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const DatabaseCompaction: React.FC = () => {
   const [isCompacting, setIsCompacting] = useState(false);
   const queryClient = useQueryClient();
@@ -1743,6 +1957,7 @@ const Settings: React.FC = () => {
 
       {/* Inventory Verification Settings */}
       <InventoryVerificationSection />
+      <ShipperDatabaseSection timezone={settings?.timezone} dateFormat={settings?.date_format} />
 
       {/* Display Preferences */}
       <div className="bg-white dark:bg-dark-100 shadow rounded-lg">

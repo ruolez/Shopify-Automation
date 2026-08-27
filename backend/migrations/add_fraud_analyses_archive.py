@@ -72,12 +72,12 @@ def run_migration():
                 rule_processing_results TEXT,
                 
                 -- Analysis metadata
-                analysis_timestamp DATETIME,
+                analysis_timestamp TIMESTAMP,
                 processing_time_seconds NUMERIC(8, 4),
                 analysis_version VARCHAR DEFAULT '1.0',
                 
                 -- Archive-specific columns
-                archived_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                archived_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 archive_reason VARCHAR NOT NULL,  -- 'order_fulfilled' or 'order_cancelled'
                 
                 -- Foreign key references (for data integrity)
