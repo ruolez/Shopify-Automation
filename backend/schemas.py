@@ -211,6 +211,21 @@ class SettingsUpdate(BaseModel):
             raise ValueError('Reconciliation batch size must be between 100 and 2000')
         return v
 
+class RetryOrdersRequest(BaseModel):
+    """Re-run rules on specific Shopify orders (by GID), optionally with a single rule"""
+    order_ids: List[str]
+    rule_id: Optional[int] = None
+
+    @validator('order_ids')
+    def validate_order_ids(cls, v):
+        ids = [oid for oid in v if isinstance(oid, str) and oid.strip()]
+        if not ids:
+            raise ValueError('At least one order id is required')
+        if len(ids) > 500:
+            raise ValueError('At most 500 orders can be retried at once')
+        return ids
+
+
 class ShipperDatabaseUpdate(BaseModel):
     """Shipper MS SQL connection for shipping-cost estimates; password omitted = keep stored"""
     host: Optional[str] = None

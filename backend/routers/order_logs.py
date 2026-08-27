@@ -9,7 +9,8 @@ from sqlalchemy import func, text, case
 from database import get_db
 from models import User, ShopifyStore, OrderLog, ProcessedOrder, TaskStatus
 from auth import get_current_user
-from schemas import TaskStatusResponse, FailedTasksResponse
+from schemas import TaskStatusResponse, FailedTasksResponse, RetryOrdersRequest
+from tasks import retry_order_processing as run_retry_order_processing
 from dependencies import _format_timestamp_with_user_timezone
 from shopify_client import ShopifyClient
 
@@ -274,55 +275,19 @@ async def get_all_order_ids(
 
 @router.post("/retry")
 async def retry_order_processing(
-    order_ids: List[dict],
+    request: RetryOrdersRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Retry processing for specific orders"""
-    results = []
-
-    # Group orders by store
-    orders_by_store = {}
-    for order_info in order_ids:
-        store_id = order_info.get("store_id")
-        order_id = order_info.get("order_id")
-
-        if not store_id or not order_id:
-            results.append({"order_id": order_id, "success": False, "error": "Missing store_id or order_id"})
-            continue
-
-        if store_id not in orders_by_store:
-            orders_by_store[store_id] = []
-        orders_by_store[store_id].append(order_id)
-
-    # Process each store
-    for store_id, store_order_ids in orders_by_store.items():
-        store = db.query(ShopifyStore).filter(
-            ShopifyStore.id == store_id,
-            ShopifyStore.user_id == current_user.id
-        ).first()
-
-        if not store:
-            for oid in store_order_ids:
-                results.append({"order_id": oid, "success": False, "error": "Store not found"})
-            continue
-
-        # Mark orders for reprocessing by removing from processed_orders
-        for order_id in store_order_ids:
-            try:
-                db.query(ProcessedOrder).filter(
-                    ProcessedOrder.store_id == store_id,
-                    ProcessedOrder.order_id == order_id
-                ).delete()
-                results.append({"order_id": order_id, "success": True, "message": "Marked for reprocessing"})
-            except Exception as e:
-                results.append({"order_id": order_id, "success": False, "error": str(e)})
-
-    db.commit()
-
-    return {
-        "message": f"Processed {len(results)} orders",
-        "results": results,
-        "success_count": len([r for r in results if r.get("success")]),
-        "failure_count": len([r for r in results if not r.get("success")])
-    }
+    """Re-run the user's active rules (or one rule) on the given orders now and
+    report how many were processed; each outcome is written to the order log"""
+    try:
+        result = await run_retry_order_processing(
+            request.order_ids, request.rule_id, current_user.id, db
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Retry processing failed for user {current_user.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Retry failed: {e}")
+    return result

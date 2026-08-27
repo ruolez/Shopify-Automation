@@ -41,10 +41,33 @@ api.interceptors.request.use(
   },
 );
 
+// FastAPI validation errors (422) send `detail` as a list of objects; pages render
+// `detail` in toasts, so normalize it to a string once here.
+const formatErrorDetail = (detail: unknown): string => {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item: any) => {
+        if (item && typeof item === "object" && "msg" in item) {
+          const field = Array.isArray(item.loc) ? item.loc.filter((p: any) => p !== "body").join(".") : "";
+          return field ? `${field}: ${item.msg}` : String(item.msg);
+        }
+        return typeof item === "string" ? item : JSON.stringify(item);
+      })
+      .join("; ");
+  }
+  return JSON.stringify(detail);
+};
+
 // Response interceptor to handle auth errors and token refresh
 api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
+    const data = error.response?.data as { detail?: unknown } | undefined;
+    if (data && data.detail !== undefined && typeof data.detail !== "string") {
+      data.detail = formatErrorDetail(data.detail);
+    }
+
     const originalRequest = error.config as InternalAxiosRequestConfig & {
       _retry?: boolean;
     };
