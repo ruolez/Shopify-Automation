@@ -15,8 +15,8 @@ logger = get_logger(__name__)
 DEFAULT_PORT = 1433
 # Parcel statuses that never shipped: canceled, failed, draft
 EXCLUDED_PARCEL_STATUSES = (4, 9, 10)
-# Wider than the 30-day sample window so orders archived late still join
-PARCEL_LOOKBACK_DAYS = 35
+# Wider than shipping_estimate_service.SAMPLE_WINDOW_DAYS so orders archived late still join
+PARCEL_LOOKBACK_DAYS = 95
 
 PARCEL_COSTS_SQL = """
 SELECT p.order_number,

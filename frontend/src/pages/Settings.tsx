@@ -1032,7 +1032,8 @@ const ShipperDatabaseSection: React.FC<{ timezone?: string; dateFormat?: string 
         <p className="mt-1 text-sm text-gray-500 dark:text-dark-400">
           Real shipping costs from the shipper platform (MS SQL) are used to estimate shipping for
           new orders in the Order Profit rule criteria. Similar fulfilled orders (same store, same
-          state, similar weight, last 30 days) are averaged.
+          state, similar weight, last 90 days) are averaged. History is built from archived fulfilled
+          orders, so keep Log Retention at 90 days or more to fill the full window.
         </p>
 
         <div className="mt-6 space-y-6">

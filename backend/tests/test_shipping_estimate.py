@@ -28,12 +28,16 @@ class TestPickSamples:
         samples = [sample(100, 5), sample(105, 6), sample(120, 9), sample(140, 20)]
         assert svc.pick_samples(samples, 100.0) == (25, [5.0, 6.0, 9.0])
 
+    def test_widens_to_100g_when_50g_has_too_few(self):
+        samples = [sample(60, 4), sample(145, 8), sample(190, 11)]
+        assert svc.pick_samples(samples, 100.0) == (100, [4.0, 8.0, 11.0])
+
     def test_uses_widest_tier_even_with_fewer_than_minimum(self):
-        samples = [sample(60, 4), sample(145, 8)]
-        assert svc.pick_samples(samples, 100.0) == (50, [4.0, 8.0])
+        samples = [sample(60, 4), sample(195, 8)]
+        assert svc.pick_samples(samples, 100.0) == (100, [4.0, 8.0])
 
     def test_no_samples_within_widest_tier(self):
-        assert svc.pick_samples([sample(200, 9)], 100.0) == (None, [])
+        assert svc.pick_samples([sample(250, 9)], 100.0) == (None, [])
 
     def test_boundary_is_inclusive(self):
         samples = [sample(90, 1), sample(110, 2), sample(100, 3)]

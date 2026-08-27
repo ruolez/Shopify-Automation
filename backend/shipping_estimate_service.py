@@ -19,8 +19,11 @@ from rule_engine import RuleEngine, calculate_order_profit
 
 logger = get_logger(__name__)
 
-SAMPLE_WINDOW_DAYS = 30
-TOLERANCE_TIERS_G = (10, 25, 50)
+# How far back similar shipped orders are considered (and kept in shipping_cost_samples).
+# Backfilling this far needs Settings.log_retention_days >= this, since samples are built
+# from archived fulfilled orders that retention deletes.
+SAMPLE_WINDOW_DAYS = 90
+TOLERANCE_TIERS_G = (10, 25, 50, 100)
 MIN_SAMPLES = 3
 NO_ESTIMATE = {"cost": None, "samples": 0, "tolerance_g": None}
 
