@@ -12,6 +12,7 @@ from models import (
     ProcessedOrder, FraudAnalysis, FraudDetectionRule, TaskStatus,
 )
 from auth import get_current_user
+from time_utils import local_day_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +87,12 @@ async def get_enhanced_dashboard_stats(
 
 def _build_enhanced_stats(current_user: User, db: Session):
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     seven_days_ago = now - timedelta(days=7)
+
+    # All "today"/per-day buckets follow the user's configured timezone, not UTC
+    settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
+    user_timezone = settings.timezone if settings and settings.timezone else "UTC"
+    today_start, today_end = local_day_bounds(now, user_timezone)
 
     # Orders processed today
     orders_today = (
@@ -95,6 +100,7 @@ def _build_enhanced_stats(current_user: User, db: Session):
         .filter(
             OrderLog.user_id == current_user.id,
             OrderLog.created_at >= today_start,
+            OrderLog.created_at < today_end,
         )
         .scalar()
         or 0
@@ -103,8 +109,7 @@ def _build_enhanced_stats(current_user: User, db: Session):
     # Orders per day for last 7 days
     orders_by_day = []
     for i in range(7):
-        day_start = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
+        day_start, day_end = local_day_bounds(now, user_timezone, days_ago=i)
         count = (
             db.query(func.count(func.distinct(OrderLog.order_id)))
             .filter(
@@ -125,6 +130,7 @@ def _build_enhanced_stats(current_user: User, db: Session):
         .filter(
             OrderLog.user_id == current_user.id,
             OrderLog.created_at >= today_start,
+            OrderLog.created_at < today_end,
             OrderLog.status == "error",
         )
         .scalar()
@@ -133,7 +139,6 @@ def _build_enhanced_stats(current_user: User, db: Session):
     success_rate = ((total_orders - error_orders) / total_orders * 100) if total_orders > 0 else 100
 
     # Sync info
-    settings = db.query(Settings).filter(Settings.user_id == current_user.id).first()
     is_sync_enabled = settings.auto_sync_enabled if settings else False
     sync_frequency = settings.sync_frequency_minutes if settings else 10
 
@@ -154,6 +159,7 @@ def _build_enhanced_stats(current_user: User, db: Session):
             .filter(
                 OrderLog.user_id == current_user.id,
                 OrderLog.created_at >= today_start,
+                OrderLog.created_at < today_end,
                 OrderLog.action.like("applied_rule_%"),
             )
             .all()
@@ -172,6 +178,7 @@ def _build_enhanced_stats(current_user: User, db: Session):
         .filter(
             ShopifyStore.user_id == current_user.id,
             OrderLog.created_at >= today_start,
+            OrderLog.created_at < today_end,
         )
         .group_by(ShopifyStore.shop_name)
         .all()
