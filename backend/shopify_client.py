@@ -314,6 +314,23 @@ class ShopifyClient:
                                     currencyCode
                                 }
                             }
+                            taxesIncluded
+                            currentSubtotalPriceSet {
+                                shopMoney {
+                                    amount
+                                    currencyCode
+                                }
+                            }
+                            currentShippingPriceSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
+                            currentTotalTaxSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
                             currentTotalWeight
                             tags
                             displayFulfillmentStatus
@@ -402,11 +419,14 @@ class ShopifyClient:
                                         id
                                         title
                                         quantity
+                                        currentQuantity
+                                        requiresShipping
                                         product {
                                             id
                                             productType
                                             vendor
                                             tags
+                                            isGiftCard
                                         }
                                         variant {
                                             id
@@ -418,6 +438,10 @@ class ShopifyClient:
                                                         value
                                                         unit
                                                     }
+                                                }
+                                                unitCost {
+                                                    amount
+                                                    currencyCode
                                                 }
                                             }
                                         }
@@ -525,6 +549,23 @@ class ShopifyClient:
                                     currencyCode
                                 }
                             }
+                            taxesIncluded
+                            currentSubtotalPriceSet {
+                                shopMoney {
+                                    amount
+                                    currencyCode
+                                }
+                            }
+                            currentShippingPriceSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
+                            currentTotalTaxSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
                             currentTotalWeight
                             tags
                             displayFulfillmentStatus
@@ -557,11 +598,14 @@ class ShopifyClient:
                                         id
                                         title
                                         quantity
+                                        currentQuantity
+                                        requiresShipping
                                         product {
                                             id
                                             productType
                                             vendor
                                             tags
+                                            isGiftCard
                                         }
                                         variant {
                                             id
@@ -573,6 +617,10 @@ class ShopifyClient:
                                                         value
                                                         unit
                                                     }
+                                                }
+                                                unitCost {
+                                                    amount
+                                                    currencyCode
                                                 }
                                             }
                                         }
@@ -692,6 +740,23 @@ class ShopifyClient:
                                     currencyCode
                                 }}
                             }}
+                            taxesIncluded
+                            currentSubtotalPriceSet {{
+                                shopMoney {{
+                                    amount
+                                    currencyCode
+                                }}
+                            }}
+                            currentShippingPriceSet {{
+                                shopMoney {{
+                                    amount
+                                }}
+                            }}
+                            currentTotalTaxSet {{
+                                shopMoney {{
+                                    amount
+                                }}
+                            }}
                             currentTotalWeight
                             tags
                             displayFulfillmentStatus
@@ -767,11 +832,14 @@ class ShopifyClient:
                                         id
                                         title
                                         quantity
+                                        currentQuantity
+                                        requiresShipping
                                         product {{
                                             id
                                             productType
                                             vendor
                                             tags
+                                            isGiftCard
                                         }}
                                         variant {{
                                             id
@@ -783,6 +851,10 @@ class ShopifyClient:
                                                         value
                                                         unit
                                                     }}
+                                                }}
+                                                unitCost {{
+                                                    amount
+                                                    currencyCode
                                                 }}
                                             }}
                                         }}
@@ -881,6 +953,23 @@ class ShopifyClient:
                                     currencyCode
                                 }}
                             }}
+                            taxesIncluded
+                            currentSubtotalPriceSet {{
+                                shopMoney {{
+                                    amount
+                                    currencyCode
+                                }}
+                            }}
+                            currentShippingPriceSet {{
+                                shopMoney {{
+                                    amount
+                                }}
+                            }}
+                            currentTotalTaxSet {{
+                                shopMoney {{
+                                    amount
+                                }}
+                            }}
                             currentTotalWeight
                             tags
                             displayFulfillmentStatus
@@ -913,11 +1002,14 @@ class ShopifyClient:
                                         id
                                         title
                                         quantity
+                                        currentQuantity
+                                        requiresShipping
                                         product {{
                                             id
                                             productType
                                             vendor
                                             tags
+                                            isGiftCard
                                         }}
                                         variant {{
                                             id
@@ -929,6 +1021,10 @@ class ShopifyClient:
                                                         value
                                                         unit
                                                     }}
+                                                }}
+                                                unitCost {{
+                                                    amount
+                                                    currencyCode
                                                 }}
                                             }}
                                         }}
@@ -1280,6 +1376,23 @@ class ShopifyClient:
                             currencyCode
                         }
                     }
+                    taxesIncluded
+                    currentSubtotalPriceSet {
+                        shopMoney {
+                            amount
+                            currencyCode
+                        }
+                    }
+                    currentShippingPriceSet {
+                        shopMoney {
+                            amount
+                        }
+                    }
+                    currentTotalTaxSet {
+                        shopMoney {
+                            amount
+                        }
+                    }
                     currentTotalWeight
                     tags
                     displayFulfillmentStatus
@@ -1348,11 +1461,14 @@ class ShopifyClient:
                                 id
                                 title
                                 quantity
+                                currentQuantity
+                                requiresShipping
                                 product {
                                     id
                                     productType
                                     vendor
                                     tags
+                                    isGiftCard
                                 }
                                 variant {
                                     id
@@ -1364,6 +1480,10 @@ class ShopifyClient:
                                                 value
                                                 unit
                                             }
+                                        }
+                                        unitCost {
+                                            amount
+                                            currencyCode
                                         }
                                     }
                                 }
@@ -1463,6 +1583,23 @@ class ShopifyClient:
                             currencyCode
                         }
                     }
+                    taxesIncluded
+                    currentSubtotalPriceSet {
+                        shopMoney {
+                            amount
+                            currencyCode
+                        }
+                    }
+                    currentShippingPriceSet {
+                        shopMoney {
+                            amount
+                        }
+                    }
+                    currentTotalTaxSet {
+                        shopMoney {
+                            amount
+                        }
+                    }
                     currentTotalWeight
                     tags
                     displayFulfillmentStatus
@@ -1495,11 +1632,14 @@ class ShopifyClient:
                                 id
                                 title
                                 quantity
+                                currentQuantity
+                                requiresShipping
                                 product {
                                     id
                                     productType
                                     vendor
                                     tags
+                                    isGiftCard
                                 }
                                 variant {
                                     id
@@ -1511,6 +1651,10 @@ class ShopifyClient:
                                                 value
                                                 unit
                                             }
+                                        }
+                                        unitCost {
+                                            amount
+                                            currencyCode
                                         }
                                     }
                                 }

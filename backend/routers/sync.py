@@ -11,7 +11,7 @@ from sqlalchemy import func
 
 from database import get_db
 from rate_limiting import limiter, SYNC_LIMIT
-from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, TaskStatus, FraudAnalysis
+from models import User, ShopifyStore, ProcessingRule, OrderLog, Settings, ProcessedOrder, TaskStatus, FraudAnalysis, ExcludedSKU
 from auth import get_current_user
 from shopify_client import ShopifyClient
 from tasks import process_store_orders, process_all_orders
@@ -226,22 +226,29 @@ async def debug_test_rule(
             detail="Store not found"
         )
 
-    from rule_engine import RuleEngine
+    from rule_engine import RuleEngine, calculate_order_profit
     engine = RuleEngine()
+
+    excluded_sku_patterns = [
+        sku.sku_pattern
+        for sku in db.query(ExcludedSKU).filter(
+            ExcludedSKU.user_id == current_user.id,
+            ExcludedSKU.is_active == True
+        ).all()
+    ]
 
     client = ShopifyClient(store.shop_domain, store.access_token)
     try:
-        orders = await client.get_recent_orders(limit=10)
+        orders_data = await client.get_orders(limit=10)
+        orders = [edge["node"] for edge in orders_data.get("edges", [])]
         results = []
 
         for order in orders:
-            match_result = engine.evaluate_rule(rule, order, store)
             results.append({
                 "order_name": order.get("name"),
                 "order_id": order.get("id"),
-                "matched": match_result["matched"],
-                "reason": match_result.get("reason"),
-                "condition_results": match_result.get("condition_results", [])
+                "matched": engine.evaluate_rule(rule, order, excluded_sku_patterns, store),
+                "profit": calculate_order_profit(order),
             })
 
         return {

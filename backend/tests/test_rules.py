@@ -12,6 +12,12 @@ def test_get_rule_schema(client, auth_headers):
     assert len(data["fields"]) > 0
     assert len(data["operators"]) > 0
     assert len(data["action_types"]) > 0
+    field_types = {f["field"]: f["type"] for f in data["fields"]}
+    assert {
+        "order_profit": field_types.get("order_profit"),
+        "order_profit_margin": field_types.get("order_profit_margin"),
+        "line_items_missing_cost": field_types.get("line_items_missing_cost"),
+    } == {"order_profit": "number", "order_profit_margin": "number", "line_items_missing_cost": "number"}
 
 def test_get_rules_empty(client, auth_headers):
     """Test getting rules when none exist"""

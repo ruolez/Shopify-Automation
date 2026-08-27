@@ -1,4 +1,4 @@
-from typing import Dict, List, Any, Union
+from typing import Dict, List, Any, Union, Optional
 from datetime import datetime
 from decimal import Decimal
 from models import ProcessingRule, FraudAnalysis
@@ -7,6 +7,105 @@ from safe_regex import safe_regex_match
 from logging_config import get_logger, debug_log, DEBUG_LOGGING
 
 logger = get_logger(__name__)
+
+PROFIT_FIELDS = ("order_profit", "order_profit_margin", "line_items_missing_cost")
+
+_UNKNOWN_PROFIT = {
+    "revenue": None,
+    "product_cost": None,
+    "profit": None,
+    "margin_percent": None,
+    "missing_cost_count": None,
+    "truncated": False,
+}
+
+
+def _shop_money_amount(money_set: Any) -> Optional[float]:
+    amount = ((money_set or {}).get("shopMoney") or {}).get("amount")
+    if amount in (None, ""):
+        return None
+    return float(amount)
+
+
+def calculate_order_profit(order: Dict[str, Any]) -> Dict[str, Any]:
+    """Order profit from a raw Shopify GraphQL order dict, in shop currency.
+
+    revenue      = currentSubtotalPriceSet + currentShippingPriceSet
+                   (minus currentTotalTaxSet when the store prices tax-inclusive)
+    product_cost = sum(currentQuantity x variant.inventoryItem.unitCost)
+    profit       = revenue - product_cost
+
+    Real shipping cost is not included yet. Line items without a unit cost count as
+    $0 and are reported in missing_cost_count. Gift cards and tips/fees (no variant,
+    not shippable) have no cost and are not counted as missing. When the line-item
+    connection is truncated the cost would be partial, so every value is None.
+    """
+    order_name = order.get("name", "unknown")
+    subtotal_set = order.get("currentSubtotalPriceSet")
+    subtotal = _shop_money_amount(subtotal_set)
+    if subtotal is None:
+        debug_log(logger, f"Order {order_name}: no currentSubtotalPriceSet in payload, profit unknown")
+        return dict(_UNKNOWN_PROFIT)
+
+    line_items_conn = order.get("lineItems") or {}
+    if (line_items_conn.get("pageInfo") or {}).get("hasNextPage"):
+        logger.warning(
+            f"Order {order_name}: line items truncated by page size — "
+            f"product cost would be partial, profit unknown"
+        )
+        return {**_UNKNOWN_PROFIT, "truncated": True}
+
+    revenue = subtotal + (_shop_money_amount(order.get("currentShippingPriceSet")) or 0.0)
+    if order.get("taxesIncluded"):
+        revenue -= _shop_money_amount(order.get("currentTotalTaxSet")) or 0.0
+    order_currency = ((subtotal_set or {}).get("shopMoney") or {}).get("currencyCode")
+
+    product_cost = 0.0
+    missing_cost_count = 0
+    for edge in line_items_conn.get("edges") or []:
+        item = (edge or {}).get("node") or {}
+        quantity = item.get("currentQuantity")
+        if quantity is None:
+            quantity = item.get("quantity") or 0
+        if quantity <= 0:
+            continue
+        if (item.get("product") or {}).get("isGiftCard"):
+            continue
+        variant = item.get("variant")
+        if variant is None:
+            if item.get("requiresShipping") is False:
+                continue
+            missing_cost_count += 1
+            debug_log(logger, f"  - {item.get('title', 'Unknown')}: no variant (deleted product), cost unknown")
+            continue
+        unit_cost = (variant.get("inventoryItem") or {}).get("unitCost") or {}
+        if unit_cost.get("amount") in (None, ""):
+            missing_cost_count += 1
+            debug_log(logger, f"  - {item.get('title', 'Unknown')} (SKU: {variant.get('sku') or ''}): no unit cost set")
+            continue
+        cost_currency = unit_cost.get("currencyCode")
+        if order_currency and cost_currency and cost_currency != order_currency:
+            logger.warning(
+                f"Order {order_name}: unit cost currency {cost_currency} differs from "
+                f"order currency {order_currency} for {item.get('title', 'Unknown')}"
+            )
+        line_cost = float(unit_cost["amount"]) * quantity
+        product_cost += line_cost
+        debug_log(logger, f"  - {item.get('title', 'Unknown')} (SKU: {variant.get('sku') or ''}): {quantity} x {unit_cost['amount']} = {line_cost}")
+
+    profit = revenue - product_cost
+    margin_percent = round(profit / revenue * 100, 2) if revenue else None
+    result = {
+        "revenue": round(revenue, 2),
+        "product_cost": round(product_cost, 2),
+        "profit": round(profit, 2),
+        "margin_percent": margin_percent,
+        "missing_cost_count": missing_cost_count,
+        "truncated": False,
+    }
+    debug_log(logger, f"Order {order_name}: profit {result}")
+    return result
+
 
 class RuleEngine:
     """Engine for evaluating and applying order processing rules"""
@@ -167,8 +266,10 @@ class RuleEngine:
                 "previous_order_cancelled"  # Added new field for previous order cancellation status
             ]
             
-            if field in fraud_fields:
-                # This is fraud rule evaluation - order data is actually fraud analysis data
+            # Fraud rule evaluation passes a flat fraud-analysis dict that carries these
+            # keys explicitly; a raw Shopify order never does, so fall through to the
+            # order extractors below for names shared with them (e.g. order_total).
+            if field in fraud_fields and field in order:
                 value = order.get(field)
 
                 if field == "duplicate_within_7days":
@@ -438,7 +539,15 @@ class RuleEngine:
                     quantity = item_edge["node"].get("quantity", 0)
                     total_qty += quantity
                 return total_qty
-            
+
+            elif field in PROFIT_FIELDS:
+                profit_data = calculate_order_profit(order)
+                if field == "order_profit":
+                    return profit_data["profit"]
+                if field == "order_profit_margin":
+                    return profit_data["margin_percent"]
+                return profit_data["missing_cost_count"]
+
             # Fraud-specific field extractors
             elif field.startswith("fraud_"):
                 return self._get_fraud_field_value(field, order, store_context)
@@ -831,7 +940,10 @@ class RuleEngine:
             {"field": "order_created_at", "label": "Order Created Date", "type": "datetime"},
             {"field": "line_item_count", "label": "Number of Line Items", "type": "number"},
             {"field": "total_quantity", "label": "Total Quantity", "type": "number"},
-            
+            {"field": "order_profit", "label": "Order Profit (revenue − product cost, excl. tax)", "type": "number"},
+            {"field": "order_profit_margin", "label": "Order Profit Margin (%)", "type": "number"},
+            {"field": "line_items_missing_cost", "label": "Line Items Missing Cost", "type": "number"},
+
             # Fraud analysis fields
             {"field": "fraud_is_first_time_customer", "label": "Fraud: Is First Time Customer", "type": "boolean"},
             {"field": "fraud_duplicate_within_7days", "label": "Fraud: Duplicate Within 7 Days", "type": "boolean"},

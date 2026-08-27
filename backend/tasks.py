@@ -22,7 +22,7 @@ import redis as _redis
 _redis_client = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 from shopify_client import ShopifyClient
 from enhanced_shopify_client import EnhancedShopifyClient
-from rule_engine import RuleEngine
+from rule_engine import RuleEngine, calculate_order_profit, PROFIT_FIELDS
 from fraud_service import FraudAnalysisService
 from fraud_rule_processor import process_fraud_rules_for_order_async
 from fraud_archive_service import FraudArchiveService
@@ -1016,7 +1016,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             _log_order_action(
                                 db, store.user_id, store.id, order_id, 
                                 order_number, f"applied_rule_{rule.id}", 
-                                "match", {"rule_name": rule.name, "actions_successful": success},
+                                "match", _rule_match_details(rule, current_order, success),
                                 order_created_at=order_created_at
                             )
                             
@@ -1455,6 +1455,24 @@ async def _apply_rule_actions(
             success = False
     
     return success
+
+
+def _rule_condition_fields(rule) -> set:
+    conditions = rule.conditions
+    if isinstance(conditions, dict):
+        conditions = conditions.get("conditions") or []
+    if not isinstance(conditions, list):
+        return set()
+    return {c.get("field") for c in conditions if isinstance(c, dict)}
+
+
+def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool) -> Dict[str, Any]:
+    """Order-log details for a matched rule; includes the profit breakdown when the rule uses it"""
+    details = {"rule_name": rule.name, "actions_successful": actions_successful}
+    if _rule_condition_fields(rule) & set(PROFIT_FIELDS):
+        details["profit"] = calculate_order_profit(order)
+    return details
+
 
 def _log_order_action(
     db: Session, 
@@ -2174,9 +2192,8 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
                         {
                             "retry_type": "specific_rule" if rule_id else "all_rules",
                             "rule_id": rule_id,
-                            "rule_name": rule.name,
                             "applied_rule_id": rule.id,
-                            "actions_successful": success
+                            **_rule_match_details(rule, order_data, success),
                         }
                     )
                 else:
