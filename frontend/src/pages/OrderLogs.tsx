@@ -17,6 +17,7 @@ import {
 import toast from "react-hot-toast";
 import api from "../utils/api";
 import LoadingSpinner from "../components/LoadingSpinner";
+import ProfitBreakdown, { ProfitCondition } from "../components/ProfitBreakdown";
 
 interface OrderLog {
   id: number;
@@ -200,6 +201,34 @@ const OrderLogs: React.FC = () => {
     },
   });
 
+  const PROFIT_FIELDS = new Set([
+    "order_profit",
+    "order_profit_margin",
+    "line_items_missing_cost",
+    "estimated_shipping_cost",
+    "shipping_estimate_samples",
+  ]);
+
+  const profitConditionsFor = (log: OrderLog): ProfitCondition[] => {
+    if (Array.isArray(log.details?.profit_conditions)) return log.details.profit_conditions;
+    // Entries logged before thresholds were recorded: use the rule's current conditions
+    const ruleId = log.details?.applied_rule_id ?? parseInt(log.action.replace("applied_rule_", ""), 10);
+    const rule = Array.isArray(rules) ? rules.find((r: any) => r.id === ruleId) : undefined;
+    const conditions = Array.isArray(rule?.conditions) ? rule.conditions : rule?.conditions?.conditions || [];
+    const profit = log.details?.profit || {};
+    const estimate = profit.shipping_estimate || {};
+    const actualFor: Record<string, any> = {
+      order_profit: profit.profit,
+      order_profit_margin: profit.margin_percent,
+      line_items_missing_cost: profit.missing_cost_count,
+      estimated_shipping_cost: estimate.shipping_cost,
+      shipping_estimate_samples: estimate.samples,
+    };
+    return conditions
+      .filter((c: any) => PROFIT_FIELDS.has(c.field))
+      .map((c: any) => ({ field: c.field, operator: c.operator, value: c.value, actual: actualFor[c.field] }));
+  };
+
   const { data, isLoading, refetch } = useQuery<LogsResponse>({
     queryKey: [
       "order-logs",
@@ -377,6 +406,14 @@ const OrderLogs: React.FC = () => {
         return ruleName ? `Tag Added (${ruleName})` : "Tag Added";
       case "tag_removed":
         return ruleName ? `Tag Removed (${ruleName})` : "Tag Removed";
+      case "order_hold":
+        return ruleName ? `Placed On Hold (${ruleName})` : "Placed On Hold";
+      case "shipping_cost_sync":
+        return "Shipping Cost Sync";
+      case "order_fetch_error":
+        return "Order Fetch Error";
+      case "query_cost_warning":
+        return "Query Cost Warning";
       default:
         return action;
     }
@@ -847,8 +884,8 @@ const OrderLogs: React.FC = () => {
                       {/* Expanded rows showing individual log entries */}
                       {expandedOrders.has(group.order_number) &&
                         group.logs.map((log) => (
+                          <React.Fragment key={log.id}>
                           <tr
-                            key={log.id}
                             className="bg-gray-50 dark:bg-dark-50"
                           >
                             <td className="px-6 py-2"></td>
@@ -891,6 +928,24 @@ const OrderLogs: React.FC = () => {
                               </div>
                             </td>
                           </tr>
+                          {(log.details?.profit || (log.details?.rule_name && log.details?.message)) && (
+                            <tr className="bg-gray-50 dark:bg-dark-50">
+                              <td colSpan={7} className="pl-24 pr-6 pb-3 pt-0">
+                                {log.details.rule_name && log.details.message && (
+                                  <div className="text-xs text-gray-500 dark:text-dark-400 break-words">
+                                    {log.details.message}
+                                  </div>
+                                )}
+                                {log.details.profit && (
+                                  <ProfitBreakdown
+                                    profit={log.details.profit}
+                                    conditions={profitConditionsFor(log)}
+                                  />
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                          </React.Fragment>
                         ))}
                     </React.Fragment>
                   ))}

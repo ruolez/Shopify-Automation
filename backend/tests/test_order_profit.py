@@ -64,6 +64,7 @@ class TestCalculateOrderProfit:
             "margin_percent": 50.0,
             "missing_cost_count": 0,
             "shipping_cost": None,
+            "currency": "USD",
             "truncated": False,
         }
 
@@ -121,6 +122,7 @@ class TestCalculateOrderProfit:
             "margin_percent": None,
             "missing_cost_count": None,
             "shipping_cost": None,
+            "currency": None,
             "truncated": True,
         }
 
@@ -276,3 +278,48 @@ class TestNumericEqualsCoercion:
         rule = Mock(); rule.id = 1; rule.name = "one item"
         rule.conditions = {"operator": "AND", "conditions": [{"field": "line_item_count", "operator": "equals", "value": "1"}]}
         assert self.engine.evaluate_rule(rule, order([line_item(1, "1.00")])) is True
+
+
+class TestProfitConditionsInMatchDetails:
+    """The order log records each profit threshold with the value the order had"""
+
+    def setup_method(self):
+        from tasks import _profit_conditions, _rule_match_details
+        self.profit_conditions = _profit_conditions
+        self.match_details = _rule_match_details
+
+    @staticmethod
+    def rule(conditions):
+        rule = Mock(); rule.id = 1; rule.name = "Low profit"
+        rule.conditions = conditions
+        return rule
+
+    def test_maps_each_profit_field_to_its_actual_value(self):
+        profit = {"profit": 12.5, "margin_percent": 20.0, "missing_cost_count": 1,
+                  "shipping_estimate": {"shipping_cost": 6.0, "samples": 4}}
+        rule = self.rule({"operator": "AND", "conditions": [
+            {"field": "order_profit", "operator": "less_than", "value": "15"},
+            {"field": "order_profit_margin", "operator": "less_than", "value": "25"},
+            {"field": "shipping_estimate_samples", "operator": "greater_than", "value": "0"},
+            {"field": "shipping_country", "operator": "equals", "value": "US"},
+        ]})
+        assert self.profit_conditions(rule, profit) == [
+            {"field": "order_profit", "operator": "less_than", "value": "15", "actual": 12.5},
+            {"field": "order_profit_margin", "operator": "less_than", "value": "25", "actual": 20.0},
+            {"field": "shipping_estimate_samples", "operator": "greater_than", "value": "0", "actual": 4},
+        ]
+
+    def test_legacy_list_conditions_are_supported(self):
+        rule = self.rule([{"field": "order_profit", "operator": "less_than", "value": "5"}])
+        assert self.profit_conditions(rule, {"profit": -1.0}) == [
+            {"field": "order_profit", "operator": "less_than", "value": "5", "actual": -1.0}]
+
+    def test_match_details_include_profit_and_thresholds_without_store(self):
+        rule = self.rule({"operator": "AND", "conditions": [{"field": "order_profit", "operator": "less_than", "value": "60"}]})
+        details = self.match_details(rule, order([line_item(2, "20.00"), line_item(1, "15.00")]), True)
+        assert (details["profit"]["profit"], details["profit"]["currency"], details["profit_conditions"]) == (
+            55.0, "USD", [{"field": "order_profit", "operator": "less_than", "value": "60", "actual": 55.0}])
+
+    def test_non_profit_rule_has_no_profit_details(self):
+        rule = self.rule([{"field": "order_total", "operator": "greater_than", "value": "10"}])
+        assert set(self.match_details(rule, order([line_item(1, "1.00")]), True)) == {"rule_name", "actions_successful"}

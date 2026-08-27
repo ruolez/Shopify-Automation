@@ -1528,10 +1528,43 @@ def _rule_condition_fields(rule) -> set:
     return {c.get("field") for c in conditions if isinstance(c, dict)}
 
 
+def _rule_conditions(rule) -> List[Dict[str, Any]]:
+    conditions = rule.conditions
+    if isinstance(conditions, dict):
+        conditions = conditions.get("conditions") or []
+    return [c for c in conditions if isinstance(c, dict)] if isinstance(conditions, list) else []
+
+
+def _profit_field_value(field: str, profit: Dict[str, Any]) -> Any:
+    estimate = profit.get("shipping_estimate") or {}
+    return {
+        "order_profit": profit.get("profit"),
+        "order_profit_margin": profit.get("margin_percent"),
+        "line_items_missing_cost": profit.get("missing_cost_count"),
+        "estimated_shipping_cost": estimate.get("shipping_cost"),
+        "shipping_estimate_samples": estimate.get("samples"),
+    }.get(field)
+
+
+def _profit_conditions(rule, profit: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The rule's profit conditions with the value the order actually had, so the
+    order log can show how far past the threshold the order was at match time"""
+    return [
+        {
+            "field": c.get("field"),
+            "operator": c.get("operator"),
+            "value": c.get("value"),
+            "actual": _profit_field_value(c.get("field"), profit),
+        }
+        for c in _rule_conditions(rule)
+        if c.get("field") in PROFIT_FIELDS
+    ]
+
+
 def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool,
                         store=None, excluded_skus: List[str] = None, db: Session = None) -> Dict[str, Any]:
     """Order-log details for a matched rule; includes the profit breakdown (with the
-    shipping estimate) when the rule uses a profit field"""
+    shipping estimate) and the profit thresholds when the rule uses a profit field"""
     details = {"rule_name": rule.name, "actions_successful": actions_successful}
     if _rule_condition_fields(rule) & set(PROFIT_FIELDS):
         try:
@@ -1540,6 +1573,7 @@ def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool,
         except Exception as e:
             logger.warning(f"Profit details unavailable for order {order.get('name', 'unknown')}: {e}")
             details["profit"] = calculate_order_profit(order)
+        details["profit_conditions"] = _profit_conditions(rule, details["profit"])
     return details
 
 

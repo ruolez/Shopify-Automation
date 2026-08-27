@@ -20,6 +20,7 @@ _UNKNOWN_PROFIT = {
     "margin_percent": None,
     "missing_cost_count": None,
     "shipping_cost": None,
+    "currency": None,
     "truncated": False,
 }
 
@@ -107,6 +108,7 @@ def calculate_order_profit(order: Dict[str, Any], shipping_cost: Optional[float]
         "margin_percent": margin_percent,
         "missing_cost_count": missing_cost_count,
         "shipping_cost": round(shipping_cost, 2) if shipping_cost is not None else None,
+        "currency": order_currency,
         "truncated": False,
     }
     debug_log(logger, f"Order {order_name}: profit {result}")
