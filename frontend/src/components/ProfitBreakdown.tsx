@@ -63,24 +63,36 @@ const formatFieldValue = (field: string, value: any, currency: string) => {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 };
 
-const thresholdOutcome = (condition: ProfitCondition, currency: string): string => {
+const conditionMet = (operator: string, actual: number, target: number): boolean | null => {
+  switch (operator) {
+    case "less_than":
+      return actual < target;
+    case "less_than_or_equal":
+      return actual <= target;
+    case "greater_than":
+      return actual > target;
+    case "greater_than_or_equal":
+      return actual >= target;
+    case "equals":
+      return actual === target;
+    case "not_equals":
+      return actual !== target;
+    default:
+      return null;
+  }
+};
+
+// How the order's value sits relative to the threshold (from the numbers, not the
+// operator) and whether this condition was met — with OR rules only one may be.
+const thresholdOutcome = (condition: ProfitCondition, currency: string): { text: string; met: boolean | null } | null => {
   const actual = typeof condition.actual === "number" ? condition.actual : NaN;
   const target = typeof condition.value === "number" ? condition.value : parseFloat(condition.value);
-  if (Number.isNaN(actual) || Number.isNaN(target)) return "";
+  if (Number.isNaN(actual) || Number.isNaN(target)) return null;
   const diff = Math.abs(actual - target);
   const diffText = formatFieldValue(condition.field, diff, currency);
-  switch (condition.operator) {
-    case "less_than":
-    case "less_than_or_equal":
-      return `${diffText} below`;
-    case "greater_than":
-    case "greater_than_or_equal":
-      return `${diffText} above`;
-    case "equals":
-      return "matches";
-    default:
-      return "";
-  }
+  const position = actual < target ? `${diffText} below` : actual > target ? `${diffText} above` : "at threshold";
+  const met = conditionMet(condition.operator, actual, target);
+  return { text: met === null ? position : `${position} — ${met ? "met" : "not met"}`, met };
 };
 
 const shippingNote = (profit: ProfitDetails): string => {
@@ -157,7 +169,16 @@ const ProfitBreakdown: React.FC<{ profit: ProfitDetails; conditions?: ProfitCond
             {outcome && (
               <>
                 {" "}
-                → <span className="font-semibold text-gray-700 dark:text-dark-700">{outcome}</span>
+                →{" "}
+                <span
+                  className={
+                    outcome.met === false
+                      ? "text-gray-400 dark:text-dark-300"
+                      : "font-semibold text-gray-700 dark:text-dark-700"
+                  }
+                >
+                  {outcome.text}
+                </span>
               </>
             )}
           </div>
