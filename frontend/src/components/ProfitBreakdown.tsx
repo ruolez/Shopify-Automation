@@ -46,7 +46,7 @@ const OPERATOR_SYMBOLS: Record<string, string> = {
 const MONEY_FIELDS = new Set(["order_profit", "estimated_shipping_cost"]);
 const PERCENT_FIELDS = new Set(["order_profit_margin"]);
 
-const formatMoney = (amount: number | null | undefined, currency: string) => {
+export const formatMoney = (amount: number | null | undefined, currency: string) => {
   if (amount === null || amount === undefined || Number.isNaN(amount)) return "—";
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);

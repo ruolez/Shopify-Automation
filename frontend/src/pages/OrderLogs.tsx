@@ -18,6 +18,7 @@ import toast from "react-hot-toast";
 import api from "../utils/api";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProfitBreakdown, { ProfitCondition } from "../components/ProfitBreakdown";
+import OrderDetailModal from "../components/OrderDetailModal";
 
 interface OrderLog {
   id: number;
@@ -73,6 +74,7 @@ const OrderLogs: React.FC = () => {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedRule, setSelectedRule] = useState<string>("");
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [detailOrder, setDetailOrder] = useState<{ storeId: number; orderId: string; orderNumber: string } | null>(null);
   const [sortField, setSortField] = useState<SortField>("latest_date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [isAllResultsSelected, setIsAllResultsSelected] = useState<boolean>(false);
@@ -834,7 +836,20 @@ const OrderLogs: React.FC = () => {
                           />
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-dark-800">
-                          {group.order_number}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDetailOrder({
+                                storeId: group.logs[0]?.store_id,
+                                orderId: group.order_id,
+                                orderNumber: group.order_number,
+                              })
+                            }
+                            className="text-shopify-600 hover:text-shopify-700 hover:underline dark:text-shopify-400"
+                            title="Open order details"
+                          >
+                            {group.order_number}
+                          </button>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
                           {group.store_name}
@@ -1048,6 +1063,15 @@ const OrderLogs: React.FC = () => {
           )}
         </div>
       </div>
+      <OrderDetailModal
+        open={detailOrder !== null}
+        onClose={() => setDetailOrder(null)}
+        storeId={detailOrder?.storeId ?? null}
+        orderId={detailOrder?.orderId ?? null}
+        orderNumber={detailOrder?.orderNumber}
+        timezone={timezone}
+        dateFormat={dateFormat}
+      />
     </motion.div>
   );
 };

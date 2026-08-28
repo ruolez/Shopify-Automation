@@ -1430,6 +1430,16 @@ class ShopifyClient:
                             quantity
                             currentQuantity
                             requiresShipping
+                            originalUnitPriceSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
+                            discountedUnitPriceAfterAllDiscountsSet {
+                                shopMoney {
+                                    amount
+                                }
+                            }
                             product {
                                 id
                                 productType
@@ -1590,6 +1600,16 @@ class ShopifyClient:
                                 quantity
                                 currentQuantity
                                 requiresShipping
+                                originalUnitPriceSet {
+                                    shopMoney {
+                                        amount
+                                    }
+                                }
+                                discountedUnitPriceAfterAllDiscountsSet {
+                                    shopMoney {
+                                        amount
+                                    }
+                                }
                                 product {
                                     id
                                     productType
@@ -1761,6 +1781,16 @@ class ShopifyClient:
                                 quantity
                                 currentQuantity
                                 requiresShipping
+                                originalUnitPriceSet {
+                                    shopMoney {
+                                        amount
+                                    }
+                                }
+                                discountedUnitPriceAfterAllDiscountsSet {
+                                    shopMoney {
+                                        amount
+                                    }
+                                }
                                 product {
                                     id
                                     productType
