@@ -91,8 +91,7 @@ const thresholdOutcome = (condition: ProfitCondition, currency: string): { text:
   const diff = Math.abs(actual - target);
   const diffText = formatFieldValue(condition.field, diff, currency);
   const position = actual < target ? `${diffText} below` : actual > target ? `${diffText} above` : "at threshold";
-  const met = conditionMet(condition.operator, actual, target);
-  return { text: met === null ? position : `${position} — ${met ? "met" : "not met"}`, met };
+  return { text: position, met: conditionMet(condition.operator, actual, target) };
 };
 
 const shippingNote = (profit: ProfitDetails): string => {
@@ -169,16 +168,18 @@ const ProfitBreakdown: React.FC<{ profit: ProfitDetails; conditions?: ProfitCond
             {outcome && (
               <>
                 {" "}
-                →{" "}
-                <span
-                  className={
-                    outcome.met === false
-                      ? "text-gray-400 dark:text-dark-300"
-                      : "font-semibold text-gray-700 dark:text-dark-700"
-                  }
-                >
-                  {outcome.text}
-                </span>
+                → <span className="font-semibold text-gray-700 dark:text-dark-700">{outcome.text}</span>
+                {outcome.met !== null && (
+                  <span
+                    className={`ml-1.5 font-bold ${
+                      outcome.met ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"
+                    }`}
+                    title={outcome.met ? "Condition met — this triggered the rule" : "Condition not met"}
+                    aria-label={outcome.met ? "condition met" : "condition not met"}
+                  >
+                    {outcome.met ? "✗" : "✓"}
+                  </span>
+                )}
               </>
             )}
           </div>
