@@ -1,40 +1,57 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
+import { Disclosure } from "@headlessui/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   PlusIcon,
-  PencilIcon,
-  TrashIcon,
   PlayIcon,
   PauseIcon,
+  ChevronDownIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import api from "../utils/api";
-import { Rule } from "../types";
+import type { Rule } from "../types";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { formatShortDate } from "../utils/dateFormat";
+import RuleCard from "../components/RuleCard";
 import { useTimezone } from "../contexts/TimezoneContext";
+import { filterRules, groupRulesByStatus } from "../utils/ruleDisplay";
+
+const RULES_QUERY_KEY = ["rules"];
+
+const cardMotion = (index: number) => ({
+  layout: true,
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { delay: Math.min(index, 8) * 0.04 },
+});
 
 const Rules: React.FC = () => {
   const queryClient = useQueryClient();
   const { timezone } = useTimezone();
+  const [search, setSearch] = useState("");
 
   const { data: rules, isLoading } = useQuery<Rule[]>({
-    queryKey: ["rules"],
+    queryKey: RULES_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get("/rules");
       return response.data;
     },
   });
 
+  const invalidateRules = () => {
+    queryClient.invalidateQueries({ queryKey: RULES_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+  };
+
   const deleteRuleMutation = useMutation({
     mutationFn: async (ruleId: number) => {
       await api.delete(`/rules/${ruleId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rules"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      invalidateRules();
       toast.success("Rule deleted successfully");
     },
     onError: (error: any) => {
@@ -43,19 +60,30 @@ const Rules: React.FC = () => {
   });
 
   const toggleRuleMutation = useMutation({
-    mutationFn: async ({ ruleId, rule }: { ruleId: number; rule: Rule }) => {
-      const updatedRule = { ...rule, is_active: !rule.is_active };
-      const response = await api.put(`/rules/${ruleId}`, updatedRule);
+    mutationFn: async (rule: Rule) => {
+      const response = await api.put(`/rules/${rule.id}`, {
+        ...rule,
+        is_active: !rule.is_active,
+      });
       return response.data;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rules"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      toast.success("Rule updated successfully");
+    onMutate: async (rule: Rule) => {
+      await queryClient.cancelQueries({ queryKey: RULES_QUERY_KEY });
+      const previous = queryClient.getQueryData<Rule[]>(RULES_QUERY_KEY);
+      queryClient.setQueryData<Rule[]>(RULES_QUERY_KEY, (current) =>
+        (current ?? []).map((item) =>
+          item.id === rule.id ? { ...item, is_active: !item.is_active } : item,
+        ),
+      );
+      return { previous };
     },
-    onError: (error: any) => {
+    onError: (error: any, _rule, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(RULES_QUERY_KEY, context.previous);
+      }
       toast.error(error.response?.data?.detail || "Failed to update rule");
     },
+    onSettled: invalidateRules,
   });
 
   const activateAllRulesMutation = useMutation({
@@ -64,8 +92,7 @@ const Rules: React.FC = () => {
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["rules"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      invalidateRules();
       toast.success(data.message);
     },
     onError: (error: any) => {
@@ -81,8 +108,7 @@ const Rules: React.FC = () => {
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["rules"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      invalidateRules();
       toast.success(data.message);
     },
     onError: (error: any) => {
@@ -98,10 +124,6 @@ const Rules: React.FC = () => {
     }
   };
 
-  const handleToggleRule = (rule: Rule) => {
-    toggleRuleMutation.mutate({ ruleId: rule.id, rule });
-  };
-
   const handleActivateAll = () => {
     if (window.confirm("Are you sure you want to activate all rules?")) {
       activateAllRulesMutation.mutate();
@@ -114,54 +136,6 @@ const Rules: React.FC = () => {
     }
   };
 
-  const formatConditions = (conditions: any) => {
-    if (!conditions) return "No conditions";
-
-    // Handle both legacy (array) and new (object) formats
-    let conditionsList: any[] = [];
-    let logicalOperator = "AND";
-
-    if (Array.isArray(conditions)) {
-      // Legacy format
-      conditionsList = conditions;
-    } else if (conditions.conditions && Array.isArray(conditions.conditions)) {
-      // New format
-      conditionsList = conditions.conditions;
-      logicalOperator = conditions.operator || "AND";
-    }
-
-    if (conditionsList.length === 0) return "No conditions";
-
-    // Simple format for the rules list
-    const conditionStrings = conditionsList.map((condition) => {
-      const field = condition.field?.replace(/_/g, " ") || "";
-      const operator = condition.operator?.replace(/_/g, " ") || "";
-      const value = condition.value || "";
-      return `${field} ${operator} ${value}`;
-    });
-
-    const joinWord = logicalOperator === "OR" ? " OR " : " AND ";
-    const result = conditionStrings.join(joinWord);
-
-    // Add prefix to indicate the logic when there are multiple conditions
-    if (conditionsList.length > 1) {
-      return `(${logicalOperator}) ${result}`;
-    }
-
-    return result;
-  };
-
-  const formatActions = (actions: any[]) => {
-    if (!actions || actions.length === 0) return "No actions";
-
-    const actionStrings = actions.map((action) => {
-      const type = action.type?.replace(/_/g, " ") || "";
-      return type;
-    });
-
-    return actionStrings.join(", ");
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -169,6 +143,31 @@ const Rules: React.FC = () => {
       </div>
     );
   }
+
+  const allRules = rules ?? [];
+  const totals = groupRulesByStatus(allRules);
+  const { active, inactive } = groupRulesByStatus(
+    filterRules(allRules, search),
+  );
+  const isSearching = search.trim() !== "";
+  const nothingMatches =
+    isSearching && active.length === 0 && inactive.length === 0;
+
+  const renderCard = (rule: Rule, index: number, executionIndex?: number) => (
+    <motion.div key={rule.id} {...cardMotion(index)}>
+      <RuleCard
+        rule={rule}
+        executionIndex={executionIndex}
+        timezone={timezone}
+        isToggling={
+          toggleRuleMutation.isPending &&
+          toggleRuleMutation.variables?.id === rule.id
+        }
+        onToggle={(r) => toggleRuleMutation.mutate(r)}
+        onDelete={handleDeleteRule}
+      />
+    </motion.div>
+  );
 
   return (
     <div className="space-y-8">
@@ -182,133 +181,163 @@ const Rules: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center space-x-3">
-          {rules && rules.length > 0 && (
+          {allRules.length > 0 && (
             <>
               <button
                 onClick={handleActivateAll}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 focus:outline-none"
-                disabled={activateAllRulesMutation.isPending}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={
+                  activateAllRulesMutation.isPending ||
+                  totals.inactive.length === 0
+                }
+                title={
+                  totals.inactive.length === 0
+                    ? "All rules are already active"
+                    : "Activate all rules"
+                }
               >
                 <PlayIcon className="h-5 w-5 mr-2" />
                 Start All
               </button>
               <button
                 onClick={handleDeactivateAll}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 focus:outline-none"
-                disabled={deactivateAllRulesMutation.isPending}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={
+                  deactivateAllRulesMutation.isPending ||
+                  totals.active.length === 0
+                }
+                title={
+                  totals.active.length === 0
+                    ? "No active rules to pause"
+                    : "Deactivate all rules"
+                }
               >
                 <PauseIcon className="h-5 w-5 mr-2" />
                 Pause All
               </button>
             </>
           )}
-          <Link to="/rules/new" className="btn-primary flex items-center">
+          <Link
+            to="/rules/new"
+            className="btn-primary inline-flex items-center"
+          >
             <PlusIcon className="h-5 w-5 mr-2" />
             Create Rule
           </Link>
         </div>
       </div>
 
-      {rules && rules.length > 0 ? (
-        <div className="space-y-4">
-          {rules.map((rule, index) => (
-            <motion.div
-              key={rule.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.1 }}
-              className="card"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center space-x-3">
-                    <h3 className="text-lg font-medium text-gray-900 dark:text-dark-800">
-                      {rule.name}
-                    </h3>
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        rule.is_active
-                          ? "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400"
-                          : "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400"
-                      }`}
-                    >
-                      {rule.is_active ? "Active" : "Inactive"}
-                    </span>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
-                      Priority: {rule.priority}
-                    </span>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400">
-                      Delay: {rule.delay_ms}ms
-                    </span>
-                  </div>
+      {allRules.length > 0 ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 font-medium text-gray-700 dark:bg-dark-200 dark:text-dark-700">
+                {allRules.length} total
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 font-medium text-green-800 dark:bg-green-900/20 dark:text-green-400">
+                <span className="h-2 w-2 rounded-full bg-green-500" />
+                {totals.active.length} active
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 font-medium text-gray-600 dark:bg-dark-200 dark:text-dark-500">
+                <span className="h-2 w-2 rounded-full bg-gray-400" />
+                {totals.inactive.length} inactive
+              </span>
+            </div>
+            <div className="relative w-full max-w-xs">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search rules…"
+                aria-label="Search rules"
+                className="input pl-9 pr-8"
+              />
+              {isSearching && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-dark-700"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
 
-                  {rule.description && (
-                    <p className="text-sm text-gray-600 dark:text-dark-500 mt-1">
-                      {rule.description}
-                    </p>
+          {nothingMatches ? (
+            <div className="rounded-lg border border-dashed border-gray-300 py-10 text-center text-sm text-gray-500 dark:border-dark-300 dark:text-dark-400">
+              No rules match “{search.trim()}”.{" "}
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="font-medium text-shopify-600 hover:underline"
+              >
+                Clear search
+              </button>
+            </div>
+          ) : (
+            <>
+              <section
+                aria-labelledby="active-rules-heading"
+                className="space-y-3"
+              >
+                <div className="flex items-baseline gap-3">
+                  <h2
+                    id="active-rules-heading"
+                    className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-700 dark:text-dark-700"
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
+                    Active ({active.length})
+                  </h2>
+                  {active.length > 0 && (
+                    <span className="text-xs text-gray-400 dark:text-dark-400">
+                      Runs in this order, top to bottom
+                    </span>
                   )}
-
-                  <div className="mt-3 space-y-2">
-                    <div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-dark-600">
-                        Conditions:{" "}
-                      </span>
-                      <span className="text-sm text-gray-600 dark:text-dark-500">
-                        {formatConditions(rule.conditions)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium text-gray-700 dark:text-dark-600">
-                        Actions:{" "}
-                      </span>
-                      <span className="text-sm text-gray-600 dark:text-dark-500">
-                        {formatActions(rule.actions)}
-                      </span>
-                    </div>
+                </div>
+                {active.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700/50 dark:bg-amber-900/10 dark:text-amber-300">
+                    {isSearching
+                      ? "No active rules match your search."
+                      : "No active rules — orders are not being processed. Enable a rule below or create one."}
                   </div>
-
-                  <p className="text-xs text-gray-400 dark:text-dark-300 mt-3">
-                    Created: {formatShortDate(rule.created_at, timezone)}
-                  </p>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => handleToggleRule(rule)}
-                    className={`p-2 rounded-lg transition-colors ${
-                      rule.is_active
-                        ? "text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
-                        : "text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
-                    }`}
-                    title={rule.is_active ? "Deactivate rule" : "Activate rule"}
-                  >
-                    {rule.is_active ? (
-                      <PauseIcon className="h-5 w-5" />
-                    ) : (
-                      <PlayIcon className="h-5 w-5" />
+                ) : (
+                  <div className="space-y-3">
+                    {active.map((rule, index) =>
+                      renderCard(rule, index, index + 1),
                     )}
-                  </button>
+                  </div>
+                )}
+              </section>
 
-                  <Link
-                    to={`/rules/${rule.id}/edit`}
-                    className="p-2 text-gray-600 hover:bg-gray-50 dark:text-dark-500 dark:hover:bg-dark-200 rounded-lg transition-colors"
-                    title="Edit rule"
-                  >
-                    <PencilIcon className="h-5 w-5" />
-                  </Link>
-
-                  <button
-                    onClick={() => handleDeleteRule(rule.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                    title="Delete rule"
-                  >
-                    <TrashIcon className="h-5 w-5" />
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+              {inactive.length > 0 && (
+                <Disclosure defaultOpen>
+                  {({ open }) => (
+                    <section
+                      aria-labelledby="inactive-rules-heading"
+                      className="space-y-3"
+                    >
+                      <Disclosure.Button className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700 dark:text-dark-500 dark:hover:text-dark-700">
+                        <span className="h-2.5 w-2.5 rounded-full bg-gray-400" />
+                        <span id="inactive-rules-heading">
+                          Inactive ({inactive.length})
+                        </span>
+                        <ChevronDownIcon
+                          className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+                        />
+                      </Disclosure.Button>
+                      <Disclosure.Panel className="space-y-3">
+                        {inactive.map((rule, index) => renderCard(rule, index))}
+                      </Disclosure.Panel>
+                    </section>
+                  )}
+                </Disclosure>
+              )}
+            </>
+          )}
+        </>
       ) : (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -339,7 +368,10 @@ const Rules: React.FC = () => {
               Get started by creating your first automation rule.
             </p>
             <div className="mt-6">
-              <Link to="/rules/new" className="btn-primary flex items-center">
+              <Link
+                to="/rules/new"
+                className="btn-primary inline-flex items-center"
+              >
                 <PlusIcon className="h-5 w-5 mr-2" />
                 Create Rule
               </Link>
