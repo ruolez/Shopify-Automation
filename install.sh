@@ -18,6 +18,7 @@ REPO_URL="https://github.com/ruolez/Shopify-Automation.git"
 COMPOSE_FILE="docker-compose.postgres.prod.yml"
 PG_CONTAINER="shopify_postgres_prod"
 API_CONTAINER="shopify_api_prod"
+NGINX_CONTAINER="shopify_nginx_prod"
 PG_USER="shopify_user"
 PG_DB="shopify_db"
 
@@ -313,6 +314,9 @@ do_update() {
     docker compose -f "$COMPOSE_FILE" build --pull
     info "Restarting the stack..."
     docker compose -f "$COMPOSE_FILE" up -d
+    # nginx resolves the api/frontend upstreams once at startup; the rebuilt containers
+    # get new addresses while nginx is left running, so it must be restarted too
+    docker restart "$NGINX_CONTAINER" >/dev/null
 
     wait_for_api || true
     run_migrations
