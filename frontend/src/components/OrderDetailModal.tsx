@@ -67,6 +67,8 @@ export interface OrderDetail {
   shipping_estimate: ProfitDetails["shipping_estimate"] | null;
   profit: ProfitDetails;
   profit_conditions: ProfitCondition[];
+  // When a profit rule last ran on the order; null means the profit was calculated live
+  profit_recorded_at: string | null;
 }
 
 const marginClass = (margin: number | null) => {
@@ -281,6 +283,11 @@ const OrderDetailModal: React.FC<{
                       />
                     </div>
                   </div>
+                  <p className="text-xs text-gray-400 dark:text-dark-300">
+                    {data.profit_recorded_at
+                      ? `Shipping estimate and profit as recorded when the rule ran · ${formatDate(data.profit_recorded_at, { timezone, dateFormat })}`
+                      : "Shipping estimate and profit calculated now · no profit rule has evaluated this order"}
+                  </p>
                 </>
               )}
             </div>

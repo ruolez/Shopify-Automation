@@ -3,7 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from order_detail import build_order_detail, line_item_detail
+from datetime import datetime, timezone
+
+from order_detail import build_order_detail, line_item_detail, profit_snapshot
 from tests.test_order_profit import line_item, money, order
 
 
@@ -65,9 +67,40 @@ class TestBuildOrderDetail:
         assert detail["line_items"][0]["title"] == "Widget" and detail["line_items"][0]["profit"] == 30.0
         assert detail["shipping_estimate"]["samples"] == 4 and "shipping_estimate" not in detail["profit"]
         assert detail["profit_conditions"][0]["actual"] == 60.23
+        assert detail["profit_recorded_at"] is None
+
+    def test_recorded_at_is_passed_through_for_snapshots(self):
+        data = order([priced(line_item(1, "1.00"), "2.00")])
+        store = SimpleNamespace(id=1, shop_name="s", shop_domain="d")
+        detail = build_order_detail(data, {"currency": "USD"}, store, profit_recorded_at="2026-09-03T12:31:00+00:00")
+        assert detail["profit_recorded_at"] == "2026-09-03T12:31:00+00:00"
 
     def test_tolerates_missing_customer_and_addresses(self):
         data = order([priced(line_item(1, "1.00"), "2.00")])
         data.update({"customer": None, "shippingAddress": None, "billingAddress": None, "shippingLines": None})
         detail = build_order_detail(data, {"currency": "USD"}, SimpleNamespace(id=1, shop_name="s", shop_domain="d"))
         assert (detail["customer"]["name"], detail["customer"]["shipping_address"], detail["order"]["shipping_method"]) == (None, None, None)
+
+
+def log(details, created_at="2026-09-03T12:31:00+00:00"):
+    return SimpleNamespace(details=details, created_at=datetime.fromisoformat(created_at))
+
+
+class TestProfitSnapshot:
+    def test_uses_newest_log_that_recorded_a_profit(self):
+        newest = {"profit": {"profit": 5.87, "shipping_estimate": {"shipping_cost": 13.21}},
+                  "profit_conditions": [{"field": "order_profit", "operator": "less_than", "value": 5, "actual": 5.87}]}
+        older = {"profit": {"profit": 6.1}, "profit_conditions": []}
+        logs = [log({"rule_name": "hold"}, "2026-09-03T13:00:00+00:00"), log(newest), log(older, "2026-09-02T09:00:00+00:00")]
+        assert profit_snapshot(logs) == {
+            "profit": newest["profit"],
+            "profit_conditions": newest["profit_conditions"],
+            "recorded_at": "2026-09-03T12:31:00+00:00",
+        }
+
+    def test_snapshot_without_conditions_yields_empty_list(self):
+        assert profit_snapshot([log({"profit": {"profit": 1.0}})])["profit_conditions"] == []
+
+    @pytest.mark.parametrize("details", [None, {}, {"profit": None}, {"profit": "n/a"}, {"profit_conditions": [{"field": "order_profit"}]}])
+    def test_none_when_no_log_recorded_a_profit(self, details):
+        assert profit_snapshot([log(details)]) is None

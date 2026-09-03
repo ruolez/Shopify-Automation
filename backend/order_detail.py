@@ -1,7 +1,27 @@
 """Order detail for the Orders page modal: order info, customer, per-line-item
 profit and the order-level profit calculation, built from a raw Shopify order
 dict plus the profit dict from shipping_estimate_service.profit_with_shipping."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+
+def profit_snapshot(logs: Iterable[Any]) -> Optional[Dict[str, Any]]:
+    """The profit calculation recorded when a profit rule last ran on this order, from
+    the newest order log (logs newest first) whose details carry one. The modal
+    prefers this over a live recalculation so the numbers match the order log and
+    do not drift as the shipping estimate's samples change."""
+    for entry in logs:
+        details = entry.details if isinstance(entry.details, dict) else {}
+        profit = details.get("profit")
+        if not isinstance(profit, dict):
+            continue
+        conditions = details.get("profit_conditions")
+        recorded_at = entry.created_at.isoformat() if entry.created_at else None
+        return {
+            "profit": profit,
+            "profit_conditions": conditions if isinstance(conditions, list) else [],
+            "recorded_at": recorded_at,
+        }
+    return None
 
 
 def _amount(money_set: Any) -> Optional[float]:
@@ -67,7 +87,8 @@ def line_item_detail(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_order_detail(order: Dict[str, Any], profit: Dict[str, Any], store: Any,
-                       profit_conditions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                       profit_conditions: Optional[List[Dict[str, Any]]] = None,
+                       profit_recorded_at: Optional[str] = None) -> Dict[str, Any]:
     customer = order.get("customer") or {}
     shipping_lines = [edge.get("node") or {} for edge in ((order.get("shippingLines") or {}).get("edges") or [])]
     line_items = [line_item_detail((edge or {}).get("node") or {}) for edge in ((order.get("lineItems") or {}).get("edges") or [])]
@@ -107,4 +128,5 @@ def build_order_detail(order: Dict[str, Any], profit: Dict[str, Any], store: Any
         "shipping_estimate": profit.get("shipping_estimate"),
         "profit": {key: value for key, value in profit.items() if key != "shipping_estimate"},
         "profit_conditions": profit_conditions or [],
+        "profit_recorded_at": profit_recorded_at,
     }

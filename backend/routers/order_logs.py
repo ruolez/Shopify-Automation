@@ -13,7 +13,7 @@ from schemas import TaskStatusResponse, FailedTasksResponse, RetryOrdersRequest
 from tasks import retry_order_processing as run_retry_order_processing
 from models import ExcludedSKU
 from shipping_estimate_service import profit_with_shipping
-from order_detail import build_order_detail
+from order_detail import build_order_detail, profit_snapshot
 from dependencies import _format_timestamp_with_user_timezone
 from shopify_client import ShopifyClient
 
@@ -283,8 +283,10 @@ async def get_order_detail(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Live order detail for the Orders page modal: order and customer info, per-line
-    revenue/cost/margin, the shipping estimate and the profit calculation"""
+    """Order detail for the Orders page modal: order and customer info and per-line
+    revenue/cost/margin loaded live from Shopify, plus the profit calculation and
+    shipping estimate as recorded when a profit rule last ran on the order, falling
+    back to a live calculation for orders no profit rule has evaluated"""
     store = db.query(ShopifyStore).filter(
         ShopifyStore.id == store_id,
         ShopifyStore.user_id == current_user.id
@@ -304,25 +306,21 @@ async def get_order_detail(
         logger.error(f"Failed to load order {order_id} from {store.shop_domain}: {e}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not load the order from Shopify: {e}")
 
+    recent_logs = db.query(OrderLog).filter(
+        OrderLog.store_id == store.id,
+        OrderLog.order_id == order_id
+    ).order_by(OrderLog.created_at.desc()).limit(20).all()
+    snapshot = profit_snapshot(recent_logs)
+    if snapshot:
+        return build_order_detail(order, snapshot["profit"], store, snapshot["profit_conditions"], snapshot["recorded_at"])
+
     excluded_skus = [
         sku.sku_pattern for sku in db.query(ExcludedSKU).filter(
             ExcludedSKU.user_id == current_user.id,
             ExcludedSKU.is_active == True
         ).all()
     ]
-    profit = profit_with_shipping(order, store, excluded_skus, db)
-
-    profit_conditions = None
-    recent_logs = db.query(OrderLog).filter(
-        OrderLog.store_id == store.id,
-        OrderLog.order_id == order_id
-    ).order_by(OrderLog.created_at.desc()).limit(20).all()
-    for log in recent_logs:
-        if isinstance(log.details, dict) and log.details.get("profit_conditions"):
-            profit_conditions = log.details["profit_conditions"]
-            break
-
-    return build_order_detail(order, profit, store, profit_conditions)
+    return build_order_detail(order, profit_with_shipping(order, store, excluded_skus, db), store)
 
 
 @router.post("/retry")
