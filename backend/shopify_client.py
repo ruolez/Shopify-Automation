@@ -2,6 +2,7 @@ import httpx
 import json
 import asyncio
 import os
+import random
 import re
 from typing import Dict, List, Optional, Any
 
@@ -44,6 +45,22 @@ class ShopifyGraphQLError(Exception):
     """Non-retryable GraphQL error (schema/validation failures). Retrying the
     same document cannot succeed, so callers fail fast instead of burning the
     retry budget."""
+
+
+class ShopifyTransientError(Exception):
+    """Shopify failed on its side (GraphQL INTERNAL_SERVER_ERROR) and kept failing
+    through every retry. Not a ShopifyGraphQLError, so task-level retries still apply."""
+
+
+# Top-level GraphQL error codes Shopify documents as "retry the request"
+TRANSIENT_GRAPHQL_CODES = {"INTERNAL_SERVER_ERROR"}
+
+
+def backoff_delay(attempt: int, base: float = 2.0, cap: float = 30.0) -> float:
+    """Exponential backoff with jitter: base * 2^attempt capped at cap, randomized to
+    between half and all of it so retries from parallel workers do not line up"""
+    delay = min(cap, base * 2 ** attempt)
+    return delay / 2 + delay / 2 * random.random()
 
 
 def quote_search_value(value: str) -> str:
@@ -134,7 +151,7 @@ class ShopifyClient:
             raise last_exception
         raise Exception("Request failed after all retry attempts")
     
-    async def _make_graphql_request(self, query: str, variables: Optional[Dict] = None, retry_count: int = 3) -> Dict:
+    async def _make_graphql_request(self, query: str, variables: Optional[Dict] = None, retry_count: int = 4) -> Dict:
         """Make GraphQL request to Shopify Admin API with cost tracking and retry logic"""
         # Configure timeout: 60 seconds for connection/read, 120 seconds total
         timeout = httpx.Timeout(connect=60.0, read=60.0, write=60.0, pool=120.0)
@@ -228,13 +245,30 @@ class ShopifyClient:
                             message = query_cost_rejection_message(query, cost_ext.get("requestedQueryCost"))
                             logger.error(message)
                             raise ShopifyGraphQLError(message)
+                        transient = any(
+                            isinstance(err, dict)
+                            and (err.get("extensions") or {}).get("code") in TRANSIENT_GRAPHQL_CODES
+                            for err in errors
+                        )
+                        if transient:
+                            last_exception = ShopifyTransientError(f"GraphQL errors: {errors}")
+                            if attempt < retry_count - 1:
+                                wait_time = backoff_delay(attempt)
+                                logger.warning(
+                                    f"Shopify internal error on {_query_name(query)} — retrying in {wait_time:.1f}s "
+                                    f"(attempt {attempt + 1}/{retry_count}): {errors}"
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                            logger.error(f"Shopify internal error persisted after {retry_count} attempts: {errors}")
+                            raise last_exception
                         logger.error(f"GraphQL errors: {errors}")
                         raise ShopifyGraphQLError(f"GraphQL errors: {errors}")
 
                     return result
 
-            except ShopifyGraphQLError:
-                raise  # schema/validation errors cannot succeed on retry
+            except (ShopifyGraphQLError, ShopifyTransientError):
+                raise  # validation errors cannot succeed on retry; transient ones already used the retries
             except httpx.HTTPStatusError as e:
                 logger.error(f"Shopify GraphQL error: {e.response.status_code} - {e.response.text}")
                 # Don't retry on HTTP errors (4xx) except for 429 (rate limit) and 5xx errors
@@ -243,9 +277,9 @@ class ShopifyClient:
                     if attempt < retry_count - 1:
                         retry_after = e.response.headers.get("Retry-After")
                         try:
-                            wait_time = min(float(retry_after), 60.0) if retry_after else float(2 ** attempt)
+                            wait_time = min(float(retry_after), 60.0) if retry_after else backoff_delay(attempt)
                         except ValueError:
-                            wait_time = float(2 ** attempt)
+                            wait_time = backoff_delay(attempt)
                         logger.info(f"Retrying GraphQL request after {wait_time} seconds (attempt {attempt + 1}/{retry_count})")
                         await asyncio.sleep(wait_time)
                         continue

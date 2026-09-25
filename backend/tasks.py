@@ -4,6 +4,7 @@ from celery.schedules import crontab
 import os
 import sys
 import asyncio
+import re
 import logging
 import pytz
 from datetime import datetime, timedelta, timezone
@@ -1589,19 +1590,29 @@ def _rule_match_details(rule, order: Dict[str, Any], actions_successful: bool,
 
 
 
+_REQUEST_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+)?", re.IGNORECASE)
+
+
+def _alert_fingerprint(message: Optional[str]) -> str:
+    """An alert message with Shopify request IDs masked, so repeats of the same
+    failure count as the same alert"""
+    return _REQUEST_ID.sub("<request-id>", message or "")
+
+
 def _log_store_alert_once(db: Session, store: ShopifyStore, action: str, message: str, within: timedelta) -> bool:
     """Write a store-level problem to the order log (status "error", so it shows in the
     dashboard's Recent Errors and the Order Logs page) unless the same alert was already
-    logged for this store within the given window — sync runs every minute."""
+    logged for this store within the given window — sync runs every minute. Messages
+    that differ only by Shopify request IDs count as the same alert."""
     try:
         since = datetime.now(timezone.utc) - within
-        already_logged = db.query(OrderLog.id).filter(
+        recent_messages = db.query(OrderLog.error_message).filter(
             OrderLog.store_id == store.id,
             OrderLog.action == action,
-            OrderLog.error_message == message,
             OrderLog.created_at >= since
-        ).first()
-        if already_logged:
+        ).all()
+        fingerprint = _alert_fingerprint(message)
+        if any(_alert_fingerprint(row[0]) == fingerprint for row in recent_messages):
             return False
     except Exception as e:
         db.rollback()
