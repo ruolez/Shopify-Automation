@@ -1,6 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, ForeignKey, JSON, UniqueConstraint, Numeric, Index
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.sql import func
 from database import Base
 from encryption import encrypt_token, decrypt_token
@@ -52,7 +51,7 @@ class ShopifyStore(Base):
     oauth_client_id = Column(String)
     _client_secret_encrypted = Column("oauth_client_secret", Text)  # Encrypted using Fernet
 
-    @hybrid_property
+    @property
     def access_token(self) -> str:
         """Decrypt and return the access token."""
         return decrypt_token(self._access_token_encrypted)
@@ -62,7 +61,7 @@ class ShopifyStore(Base):
         """Encrypt and store the access token."""
         self._access_token_encrypted = encrypt_token(value)
 
-    @hybrid_property
+    @property
     def refresh_token(self):
         """Decrypt and return the OAuth refresh token (None when not set)."""
         return decrypt_token(self._refresh_token_encrypted) if self._refresh_token_encrypted else None
@@ -72,7 +71,7 @@ class ShopifyStore(Base):
         """Encrypt and store the OAuth refresh token."""
         self._refresh_token_encrypted = encrypt_token(value) if value else None
 
-    @hybrid_property
+    @property
     def client_secret(self):
         """Decrypt and return the OAuth app client secret (None when not set)."""
         return decrypt_token(self._client_secret_encrypted) if self._client_secret_encrypted else None
@@ -211,7 +210,7 @@ class Settings(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    @hybrid_property
+    @property
     def shipper_db_password(self):
         """Decrypt and return the shipper database password (None when not set)."""
         return decrypt_token(self._shipper_db_password_encrypted) if self._shipper_db_password_encrypted else None
