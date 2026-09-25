@@ -578,6 +578,11 @@ class ShopifyClient:
                                 parentTransaction {
                                     id
                                 }
+                                paymentDetails {
+                                    ... on CardPaymentDetails {
+                                        name
+                                    }
+                                }
                             }
                             risk {
                                 assessments {
@@ -1531,11 +1536,12 @@ class ShopifyClient:
         logger.info(f"Order {order.get('name', order['id'])}: fetched all {len(edges)} line items (page was truncated)")
         return True
 
-    async def get_order_risk_levels(self, order_ids: List[str]) -> Dict[str, Dict]:
-        """Shopify's risk data ({recommendation, assessments[{riskLevel}]}) for many
-        orders, keyed by order GID; orders Shopify no longer returns are left out"""
+    async def get_order_risk_data(self, order_ids: List[str]) -> Dict[str, Dict]:
+        """What the saved risk check needs for many orders (risk {recommendation,
+        assessments[{riskLevel}]}, billing/shipping names and card payments), keyed by
+        order GID; orders Shopify no longer returns are left out"""
         query = """
-        query orderRiskLevels($ids: [ID!]!) {
+        query orderRiskChecks($ids: [ID!]!) {
             nodes(ids: $ids) {
                 ... on Order {
                     id
@@ -1545,17 +1551,34 @@ class ShopifyClient:
                             riskLevel
                         }
                     }
+                    billingAddress {
+                        firstName
+                        lastName
+                    }
+                    shippingAddress {
+                        firstName
+                        lastName
+                    }
+                    transactions(first: 10) {
+                        kind
+                        status
+                        paymentDetails {
+                            ... on CardPaymentDetails {
+                                name
+                            }
+                        }
+                    }
                 }
             }
         }
         """
-        risks = {}
-        for start in range(0, len(order_ids), 50):
-            result = await self._make_graphql_request(query, {"ids": order_ids[start:start + 50]})
+        orders = {}
+        for start in range(0, len(order_ids), 25):
+            result = await self._make_graphql_request(query, {"ids": order_ids[start:start + 25]})
             for node in (result.get("data") or {}).get("nodes") or []:
                 if node and node.get("id"):
-                    risks[node["id"]] = node.get("risk") or {}
-        return risks
+                    orders[node["id"]] = node
+        return orders
 
     async def get_order_by_id(self, order_id: str, include_fraud_data: bool = False) -> Dict | None:
         """Get a specific order by ID for retry processing"""
@@ -1744,6 +1767,11 @@ class ShopifyClient:
                         errorCode
                         parentTransaction {
                             id
+                        }
+                        paymentDetails {
+                            ... on CardPaymentDetails {
+                                name
+                            }
                         }
                     }
                     clientIp

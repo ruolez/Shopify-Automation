@@ -1010,7 +1010,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     continue
 
                 try:
-                    save_order_risk_levels(db, store.id, [order_id], {order_id: order.get("risk") or {}})
+                    save_order_risk_levels(db, store.id, [order_id], {order_id: order})
                 except Exception as e:
                     db.rollback()
                     logger.warning(f"Could not save the risk level of order {order_number}: {e}")
@@ -2240,13 +2240,15 @@ def sync_shipping_cost_samples(self):
         raise
 
 ORDER_RISK_REFRESH_PER_STORE = 1000
+ORDER_RISK_SAVE_BATCH = 200
 
 
 @celery.task(bind=True, soft_time_limit=240, time_limit=280)
 def refresh_order_risk_levels(self):
-    """Save Shopify's risk level for logged orders that have none yet (backfilling
-    older orders a batch at a time) and recheck PENDING ones, for the Orders page
-    risk filter"""
+    """Save Shopify's risk level and cardholder name check for logged orders that have
+    none yet (backfilling older orders a batch at a time) and recheck PENDING ones,
+    for the Orders page filters. Saved per batch so a run cut short by the time limit
+    still makes progress."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     refreshed = {}
@@ -2262,9 +2264,11 @@ def refresh_order_risk_levels(self):
                     continue
                 try:
                     client = ShopifyClient(store.shop_domain, store.access_token)
-                    risks = loop.run_until_complete(client.get_order_risk_levels(order_ids))
-                    save_order_risk_levels(db, store.id, order_ids, risks)
-                    refreshed[store.shop_domain] = len(order_ids)
+                    for start in range(0, len(order_ids), ORDER_RISK_SAVE_BATCH):
+                        batch = order_ids[start:start + ORDER_RISK_SAVE_BATCH]
+                        orders = loop.run_until_complete(client.get_order_risk_data(batch))
+                        save_order_risk_levels(db, store.id, batch, orders)
+                        refreshed[store.shop_domain] = start + len(batch)
                 except SoftTimeLimitExceeded:
                     raise
                 except Exception as e:

@@ -29,6 +29,7 @@ MIGRATION_ORDER = [
     "add_fraud_rule_stores",
     "add_oauth_fields_to_stores",
     "add_shipper_db_settings",
+    "add_cardholder_match_to_order_risk_levels",
 ]
 
 

@@ -14,7 +14,8 @@ from tasks import retry_order_processing as run_retry_order_processing
 from models import ExcludedSKU
 from shipping_estimate_service import profit_with_shipping
 from order_detail import build_order_detail, profit_snapshot
-from order_risk import order_risk, risk_level, parse_risk_levels, has_risk_level, save_order_risk_levels
+from order_risk import (order_risk, risk_level, cardholder_check, parse_filter_values, has_risk_level,
+                        has_cardholder_match, save_order_risk_levels, FILTERABLE_LEVELS, CARDHOLDER_MATCHES)
 from ip_location import lookup_ip_location
 from dependencies import _format_timestamp_with_user_timezone
 from shopify_client import ShopifyClient
@@ -34,6 +35,7 @@ async def get_order_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     risk_levels: Optional[str] = None,
+    cardholder_matches: Optional[str] = None,
     sort_field: Optional[str] = "latest_date",
     sort_direction: Optional[str] = "desc",
     page: int = 1,
@@ -42,7 +44,8 @@ async def get_order_logs(
     db: Session = Depends(get_db)
 ):
     query = db.query(OrderLog).filter(OrderLog.user_id == current_user.id)
-    levels = parse_risk_levels(risk_levels)
+    levels = parse_filter_values(risk_levels, FILTERABLE_LEVELS)
+    name_matches = parse_filter_values(cardholder_matches, CARDHOLDER_MATCHES)
 
     if store_id:
         query = query.filter(OrderLog.store_id == store_id)
@@ -105,6 +108,8 @@ async def get_order_logs(
             query = query.filter(OrderLog.created_at <= parsed_date_to)
         if levels:
             query = query.filter(has_risk_level(levels))
+        if name_matches:
+            query = query.filter(has_cardholder_match(name_matches))
         return query
 
     # Validate sort parameters
@@ -238,6 +243,7 @@ async def get_all_order_ids(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     risk_levels: Optional[str] = None,
+    cardholder_matches: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -272,9 +278,12 @@ async def get_all_order_ids(
         except ValueError:
             pass
 
-    levels = parse_risk_levels(risk_levels)
+    levels = parse_filter_values(risk_levels, FILTERABLE_LEVELS)
     if levels:
         query = query.filter(has_risk_level(levels))
+    name_matches = parse_filter_values(cardholder_matches, CARDHOLDER_MATCHES)
+    if name_matches:
+        query = query.filter(has_cardholder_match(name_matches))
 
     results = query.all()
 
@@ -344,10 +353,10 @@ async def get_order_risk_levels(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Shopify's current risk level and recommendation for the orders on the Orders
-    page, keyed by order GID; one batched Shopify call per store. The levels are also
-    saved for the risk filter. A store that fails is logged and left out so its
-    orders simply show no badge."""
+    """Shopify's current risk level, recommendation and cardholder name check for the
+    orders on the Orders page, keyed by order GID; one batched Shopify call per store.
+    The results are also saved for the filters. A store that fails is logged and left
+    out so its orders simply show no badge."""
     order_ids_by_store = {}
     for ref in request.orders:
         order_ids_by_store.setdefault(ref.store_id, set()).add(ref.order_id)
@@ -360,14 +369,21 @@ async def get_order_risk_levels(
     for store in stores:
         client = ShopifyClient(store.shop_domain, store.access_token)
         try:
-            risks = await client.get_order_risk_levels(sorted(order_ids_by_store[store.id]))
+            orders = await client.get_order_risk_data(sorted(order_ids_by_store[store.id]))
         except Exception as e:
             logger.warning(f"Could not load order risk levels from {store.shop_domain}: {e}")
             continue
-        for order_id, risk in risks.items():
-            levels[order_id] = {"level": risk_level(risk), "recommendation": risk.get("recommendation")}
+        for order_id, order in orders.items():
+            risk = order.get("risk") or {}
+            cardholder = cardholder_check(order)
+            levels[order_id] = {
+                "level": risk_level(risk),
+                "recommendation": risk.get("recommendation"),
+                "cardholder_match": cardholder["status"] if cardholder else None,
+                "card_names": cardholder["card_names"] if cardholder else [],
+            }
         try:
-            save_order_risk_levels(db, store.id, order_ids_by_store[store.id], risks)
+            save_order_risk_levels(db, store.id, order_ids_by_store[store.id], orders)
         except Exception as e:
             db.rollback()
             logger.warning(f"Could not save order risk levels for {store.shop_domain}: {e}")

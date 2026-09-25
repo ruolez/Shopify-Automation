@@ -240,7 +240,10 @@ class OrderRiskLevel(Base):
     """Shopify's risk level per order, saved so the Orders page can filter on it.
     Filled at sync time, by the periodic refresh (which also backfills and rechecks
     PENDING levels) and whenever the Orders page loads live levels. level is NULL
-    when Shopify has no assessment or no longer returns the order."""
+    when Shopify has no assessment or no longer returns the order. cardholder_match
+    compares the name on the card with the billing/shipping names (order_risk.
+    CARDHOLDER_MATCHES, or NONE when there is nothing to compare); NULL means the
+    row predates that check and is due for a refresh."""
     __tablename__ = "order_risk_levels"
 
     id = Column(Integer, primary_key=True)
@@ -248,6 +251,8 @@ class OrderRiskLevel(Base):
     order_id = Column(String, nullable=False)
     level = Column(String(20), index=True)
     recommendation = Column(String(20))
+    cardholder_match = Column(String(20), index=True)
+    cardholder_name = Column(String(255))
     checked_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (

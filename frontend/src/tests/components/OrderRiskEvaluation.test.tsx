@@ -1,6 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import OrderRiskEvaluation, { RiskLevelBadge, RiskLevelFilter } from "../../components/OrderRiskEvaluation";
+import OrderRiskEvaluation, {
+  CardholderMatchBadge,
+  CardholderMatchFilter,
+  RiskLevelBadge,
+  RiskLevelFilter,
+} from "../../components/OrderRiskEvaluation";
 import type { OrderRisk } from "../../components/OrderRiskEvaluation";
 
 const IP = "72.24.210.88";
@@ -25,6 +30,7 @@ const risk = (overrides: Partial<OrderRisk> = {}): OrderRisk => ({
   ],
   ip: IP,
   ip_location: LOCATION,
+  cardholder: null,
   ...overrides,
 });
 
@@ -60,6 +66,67 @@ describe("OrderRiskEvaluation", () => {
       expect.anything(),
       null,
     ]);
+  });
+});
+
+describe("OrderRiskEvaluation cardholder name check", () => {
+  const CARD_NAME = "Charles Anderson";
+  const ORDER_NAME = "Kristol Anderson";
+
+  it.each([
+    ["MATCH", "Name on card matches the order"],
+    ["LAST_NAME_ONLY", "Only the last name on the card matches the order"],
+    ["MISMATCH", "Name on card does not match the billing or shipping name"],
+  ] as const)("describes a %s result", (status, text) => {
+    const cardholder = { status, card_names: [CARD_NAME], billing_name: ORDER_NAME, shipping_name: null };
+    render(<OrderRiskEvaluation risk={risk({ cardholder })} />);
+    expect(screen.getByText(text).closest("[data-cardholder-match]")?.getAttribute("data-cardholder-match")).toEqual(status);
+  });
+
+  it("lists the names that were compared, leaving out a missing one", () => {
+    const cardholder = { status: "LAST_NAME_ONLY" as const, card_names: [CARD_NAME], billing_name: ORDER_NAME, shipping_name: null };
+    render(<OrderRiskEvaluation risk={risk({ cardholder })} />);
+    expect(screen.getByText(`Name on card: ${CARD_NAME} · Billing: ${ORDER_NAME}`)).toBeInTheDocument();
+  });
+
+  it("names every card when several paid", () => {
+    const cardholder = { status: "MISMATCH" as const, card_names: [CARD_NAME, "John Smith"], billing_name: ORDER_NAME, shipping_name: ORDER_NAME };
+    render(<OrderRiskEvaluation risk={risk({ cardholder })} />);
+    expect(
+      screen.getByText(`Names on cards: ${CARD_NAME}, John Smith · Billing: ${ORDER_NAME} · Shipping: ${ORDER_NAME}`),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("CardholderMatchBadge", () => {
+  it.each([
+    ["MISMATCH", "Name mismatch"],
+    ["LAST_NAME_ONLY", "Last name only"],
+    ["MATCH", "Name matches"],
+  ] as const)("labels %s as %s", (match, label) => {
+    render(<CardholderMatchBadge match={match} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it("renders nothing without a result", () => {
+    const { container } = render(<CardholderMatchBadge match={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("CardholderMatchFilter", () => {
+  it("summarizes the selection and keeps it worst first", () => {
+    const onChange = vi.fn();
+    render(<CardholderMatchFilter value={["LAST_NAME_ONLY"]} onChange={onChange} />);
+    expect(screen.getByRole("button")).toHaveTextContent("Last name only");
+    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("option", { name: /Mismatch/ }));
+    expect(onChange.mock.calls).toEqual([[["MISMATCH", "LAST_NAME_ONLY"]]]);
+  });
+
+  it("shows the placeholder when nothing is selected", () => {
+    render(<CardholderMatchFilter value={[]} onChange={() => {}} />);
+    expect(screen.getByRole("button")).toHaveTextContent("Any cardholder name");
   });
 });
 

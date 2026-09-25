@@ -19,8 +19,13 @@ import api from "../utils/api";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProfitBreakdown, { ProfitCondition } from "../components/ProfitBreakdown";
 import OrderDetailModal from "../components/OrderDetailModal";
-import { RiskLevelBadge, RiskLevelFilter } from "../components/OrderRiskEvaluation";
-import type { RiskLevel, RiskRecommendation } from "../components/OrderRiskEvaluation";
+import {
+  CardholderMatchBadge,
+  CardholderMatchFilter,
+  RiskLevelBadge,
+  RiskLevelFilter,
+} from "../components/OrderRiskEvaluation";
+import type { CardholderMatch, RiskLevel, RiskRecommendation } from "../components/OrderRiskEvaluation";
 
 interface OrderLog {
   id: number;
@@ -71,6 +76,7 @@ const OrderLogs: React.FC = () => {
   const [storeFilter, setStoreFilter] = useState<string>("");
   const [ruleFilter, setRuleFilter] = useState<string>("");
   const [riskFilter, setRiskFilter] = useState<RiskLevel[]>([]);
+  const [cardholderFilter, setCardholderFilter] = useState<CardholderMatch[]>([]);
   const [dateFilter, setDateFilter] = useState<string>("");
   const [customDateFrom, setCustomDateFrom] = useState<string>("");
   const [customDateTo, setCustomDateTo] = useState<string>("");
@@ -186,6 +192,7 @@ const OrderLogs: React.FC = () => {
     storeFilter,
     ruleFilter,
     riskFilter,
+    cardholderFilter,
     dateFilter,
     customDateFrom,
     customDateTo,
@@ -244,6 +251,7 @@ const OrderLogs: React.FC = () => {
       storeFilter,
       ruleFilter,
       riskFilter,
+      cardholderFilter,
       dateFilter,
       customDateFrom,
       customDateTo,
@@ -263,6 +271,7 @@ const OrderLogs: React.FC = () => {
       if (storeFilter) params.append("store_id", storeFilter);
       if (ruleFilter) params.append("rule_id", ruleFilter);
       if (riskFilter.length) params.append("risk_levels", riskFilter.join(","));
+      if (cardholderFilter.length) params.append("cardholder_matches", cardholderFilter.join(","));
 
       // Add date filtering
       const dateRange = getDateRange(dateFilter);
@@ -283,6 +292,7 @@ const OrderLogs: React.FC = () => {
       storeFilter,
       ruleFilter,
       riskFilter,
+      cardholderFilter,
       dateFilter,
       customDateFrom,
       customDateTo,
@@ -295,6 +305,7 @@ const OrderLogs: React.FC = () => {
       if (storeFilter) params.append("store_id", storeFilter);
       if (ruleFilter) params.append("rule_id", ruleFilter);
       if (riskFilter.length) params.append("risk_levels", riskFilter.join(","));
+      if (cardholderFilter.length) params.append("cardholder_matches", cardholderFilter.join(","));
 
       // Add date filtering
       const dateRange = getDateRange(dateFilter);
@@ -358,7 +369,17 @@ const OrderLogs: React.FC = () => {
     [groupedLogs],
   );
 
-  const { data: riskLevels } = useQuery<Record<string, { level: RiskLevel | null; recommendation: RiskRecommendation | null }>>({
+  const { data: riskLevels } = useQuery<
+    Record<
+      string,
+      {
+        level: RiskLevel | null;
+        recommendation: RiskRecommendation | null;
+        cardholder_match: CardholderMatch | null;
+        card_names: string[];
+      }
+    >
+  >({
     queryKey: ["order-risk-levels", riskOrders],
     queryFn: async () => (await api.post("/order-logs/risk-levels", { orders: riskOrders })).data,
     enabled: riskOrders.length > 0,
@@ -594,7 +615,7 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 overflow-visible">
+          <div className="grid grid-cols-1 md:grid-cols-4 xl:grid-cols-7 gap-4 mb-6 overflow-visible">
             <div>
               <label
                 htmlFor="date-filter"
@@ -763,6 +784,23 @@ const OrderLogs: React.FC = () => {
                 }}
               />
             </div>
+
+            <div>
+              <label
+                htmlFor="cardholder-filter"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
+              >
+                Cardholder Name
+              </label>
+              <CardholderMatchFilter
+                id="cardholder-filter"
+                value={cardholderFilter}
+                onChange={(matches) => {
+                  setCardholderFilter(matches);
+                  setPage(1);
+                }}
+              />
+            </div>
           </div>
 
           {/* Logs table */}
@@ -896,6 +934,15 @@ const OrderLogs: React.FC = () => {
                               <RiskLevelBadge level={riskLevels[group.order_id].level} />
                             </span>
                           )}
+                          {riskLevels?.[group.order_id]?.cardholder_match &&
+                            riskLevels[group.order_id].cardholder_match !== "MATCH" && (
+                              <span className="ml-2">
+                                <CardholderMatchBadge
+                                  match={riskLevels[group.order_id].cardholder_match}
+                                  title={`Name on card: ${riskLevels[group.order_id].card_names.join(", ")}`}
+                                />
+                              </span>
+                            )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
                           {group.store_name}
