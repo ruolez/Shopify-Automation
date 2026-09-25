@@ -3,6 +3,8 @@ import { Dialog } from "@headlessui/react";
 import { useQuery } from "@tanstack/react-query";
 import api from "../utils/api";
 import LoadingSpinner from "./LoadingSpinner";
+import OrderRiskEvaluation from "./OrderRiskEvaluation";
+import type { OrderRisk } from "./OrderRiskEvaluation";
 import ProfitBreakdown, { formatMoney, ProfitCondition, ProfitDetails } from "./ProfitBreakdown";
 import { formatDate } from "../utils/dateFormat";
 
@@ -69,6 +71,7 @@ export interface OrderDetail {
   profit_conditions: ProfitCondition[];
   // When a profit rule last ran on the order; null means the profit was calculated live
   profit_recorded_at: string | null;
+  risk: OrderRisk | null;
 }
 
 const marginClass = (margin: number | null) => {
@@ -210,6 +213,8 @@ const OrderDetailModal: React.FC<{
                     <AddressBlock title="Ship to" address={data.customer.shipping_address} />
                     <AddressBlock title="Bill to" address={data.customer.billing_address} />
                   </div>
+
+                  {data.risk && <OrderRiskEvaluation risk={data.risk} />}
 
                   <div>
                     <div className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400 mb-2">Products</div>

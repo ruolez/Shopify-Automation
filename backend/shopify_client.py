@@ -1497,6 +1497,32 @@ class ShopifyClient:
         logger.info(f"Order {order.get('name', order['id'])}: fetched all {len(edges)} line items (page was truncated)")
         return True
 
+    async def get_order_risk_levels(self, order_ids: List[str]) -> Dict[str, Dict]:
+        """Shopify's risk data ({recommendation, assessments[{riskLevel}]}) for many
+        orders, keyed by order GID; orders Shopify no longer returns are left out"""
+        query = """
+        query orderRiskLevels($ids: [ID!]!) {
+            nodes(ids: $ids) {
+                ... on Order {
+                    id
+                    risk {
+                        recommendation
+                        assessments {
+                            riskLevel
+                        }
+                    }
+                }
+            }
+        }
+        """
+        risks = {}
+        for start in range(0, len(order_ids), 50):
+            result = await self._make_graphql_request(query, {"ids": order_ids[start:start + 50]})
+            for node in (result.get("data") or {}).get("nodes") or []:
+                if node and node.get("id"):
+                    risks[node["id"]] = node.get("risk") or {}
+        return risks
+
     async def get_order_by_id(self, order_id: str, include_fraud_data: bool = False) -> Dict | None:
         """Get a specific order by ID for retry processing"""
         if include_fraud_data:
@@ -1686,6 +1712,7 @@ class ShopifyClient:
                             id
                         }
                     }
+                    clientIp
                     risk {
                         assessments {
                             riskLevel
@@ -1695,6 +1722,7 @@ class ShopifyClient:
                             }
                             provider {
                                 id
+                                title
                             }
                         }
                         recommendation

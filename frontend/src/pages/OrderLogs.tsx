@@ -19,6 +19,8 @@ import api from "../utils/api";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProfitBreakdown, { ProfitCondition } from "../components/ProfitBreakdown";
 import OrderDetailModal from "../components/OrderDetailModal";
+import { RiskLevelBadge } from "../components/OrderRiskEvaluation";
+import type { RiskLevel, RiskRecommendation } from "../components/OrderRiskEvaluation";
 
 interface OrderLog {
   id: number;
@@ -341,6 +343,22 @@ const OrderLogs: React.FC = () => {
 
     return groupedArray;
   }, [data?.logs]);
+
+  const riskOrders = useMemo(
+    () =>
+      groupedLogs
+        .filter((group) => group.order_id.startsWith("gid://shopify/Order/") && group.logs[0]?.store_id)
+        .map((group) => ({ store_id: group.logs[0].store_id, order_id: group.order_id })),
+    [groupedLogs],
+  );
+
+  const { data: riskLevels } = useQuery<Record<string, { level: RiskLevel | null; recommendation: RiskRecommendation | null }>>({
+    queryKey: ["order-risk-levels", riskOrders],
+    queryFn: async () => (await api.post("/order-logs/risk-levels", { orders: riskOrders })).data,
+    enabled: riskOrders.length > 0,
+    staleTime: 60_000,
+    retry: false,
+  });
 
   const retryOrders = useMutation({
     mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
@@ -850,6 +868,11 @@ const OrderLogs: React.FC = () => {
                           >
                             {group.order_number}
                           </button>
+                          {riskLevels?.[group.order_id]?.level && (
+                            <span className="ml-2">
+                              <RiskLevelBadge level={riskLevels[group.order_id].level} />
+                            </span>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-dark-500">
                           {group.store_name}

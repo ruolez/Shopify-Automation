@@ -75,6 +75,13 @@ class TestBuildOrderDetail:
         detail = build_order_detail(data, {"currency": "USD"}, store, profit_recorded_at="2026-09-03T12:31:00+00:00")
         assert detail["profit_recorded_at"] == "2026-09-03T12:31:00+00:00"
 
+    def test_risk_is_passed_through_and_defaults_to_none(self):
+        data = order([priced(line_item(1, "1.00"), "2.00")])
+        store = SimpleNamespace(id=1, shop_name="s", shop_domain="d")
+        risk = {"level": "HIGH", "recommendation": "CANCEL", "assessments": [], "ip": "72.24.210.88", "ip_location": "Odessa, Texas, United States"}
+        assert (build_order_detail(data, {"currency": "USD"}, store, risk=risk)["risk"],
+                build_order_detail(data, {"currency": "USD"}, store)["risk"]) == (risk, None)
+
     def test_tolerates_missing_customer_and_addresses(self):
         data = order([priced(line_item(1, "1.00"), "2.00")])
         data.update({"customer": None, "shippingAddress": None, "billingAddress": None, "shippingLines": None})

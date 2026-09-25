@@ -226,6 +226,24 @@ class RetryOrdersRequest(BaseModel):
         return ids
 
 
+class OrderRef(BaseModel):
+    store_id: int
+    order_id: str
+
+
+class OrderRiskLevelsRequest(BaseModel):
+    """Orders on the current Orders page whose Shopify risk level should be shown.
+    Log rows that are not Shopify orders (store alerts such as "store:3") are dropped."""
+    orders: List[OrderRef]
+
+    @validator('orders')
+    def validate_orders(cls, v):
+        orders = [o for o in v if o.order_id.startswith('gid://shopify/Order/')]
+        if len(orders) > 200:
+            raise ValueError('At most 200 orders can be checked at once')
+        return orders
+
+
 class ShipperDatabaseUpdate(BaseModel):
     """Shipper MS SQL connection for shipping-cost estimates; password omitted = keep stored"""
     host: Optional[str] = None

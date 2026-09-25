@@ -9,11 +9,13 @@ from sqlalchemy import func, text, case
 from database import get_db
 from models import User, ShopifyStore, OrderLog, ProcessedOrder, TaskStatus
 from auth import get_current_user
-from schemas import TaskStatusResponse, FailedTasksResponse, RetryOrdersRequest
+from schemas import TaskStatusResponse, FailedTasksResponse, RetryOrdersRequest, OrderRiskLevelsRequest
 from tasks import retry_order_processing as run_retry_order_processing
 from models import ExcludedSKU
 from shipping_estimate_service import profit_with_shipping
 from order_detail import build_order_detail, profit_snapshot
+from order_risk import order_risk, risk_level
+from ip_location import lookup_ip_location
 from dependencies import _format_timestamp_with_user_timezone
 from shopify_client import ShopifyClient
 
@@ -306,13 +308,17 @@ async def get_order_detail(
         logger.error(f"Failed to load order {order_id} from {store.shop_domain}: {e}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not load the order from Shopify: {e}")
 
+    risk = order_risk(order)
+    if risk and risk["ip"]:
+        risk["ip_location"] = await lookup_ip_location(risk["ip"])
+
     recent_logs = db.query(OrderLog).filter(
         OrderLog.store_id == store.id,
         OrderLog.order_id == order_id
     ).order_by(OrderLog.created_at.desc()).limit(20).all()
     snapshot = profit_snapshot(recent_logs)
     if snapshot:
-        return build_order_detail(order, snapshot["profit"], store, snapshot["profit_conditions"], snapshot["recorded_at"])
+        return build_order_detail(order, snapshot["profit"], store, snapshot["profit_conditions"], snapshot["recorded_at"], risk)
 
     excluded_skus = [
         sku.sku_pattern for sku in db.query(ExcludedSKU).filter(
@@ -320,7 +326,37 @@ async def get_order_detail(
             ExcludedSKU.is_active == True
         ).all()
     ]
-    return build_order_detail(order, profit_with_shipping(order, store, excluded_skus, db), store)
+    return build_order_detail(order, profit_with_shipping(order, store, excluded_skus, db), store, risk=risk)
+
+
+@router.post("/risk-levels")
+async def get_order_risk_levels(
+    request: OrderRiskLevelsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Shopify's current risk level and recommendation for the orders on the Orders
+    page, keyed by order GID; one batched Shopify call per store. A store that fails
+    is logged and left out so its orders simply show no badge."""
+    order_ids_by_store = {}
+    for ref in request.orders:
+        order_ids_by_store.setdefault(ref.store_id, set()).add(ref.order_id)
+    stores = db.query(ShopifyStore).filter(
+        ShopifyStore.id.in_(list(order_ids_by_store)),
+        ShopifyStore.user_id == current_user.id
+    ).all() if order_ids_by_store else []
+
+    levels = {}
+    for store in stores:
+        client = ShopifyClient(store.shop_domain, store.access_token)
+        try:
+            risks = await client.get_order_risk_levels(sorted(order_ids_by_store[store.id]))
+        except Exception as e:
+            logger.warning(f"Could not load order risk levels from {store.shop_domain}: {e}")
+            continue
+        for order_id, risk in risks.items():
+            levels[order_id] = {"level": risk_level(risk), "recommendation": risk.get("recommendation")}
+    return levels
 
 
 @router.post("/retry")

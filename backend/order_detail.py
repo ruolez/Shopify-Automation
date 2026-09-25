@@ -88,7 +88,8 @@ def line_item_detail(item: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_order_detail(order: Dict[str, Any], profit: Dict[str, Any], store: Any,
                        profit_conditions: Optional[List[Dict[str, Any]]] = None,
-                       profit_recorded_at: Optional[str] = None) -> Dict[str, Any]:
+                       profit_recorded_at: Optional[str] = None,
+                       risk: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     customer = order.get("customer") or {}
     shipping_lines = [edge.get("node") or {} for edge in ((order.get("shippingLines") or {}).get("edges") or [])]
     line_items = [line_item_detail((edge or {}).get("node") or {}) for edge in ((order.get("lineItems") or {}).get("edges") or [])]
@@ -129,4 +130,5 @@ def build_order_detail(order: Dict[str, Any], profit: Dict[str, Any], store: Any
         "profit": {key: value for key, value in profit.items() if key != "shipping_estimate"},
         "profit_conditions": profit_conditions or [],
         "profit_recorded_at": profit_recorded_at,
+        "risk": risk,
     }
