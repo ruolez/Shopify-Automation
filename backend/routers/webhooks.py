@@ -1,7 +1,9 @@
 """Shopify webhook receiver.
 
 Authentication is the X-Shopify-Hmac-Sha256 header (HMAC-SHA256 of the raw
-request body keyed with the app client secret) — requests failing verification
+request body keyed with the app client secret). Each store may have its own app,
+so the secrets tried are those saved on stores for the X-Shopify-Shop-Domain
+shop plus the SHOPIFY_API_SECRET env fallback — requests failing verification
 get 401, as Shopify's compliance checks require. The CSRF middleware exempts
 /webhooks/ for the same reason.
 
@@ -29,33 +31,46 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
-def _verify_webhook_hmac(body: bytes, provided_hmac: str) -> bool:
-    secret = os.getenv("SHOPIFY_API_SECRET")
-    if not secret:
-        logger.error("SHOPIFY_API_SECRET not set — cannot verify webhook HMAC")
+def _candidate_secrets(stores) -> list:
+    secrets = [store.client_secret for store in stores if store.client_secret]
+    env_secret = os.getenv("SHOPIFY_API_SECRET")
+    if env_secret:
+        secrets.append(env_secret)
+    return secrets
+
+
+def _verify_webhook_hmac(body: bytes, provided_hmac: str, secrets: list) -> bool:
+    if not secrets:
+        logger.error("No app client secret for this shop — cannot verify webhook HMAC")
         return False
-    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
-    computed = base64.b64encode(digest).decode("utf-8")
-    return hmac.compare_digest(computed, provided_hmac or "")
+    matched = False
+    for secret in secrets:
+        digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+        computed = base64.b64encode(digest).decode("utf-8")
+        matched |= hmac.compare_digest(computed, provided_hmac or "")
+    return matched
 
 
 @router.post("/shopify")
 async def shopify_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
+    shop_domain = (request.headers.get("X-Shopify-Shop-Domain") or "").lower()
 
-    if not _verify_webhook_hmac(body, request.headers.get("X-Shopify-Hmac-Sha256", "")):
+    # The shop header only selects which secrets to try; the HMAC authenticates
+    stores = db.query(ShopifyStore).filter(
+        ShopifyStore.shop_domain == shop_domain
+    ).all() if shop_domain else []
+
+    if not _verify_webhook_hmac(
+        body, request.headers.get("X-Shopify-Hmac-Sha256", ""), _candidate_secrets(stores)
+    ):
         logger.warning("Webhook rejected: HMAC verification failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="HMAC verification failed")
 
     topic = request.headers.get("X-Shopify-Topic", "")
-    shop_domain = (request.headers.get("X-Shopify-Shop-Domain") or "").lower()
     webhook_id = request.headers.get("X-Shopify-Webhook-Id", "")
 
     logger.info(f"Webhook received: topic={topic} shop={shop_domain} id={webhook_id}")
-
-    stores = db.query(ShopifyStore).filter(
-        ShopifyStore.shop_domain == shop_domain
-    ).all() if shop_domain else []
 
     if topic == "app/uninstalled":
         for store in stores:

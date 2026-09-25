@@ -22,6 +22,8 @@ COLUMNS = [
     ("token_expires_at", "TIMESTAMPTZ"),
     ("installed_at", "TIMESTAMPTZ"),
     ("needs_reauth", "BOOLEAN DEFAULT FALSE"),
+    ("oauth_client_id", "VARCHAR"),
+    ("oauth_client_secret", "TEXT"),
 ]
 
 

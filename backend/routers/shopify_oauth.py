@@ -3,10 +3,13 @@
 Complements the manual admin-API-token path: stores connected here get
 auth_method="oauth". Flow per https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/authorization-code-grant
 
-Required environment:
-  SHOPIFY_API_KEY      app client id
-  SHOPIFY_API_SECRET   app client secret (also used for webhook HMAC)
-  APP_URL              public base URL of this deployment (e.g. https://orders.example.com)
+App credentials are per store: the Connect Store prompt sends the client id and
+secret of that store's Shopify Dev Dashboard app, and they are saved (encrypted)
+on the store once the install completes. Optional environment fallbacks:
+  SHOPIFY_API_KEY      default app client id
+  SHOPIFY_API_SECRET   default app client secret (also tried for webhook HMAC)
+  APP_URL              public base URL of this deployment (e.g. https://orders.example.com);
+                       when unset, the browser's origin sent by the frontend is used
 
 Note: OAuth apps see only the last 60 days of orders under read_orders; the
 fraud module's customer-history features need the read_all_orders scope, which
@@ -20,17 +23,20 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
 import redis as _redis
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import User, ShopifyStore
 from auth import get_current_user
+from encryption import encrypt_token, decrypt_token
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -38,6 +44,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/shopify/oauth", tags=["Shopify OAuth"])
 
 SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
+APP_URL_RE = re.compile(r"^https?://[a-zA-Z0-9.-]+(:\d{1,5})?$")
 STATE_TTL_SECONDS = 600
 
 DEFAULT_SCOPES = ",".join([
@@ -59,15 +66,31 @@ _redis_client = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0
 
 
 def _oauth_config():
-    client_id = os.getenv("SHOPIFY_API_KEY")
-    client_secret = os.getenv("SHOPIFY_API_SECRET")
-    app_url = (os.getenv("APP_URL") or "").rstrip("/")
-    if not client_id or not client_secret or not app_url:
+    """Env fallbacks: (client_id, client_secret, app_url), each None when unset."""
+    return (
+        os.getenv("SHOPIFY_API_KEY") or None,
+        os.getenv("SHOPIFY_API_SECRET") or None,
+        (os.getenv("APP_URL") or "").rstrip("/") or None,
+    )
+
+
+class OAuthInstallRequest(BaseModel):
+    shop: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    app_url: Optional[str] = None
+
+
+def _resolve_app_url(requested: Optional[str], env_app_url: Optional[str]) -> str:
+    if env_app_url:
+        return env_app_url
+    app_url = (requested or "").strip().rstrip("/")
+    if not APP_URL_RE.match(app_url):
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Shopify OAuth is not configured (SHOPIFY_API_KEY, SHOPIFY_API_SECRET, APP_URL required)"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid app URL — expected http(s)://host[:port]"
         )
-    return client_id, client_secret, app_url
+    return app_url
 
 
 def _validate_shop_domain(shop: str) -> str:
@@ -93,21 +116,43 @@ def verify_oauth_hmac(params: dict, client_secret: str) -> bool:
     return hmac.compare_digest(computed, provided)
 
 
-@router.get("/install")
+@router.get("/config")
+async def oauth_config(current_user: User = Depends(get_current_user)):
+    """Tell the Connect Store prompt which base URL the callback will use."""
+    _, _, env_app_url = _oauth_config()
+    return {"app_url": env_app_url}
+
+
+@router.post("/install")
 async def start_install(
-    shop: str,
+    body: OAuthInstallRequest,
     current_user: User = Depends(get_current_user),
 ):
     """Return the Shopify authorize URL for the given shop. The frontend
     redirects the browser there; the callback below completes the connection."""
-    client_id, _, app_url = _oauth_config()
-    shop = _validate_shop_domain(shop)
+    env_client_id, env_client_secret, env_app_url = _oauth_config()
+    shop = _validate_shop_domain(body.shop)
+
+    client_id = (body.client_id or "").strip() or env_client_id
+    client_secret = (body.client_secret or "").strip() or env_client_secret
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Client ID and Client Secret of the store's Shopify app are required"
+        )
+    app_url = _resolve_app_url(body.app_url, env_app_url)
 
     state = secrets.token_urlsafe(32)
     _redis_client.setex(
         f"shopify_oauth_state:{state}",
         STATE_TTL_SECONDS,
-        json.dumps({"user_id": current_user.id, "shop": shop}),
+        json.dumps({
+            "user_id": current_user.id,
+            "shop": shop,
+            "client_id": client_id,
+            "client_secret": encrypt_token(client_secret),
+            "app_url": app_url,
+        }),
     )
 
     authorize_url = f"https://{shop}/admin/oauth/authorize?" + urlencode({
@@ -123,7 +168,6 @@ async def start_install(
 async def oauth_callback(request: Request, db: Session = Depends(get_db)):
     """OAuth redirect target: verify state + HMAC, exchange the code for an
     offline access token, upsert the store, and register webhooks."""
-    client_id, client_secret, app_url = _oauth_config()
     params = dict(request.query_params)
 
     # 1. One-time state nonce (binds the callback to the user who started it)
@@ -134,6 +178,15 @@ async def oauth_callback(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or expired OAuth state")
     _redis_client.delete(state_key)
     state_data = json.loads(raw_state)
+
+    env_client_id, env_client_secret, env_app_url = _oauth_config()
+    client_id = state_data.get("client_id") or env_client_id
+    client_secret = (
+        decrypt_token(state_data["client_secret"]) if state_data.get("client_secret") else env_client_secret
+    )
+    app_url = state_data.get("app_url") or env_app_url
+    if not client_id or not client_secret or not app_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth state has no app credentials")
 
     # 2. HMAC over the query string, keyed with the app secret
     if not verify_oauth_hmac(params, client_secret):
@@ -184,6 +237,8 @@ async def oauth_callback(request: Request, db: Session = Depends(get_db)):
         db.add(store)
     store.access_token = access_token
     store.auth_method = "oauth"
+    store.oauth_client_id = client_id
+    store.client_secret = client_secret
     store.granted_scopes = token_data.get("scope")
     store.installed_at = now
     store.needs_reauth = False
@@ -203,7 +258,7 @@ async def oauth_callback(request: Request, db: Session = Depends(get_db)):
 
     logger.info(f"Shopify OAuth install complete for {shop} (user {user_id}, scopes: {store.granted_scopes})")
 
-    frontend_url = os.getenv("FRONTEND_URL", app_url)
+    frontend_url = os.getenv("FRONTEND_URL") or app_url
     return RedirectResponse(url=f"{frontend_url}/stores?oauth=success&shop={shop}")
 
 

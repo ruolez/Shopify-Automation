@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Switch } from "@headlessui/react";
@@ -7,6 +7,7 @@ import {
   TrashIcon,
   XMarkIcon,
   ArrowPathIcon,
+  ClipboardDocumentIcon,
 } from "@heroicons/react/24/outline";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -23,10 +24,46 @@ const storeSchema = z.object({
   access_token: z.string().min(1, "Access token is required"),
 });
 
+const oauthSchema = z.object({
+  shop_domain: z.string().min(1, "Store name is required"),
+  client_id: z.string().trim().min(1, "Client ID is required"),
+  client_secret: z.string().trim().min(1, "Client Secret is required"),
+});
+
+type OAuthForm = z.infer<typeof oauthSchema>;
+
+const cleanStoreName = (value: string) => {
+  const storeName = value.trim().toLowerCase();
+  return storeName.endsWith(".myshopify.com")
+    ? storeName.replace(".myshopify.com", "")
+    : storeName;
+};
+
 const Stores: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [connectMode, setConnectMode] = useState<"token" | "oauth">("token");
   const queryClient = useQueryClient();
   const { timezone } = useTimezone();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oauth") !== "success") return;
+    toast.success(`Connected ${params.get("shop") || "store"} via Shopify`);
+    queryClient.invalidateQueries({ queryKey: ["stores"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [queryClient]);
+
+  const { data: oauthConfig } = useQuery<{ app_url: string | null }>({
+    queryKey: ["shopify-oauth-config"],
+    queryFn: async () => {
+      const response = await api.get("/shopify/oauth/config");
+      return response.data;
+    },
+    enabled: isModalOpen && connectMode === "oauth",
+  });
+  const appUrl = oauthConfig?.app_url || window.location.origin;
+  const callbackUrl = `${appUrl}/api/shopify/oauth/callback`;
 
   const { data: stores, isLoading } = useQuery<Store[]>({
     queryKey: ["stores"],
@@ -44,7 +81,7 @@ const Stores: React.FC = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stores"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      setIsModalOpen(false);
+      closeModal();
       reset();
       toast.success("Store connected successfully!");
     },
@@ -107,25 +144,51 @@ const Stores: React.FC = () => {
     resolver: zodResolver(storeSchema),
   });
 
+  const {
+    register: registerOAuth,
+    handleSubmit: handleOAuthSubmit,
+    reset: resetOAuth,
+    setValue: setOAuthValue,
+    formState: { errors: oauthErrors },
+  } = useForm<OAuthForm>({
+    resolver: zodResolver(oauthSchema),
+  });
+
   const [oauthLoading, setOauthLoading] = useState(false);
 
-  const startOAuthInstall = async () => {
-    let storeName = (getValues("shop_domain") || "").trim().toLowerCase();
-    if (storeName.endsWith(".myshopify.com")) {
-      storeName = storeName.replace(".myshopify.com", "");
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setConnectMode("token");
+    resetOAuth();
+  };
+
+  const showOAuthForm = () => {
+    setOAuthValue("shop_domain", getValues("shop_domain") || "");
+    setConnectMode("oauth");
+  };
+
+  const copyCallbackUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(callbackUrl);
+      toast.success("Callback URL copied");
+    } catch {
+      toast.error("Could not copy — select the URL and copy it manually");
     }
-    if (!storeName) {
-      toast.error("Enter your store name first");
-      return;
-    }
+  };
+
+  const onOAuthSubmit = async (data: OAuthForm) => {
+    const storeName = cleanStoreName(data.shop_domain);
     if (storeName.includes(".")) {
       toast.error("Please enter only the store name without the domain");
       return;
     }
     setOauthLoading(true);
     try {
-      const response = await api.get("/shopify/oauth/install", {
-        params: { shop: `${storeName}.myshopify.com` },
+      const response = await api.post("/shopify/oauth/install", {
+        shop: `${storeName}.myshopify.com`,
+        client_id: data.client_id.trim(),
+        client_secret: data.client_secret.trim(),
+        app_url: appUrl,
       });
       window.location.href = response.data.authorize_url;
     } catch (error: any) {
@@ -305,113 +368,215 @@ const Stores: React.FC = () => {
       )}
 
       {/* Add Store Modal */}
-      <Dialog
-        open={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        className="relative z-50"
-      >
+      <Dialog open={isModalOpen} onClose={closeModal} className="relative z-50">
         <div className="modal-overlay" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4">
           <Dialog.Panel className="modal-content max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-4">
               <Dialog.Title className="text-lg font-medium text-gray-900 dark:text-dark-800">
-                Connect Shopify Store
+                {connectMode === "oauth"
+                  ? "Connect with Shopify (OAuth)"
+                  : "Connect Shopify Store"}
               </Dialog.Title>
               <button
-                onClick={() => setIsModalOpen(false)}
+                onClick={closeModal}
                 className="text-gray-400 hover:text-gray-500 dark:text-dark-400 dark:hover:text-dark-500"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <div>
-                <label className="label">Store Name</label>
-                <input
-                  {...register("shop_domain")}
-                  type="text"
-                  className="input"
-                  placeholder="your-shop"
-                />
-                {errors.shop_domain && (
-                  <p className="mt-1 text-sm text-red-600">
-                    {errors.shop_domain.message}
-                  </p>
-                )}
-                <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                  Enter only the store name. We'll add .myshopify.com automatically.
-                </p>
-              </div>
-
-              <div>
-                <label className="label">Admin API Access Token</label>
-                <input
-                  {...register("access_token")}
-                  type="password"
-                  className="input"
-                  placeholder="Enter your access token"
-                />
-                {errors.access_token && (
-                  <p className="mt-1 text-sm text-red-600">
-                    {errors.access_token.message}
-                  </p>
-                )}
-              </div>
-
-              <div className="text-sm text-gray-500 dark:text-dark-400">
-                <p>
-                  To get an access token, create a private app in your Shopify
-                  admin and copy the Admin API access token.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
-                <span className="text-xs text-gray-400 dark:text-dark-400">
-                  or
-                </span>
-                <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
-              </div>
-
-              <button
-                type="button"
-                onClick={startOAuthInstall}
-                disabled={oauthLoading}
-                className="btn-secondary w-full"
+            {connectMode === "oauth" ? (
+              <form
+                onSubmit={handleOAuthSubmit(onOAuthSubmit)}
+                className="space-y-4"
               >
-                {oauthLoading ? (
-                  <LoadingSpinner size="sm" />
-                ) : (
-                  "Connect with Shopify (OAuth)"
-                )}
-              </button>
-              <p className="text-xs text-gray-500 dark:text-dark-400">
-                Uses the store name above — no token needed. You'll approve the
-                app in your Shopify admin and be redirected back here.
-              </p>
+                <div>
+                  <label className="label">Store Name</label>
+                  <input
+                    {...registerOAuth("shop_domain")}
+                    type="text"
+                    className="input"
+                    placeholder="your-shop"
+                  />
+                  {oauthErrors.shop_domain && (
+                    <p className="mt-1 text-sm text-red-600">
+                      {oauthErrors.shop_domain.message}
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                    Enter only the store name. We'll add .myshopify.com
+                    automatically.
+                  </p>
+                </div>
 
-              <div className="flex justify-end space-x-3 pt-4">
+                <div>
+                  <label className="label">Client ID</label>
+                  <input
+                    {...registerOAuth("client_id")}
+                    type="text"
+                    className="input"
+                    placeholder="Your Shopify app's Client ID"
+                    autoComplete="off"
+                  />
+                  {oauthErrors.client_id && (
+                    <p className="mt-1 text-sm text-red-600">
+                      {oauthErrors.client_id.message}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="label">Client Secret</label>
+                  <input
+                    {...registerOAuth("client_secret")}
+                    type="password"
+                    className="input"
+                    placeholder="Your Shopify app's Client Secret"
+                    autoComplete="new-password"
+                  />
+                  {oauthErrors.client_secret && (
+                    <p className="mt-1 text-sm text-red-600">
+                      {oauthErrors.client_secret.message}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="label">Callback URL</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={callbackUrl}
+                      onFocus={(e) => e.target.select()}
+                      className="input flex-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={copyCallbackUrl}
+                      className="btn-secondary px-3"
+                      title="Copy callback URL"
+                    >
+                      <ClipboardDocumentIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-sm text-gray-500 dark:text-dark-400">
+                  In the Shopify Dev Dashboard, create an app, add this URL
+                  under Allowed redirection URL(s), then copy its Client ID
+                  and Secret from Settings. You'll approve the app in your
+                  Shopify admin and be redirected back here.
+                </p>
+
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setConnectMode("token")}
+                    className="btn-secondary"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={oauthLoading}
+                    className="btn-primary"
+                  >
+                    {oauthLoading ? (
+                      <LoadingSpinner size="sm" />
+                    ) : (
+                      "Authorize with Shopify"
+                    )}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                <div>
+                  <label className="label">Store Name</label>
+                  <input
+                    {...register("shop_domain")}
+                    type="text"
+                    className="input"
+                    placeholder="your-shop"
+                  />
+                  {errors.shop_domain && (
+                    <p className="mt-1 text-sm text-red-600">
+                      {errors.shop_domain.message}
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                    Enter only the store name. We'll add .myshopify.com
+                    automatically.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="label">Admin API Access Token</label>
+                  <input
+                    {...register("access_token")}
+                    type="password"
+                    className="input"
+                    placeholder="Enter your access token"
+                  />
+                  {errors.access_token && (
+                    <p className="mt-1 text-sm text-red-600">
+                      {errors.access_token.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="text-sm text-gray-500 dark:text-dark-400">
+                  <p>
+                    To get an access token, create a private app in your
+                    Shopify admin and copy the Admin API access token.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
+                  <span className="text-xs text-gray-400 dark:text-dark-400">
+                    or
+                  </span>
+                  <div className="h-px flex-1 bg-gray-200 dark:bg-dark-300" />
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="btn-secondary"
+                  onClick={showOAuthForm}
+                  className="btn-secondary w-full"
                 >
-                  Cancel
+                  Connect with Shopify (OAuth)
                 </button>
-                <button
-                  type="submit"
-                  disabled={createStoreMutation.isPending}
-                  className="btn-primary"
-                >
-                  {createStoreMutation.isPending ? (
-                    <LoadingSpinner size="sm" />
-                  ) : (
-                    "Connect Store"
-                  )}
-                </button>
-              </div>
-            </form>
+                <p className="text-xs text-gray-500 dark:text-dark-400">
+                  No token needed — uses your Shopify app's Client ID and
+                  Secret. You'll approve the app in your Shopify admin and be
+                  redirected back here.
+                </p>
+
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="btn-secondary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={createStoreMutation.isPending}
+                    className="btn-primary"
+                  >
+                    {createStoreMutation.isPending ? (
+                      <LoadingSpinner size="sm" />
+                    ) : (
+                      "Connect Store"
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </Dialog.Panel>
         </div>
       </Dialog>

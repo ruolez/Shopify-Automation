@@ -48,6 +48,9 @@ class ShopifyStore(Base):
     token_expires_at = Column(DateTime(timezone=True))
     installed_at = Column(DateTime(timezone=True))
     needs_reauth = Column(Boolean, default=False)
+    # Per-store Shopify app credentials (Dev Dashboard app) used for OAuth + webhook HMAC
+    oauth_client_id = Column(String)
+    _client_secret_encrypted = Column("oauth_client_secret", Text)  # Encrypted using Fernet
 
     @hybrid_property
     def access_token(self) -> str:
@@ -68,6 +71,16 @@ class ShopifyStore(Base):
     def refresh_token(self, value):
         """Encrypt and store the OAuth refresh token."""
         self._refresh_token_encrypted = encrypt_token(value) if value else None
+
+    @hybrid_property
+    def client_secret(self):
+        """Decrypt and return the OAuth app client secret (None when not set)."""
+        return decrypt_token(self._client_secret_encrypted) if self._client_secret_encrypted else None
+
+    @client_secret.setter
+    def client_secret(self, value):
+        """Encrypt and store the OAuth app client secret."""
+        self._client_secret_encrypted = encrypt_token(value) if value else None
 
     # Relationships
     user = relationship("User", back_populates="stores")
