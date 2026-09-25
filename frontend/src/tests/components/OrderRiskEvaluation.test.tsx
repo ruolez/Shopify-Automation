@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
-import OrderRiskEvaluation, { RiskLevelBadge } from "../../components/OrderRiskEvaluation";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import OrderRiskEvaluation, { RiskLevelBadge, RiskLevelFilter } from "../../components/OrderRiskEvaluation";
 import type { OrderRisk } from "../../components/OrderRiskEvaluation";
 
 const IP = "72.24.210.88";
@@ -77,5 +77,24 @@ describe("RiskLevelBadge", () => {
   it.each([null, "NONE"] as const)("renders nothing for %s", (level) => {
     const { container } = render(<RiskLevelBadge level={level} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("RiskLevelFilter", () => {
+  it("summarizes the selection on the button", () => {
+    const { rerender } = render(<RiskLevelFilter value={[]} onChange={() => {}} />);
+    expect(screen.getByRole("button")).toHaveTextContent("All risk levels");
+    rerender(<RiskLevelFilter value={["HIGH", "MEDIUM"]} onChange={() => {}} />);
+    expect(screen.getByRole("button")).toHaveTextContent("High, Medium");
+  });
+
+  it("adds and removes levels, keeping them in severity order", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<RiskLevelFilter value={["LOW"]} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("option", { name: /High/ }));
+    rerender(<RiskLevelFilter value={["LOW"]} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("option", { name: /Low/ }));
+    expect(onChange.mock.calls).toEqual([[["HIGH", "LOW"]], [[]]]);
   });
 });

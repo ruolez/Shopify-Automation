@@ -224,6 +224,24 @@ class ProcessedOrder(Base):
         UniqueConstraint('store_id', 'order_id', name='unique_store_order'),
     )
 
+class OrderRiskLevel(Base):
+    """Shopify's risk level per order, saved so the Orders page can filter on it.
+    Filled at sync time, by the periodic refresh (which also backfills and rechecks
+    PENDING levels) and whenever the Orders page loads live levels. level is NULL
+    when Shopify has no assessment or no longer returns the order."""
+    __tablename__ = "order_risk_levels"
+
+    id = Column(Integer, primary_key=True)
+    store_id = Column(Integer, ForeignKey("shopify_stores.id", ondelete="CASCADE"), nullable=False)
+    order_id = Column(String, nullable=False)
+    level = Column(String(20), index=True)
+    recommendation = Column(String(20))
+    checked_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('store_id', 'order_id', name='unique_order_risk_level'),
+    )
+
 class ProcessedFraudOrder(Base):
     __tablename__ = "processed_fraud_orders"
     

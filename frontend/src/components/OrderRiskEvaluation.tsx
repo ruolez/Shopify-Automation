@@ -1,5 +1,12 @@
 import React from "react";
-import { CheckCircleIcon, ExclamationTriangleIcon, InformationCircleIcon } from "@heroicons/react/24/outline";
+import { Listbox } from "@headlessui/react";
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  ChevronUpDownIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+} from "@heroicons/react/24/outline";
 
 export type RiskLevel = "HIGH" | "MEDIUM" | "LOW" | "NONE" | "PENDING";
 export type RiskRecommendation = "ACCEPT" | "INVESTIGATE" | "CANCEL" | "NONE";
@@ -107,6 +114,67 @@ const OrderRiskEvaluation: React.FC<{ risk: OrderRisk }> = ({ risk }) => {
         )}
       </div>
     </div>
+  );
+};
+
+const FILTER_LEVELS: { level: RiskLevel; label: string }[] = [
+  { level: "HIGH", label: "High" },
+  { level: "MEDIUM", label: "Medium" },
+  { level: "LOW", label: "Low" },
+  { level: "PENDING", label: "Pending" },
+];
+
+export const RiskLevelFilter: React.FC<{ value: RiskLevel[]; onChange: (levels: RiskLevel[]) => void; id?: string }> = ({
+  value,
+  onChange,
+  id,
+}) => {
+  const summary = FILTER_LEVELS.filter(({ level }) => value.includes(level))
+    .map(({ label }) => label)
+    .join(", ");
+  return (
+    <Listbox
+      value={value}
+      onChange={(levels: RiskLevel[]) => onChange(FILTER_LEVELS.map(({ level }) => level).filter((level) => levels.includes(level)))}
+      multiple
+    >
+      <div className="relative">
+        <Listbox.Button
+          id={id}
+          className="relative w-full cursor-pointer rounded-md border border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 py-2 pl-3 pr-10 text-left text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
+        >
+          <span className="block truncate">{summary || "All risk levels"}</span>
+          <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
+            <ChevronUpDownIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
+          </span>
+        </Listbox.Button>
+        <Listbox.Options className="absolute z-10 mt-1 w-full overflow-auto rounded-md bg-white dark:bg-dark-100 py-1 text-sm shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+          {FILTER_LEVELS.map(({ level, label }) => (
+            <Listbox.Option
+              key={level}
+              value={level}
+              className={({ active }) =>
+                `relative cursor-pointer select-none py-2 pl-9 pr-4 ${
+                  active ? "bg-shopify-50 dark:bg-dark-200" : ""
+                } text-gray-900 dark:text-dark-800`
+              }
+            >
+              {({ selected }) => (
+                <>
+                  {selected && (
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-shopify-600 dark:text-shopify-400">
+                      <CheckIcon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                  )}
+                  <RiskLevelBadge level={level} />
+                  <span className="sr-only">{label}</span>
+                </>
+              )}
+            </Listbox.Option>
+          ))}
+        </Listbox.Options>
+      </div>
+    </Listbox>
   );
 };
 

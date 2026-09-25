@@ -14,7 +14,7 @@ from tasks import retry_order_processing as run_retry_order_processing
 from models import ExcludedSKU
 from shipping_estimate_service import profit_with_shipping
 from order_detail import build_order_detail, profit_snapshot
-from order_risk import order_risk, risk_level
+from order_risk import order_risk, risk_level, parse_risk_levels, has_risk_level, save_order_risk_levels
 from ip_location import lookup_ip_location
 from dependencies import _format_timestamp_with_user_timezone
 from shopify_client import ShopifyClient
@@ -33,6 +33,7 @@ async def get_order_logs(
     rule_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    risk_levels: Optional[str] = None,
     sort_field: Optional[str] = "latest_date",
     sort_direction: Optional[str] = "desc",
     page: int = 1,
@@ -41,6 +42,7 @@ async def get_order_logs(
     db: Session = Depends(get_db)
 ):
     query = db.query(OrderLog).filter(OrderLog.user_id == current_user.id)
+    levels = parse_risk_levels(risk_levels)
 
     if store_id:
         query = query.filter(OrderLog.store_id == store_id)
@@ -101,6 +103,8 @@ async def get_order_logs(
             query = query.filter(OrderLog.created_at >= parsed_date_from)
         if parsed_date_to:
             query = query.filter(OrderLog.created_at <= parsed_date_to)
+        if levels:
+            query = query.filter(has_risk_level(levels))
         return query
 
     # Validate sort parameters
@@ -233,6 +237,7 @@ async def get_all_order_ids(
     rule_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    risk_levels: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -266,6 +271,10 @@ async def get_all_order_ids(
             query = query.filter(OrderLog.created_at <= to_date)
         except ValueError:
             pass
+
+    levels = parse_risk_levels(risk_levels)
+    if levels:
+        query = query.filter(has_risk_level(levels))
 
     results = query.all()
 
@@ -336,8 +345,9 @@ async def get_order_risk_levels(
     db: Session = Depends(get_db)
 ):
     """Shopify's current risk level and recommendation for the orders on the Orders
-    page, keyed by order GID; one batched Shopify call per store. A store that fails
-    is logged and left out so its orders simply show no badge."""
+    page, keyed by order GID; one batched Shopify call per store. The levels are also
+    saved for the risk filter. A store that fails is logged and left out so its
+    orders simply show no badge."""
     order_ids_by_store = {}
     for ref in request.orders:
         order_ids_by_store.setdefault(ref.store_id, set()).add(ref.order_id)
@@ -356,6 +366,11 @@ async def get_order_risk_levels(
             continue
         for order_id, risk in risks.items():
             levels[order_id] = {"level": risk_level(risk), "recommendation": risk.get("recommendation")}
+        try:
+            save_order_risk_levels(db, store.id, order_ids_by_store[store.id], risks)
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Could not save order risk levels for {store.shop_domain}: {e}")
     return levels
 
 

@@ -28,6 +28,7 @@ from shipping_estimate_service import sync_user_samples, prune_samples, profit_w
 from fraud_service import FraudAnalysisService
 from fraud_rule_processor import process_fraud_rules_for_order_async
 from fraud_archive_service import FraudArchiveService
+from order_risk import orders_due_for_risk_check, save_order_risk_levels
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -81,6 +82,10 @@ celery.conf.beat_schedule = {
     'sync-shipping-cost-samples': {
         'task': 'tasks.sync_shipping_cost_samples',
         'schedule': crontab(minute='*/15'),  # Pull shipped-parcel costs from the shipper DB
+    },
+    'refresh-order-risk-levels': {
+        'task': 'tasks.refresh_order_risk_levels',
+        'schedule': crontab(minute='*/5'),  # Backfill and recheck PENDING risk levels for the Orders filter
     },
 }
 
@@ -1002,6 +1007,12 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                 if not lock.acquire(blocking=False):
                     logger.info(f"Order {order_number} is being processed by another worker, skipping")
                     continue
+
+                try:
+                    save_order_risk_levels(db, store.id, [order_id], {order_id: order.get("risk") or {}})
+                except Exception as e:
+                    db.rollback()
+                    logger.warning(f"Could not save the risk level of order {order_number}: {e}")
 
                 try:
                     # Apply rules to order
@@ -2216,6 +2227,44 @@ def sync_shipping_cost_samples(self):
         logger.error(f"Shipping cost sample sync failed: {str(e)}")
         update_task_status(task_id, "failed", error_message=str(e))
         raise
+
+ORDER_RISK_REFRESH_PER_STORE = 1000
+
+
+@celery.task(bind=True, soft_time_limit=240, time_limit=280)
+def refresh_order_risk_levels(self):
+    """Save Shopify's risk level for logged orders that have none yet (backfilling
+    older orders a batch at a time) and recheck PENDING ones, for the Orders page
+    risk filter"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    refreshed = {}
+    try:
+        with get_db_session() as db:
+            stores = db.query(ShopifyStore).filter(
+                ShopifyStore.is_active == True,
+                ShopifyStore.needs_reauth.isnot(True)
+            ).all()
+            for store in stores:
+                order_ids = orders_due_for_risk_check(db, store.id, ORDER_RISK_REFRESH_PER_STORE)
+                if not order_ids:
+                    continue
+                try:
+                    client = ShopifyClient(store.shop_domain, store.access_token)
+                    risks = loop.run_until_complete(client.get_order_risk_levels(order_ids))
+                    save_order_risk_levels(db, store.id, order_ids, risks)
+                    refreshed[store.shop_domain] = len(order_ids)
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as e:
+                    db.rollback()
+                    logger.warning(f"Order risk refresh failed for {store.shop_domain}: {e}")
+        if refreshed:
+            logger.info(f"Order risk levels refreshed: {refreshed}")
+        return refreshed
+    finally:
+        loop.close()
+
 
 @celery.task(bind=True, autoretry_for=(Exception,), max_retries=2,
              retry_backoff=60, retry_backoff_max=600, retry_jitter=True)

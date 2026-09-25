@@ -19,7 +19,7 @@ import api from "../utils/api";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProfitBreakdown, { ProfitCondition } from "../components/ProfitBreakdown";
 import OrderDetailModal from "../components/OrderDetailModal";
-import { RiskLevelBadge } from "../components/OrderRiskEvaluation";
+import { RiskLevelBadge, RiskLevelFilter } from "../components/OrderRiskEvaluation";
 import type { RiskLevel, RiskRecommendation } from "../components/OrderRiskEvaluation";
 
 interface OrderLog {
@@ -70,6 +70,7 @@ const OrderLogs: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [storeFilter, setStoreFilter] = useState<string>("");
   const [ruleFilter, setRuleFilter] = useState<string>("");
+  const [riskFilter, setRiskFilter] = useState<RiskLevel[]>([]);
   const [dateFilter, setDateFilter] = useState<string>("");
   const [customDateFrom, setCustomDateFrom] = useState<string>("");
   const [customDateTo, setCustomDateTo] = useState<string>("");
@@ -184,6 +185,7 @@ const OrderLogs: React.FC = () => {
     statusFilter,
     storeFilter,
     ruleFilter,
+    riskFilter,
     dateFilter,
     customDateFrom,
     customDateTo,
@@ -241,6 +243,7 @@ const OrderLogs: React.FC = () => {
       statusFilter,
       storeFilter,
       ruleFilter,
+      riskFilter,
       dateFilter,
       customDateFrom,
       customDateTo,
@@ -259,6 +262,7 @@ const OrderLogs: React.FC = () => {
       if (statusFilter) params.append("status", statusFilter);
       if (storeFilter) params.append("store_id", storeFilter);
       if (ruleFilter) params.append("rule_id", ruleFilter);
+      if (riskFilter.length) params.append("risk_levels", riskFilter.join(","));
 
       // Add date filtering
       const dateRange = getDateRange(dateFilter);
@@ -278,6 +282,7 @@ const OrderLogs: React.FC = () => {
       statusFilter,
       storeFilter,
       ruleFilter,
+      riskFilter,
       dateFilter,
       customDateFrom,
       customDateTo,
@@ -289,6 +294,7 @@ const OrderLogs: React.FC = () => {
       if (statusFilter) params.append("status", statusFilter);
       if (storeFilter) params.append("store_id", storeFilter);
       if (ruleFilter) params.append("rule_id", ruleFilter);
+      if (riskFilter.length) params.append("risk_levels", riskFilter.join(","));
 
       // Add date filtering
       const dateRange = getDateRange(dateFilter);
@@ -588,7 +594,7 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6 overflow-visible">
+          <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 overflow-visible">
             <div>
               <label
                 htmlFor="date-filter"
@@ -739,6 +745,23 @@ const OrderLogs: React.FC = () => {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="risk-filter"
+                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
+              >
+                Risk Level
+              </label>
+              <RiskLevelFilter
+                id="risk-filter"
+                value={riskFilter}
+                onChange={(levels) => {
+                  setRiskFilter(levels);
+                  setPage(1);
+                }}
+              />
             </div>
           </div>
 

@@ -1,7 +1,9 @@
 """Tests for normalizing Shopify's order risk evaluation. Pure."""
+from datetime import datetime, timezone
+
 import pytest
 
-from order_risk import order_risk, risk_level
+from order_risk import order_risk, parse_risk_levels, risk_level, risk_level_rows
 
 IP = "72.24.210.88"
 
@@ -88,3 +90,37 @@ class TestOrderRisk:
         broken = {"riskLevel": "LOW", "provider": None, "facts": [None, {"sentiment": "POSITIVE"}, {"description": "ok", "sentiment": "POSITIVE"}]}
         result = order_risk(risky_order([broken]))
         assert result["assessments"][0]["facts"] == [{"description": "ok", "sentiment": "POSITIVE"}]
+
+
+class TestParseRiskLevels:
+    @pytest.mark.parametrize("value, expected", [
+        (None, []),
+        ("", []),
+        ("HIGH", ["HIGH"]),
+        ("high, Medium", ["HIGH", "MEDIUM"]),
+        ("LOW,LOW,PENDING", ["LOW", "PENDING"]),
+        ("HIGH,bogus,,NONE", ["HIGH"]),
+    ])
+    def test_keeps_known_filterable_levels_once(self, value, expected):
+        assert parse_risk_levels(value) == expected
+
+
+class TestRiskLevelRows:
+    CHECKED_AT = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+    STORE_ID = 7
+
+    def test_one_row_per_requested_order_including_ones_shopify_did_not_return(self):
+        risks = {
+            "gid://shopify/Order/1": {"recommendation": "CANCEL", "assessments": [{"riskLevel": "LOW"}, {"riskLevel": "HIGH"}]},
+            "gid://shopify/Order/2": {},
+        }
+        order_ids = ["gid://shopify/Order/1", "gid://shopify/Order/2", "gid://shopify/Order/3"]
+        assert risk_level_rows(self.STORE_ID, order_ids, risks, self.CHECKED_AT) == [
+            {"store_id": 7, "order_id": "gid://shopify/Order/1", "level": "HIGH", "recommendation": "CANCEL", "checked_at": self.CHECKED_AT},
+            {"store_id": 7, "order_id": "gid://shopify/Order/2", "level": None, "recommendation": None, "checked_at": self.CHECKED_AT},
+            {"store_id": 7, "order_id": "gid://shopify/Order/3", "level": None, "recommendation": None, "checked_at": self.CHECKED_AT},
+        ]
+
+    def test_duplicate_order_ids_yield_one_row(self):
+        rows = risk_level_rows(self.STORE_ID, ["gid://shopify/Order/1"] * 2, {}, self.CHECKED_AT)
+        assert [row["order_id"] for row in rows] == ["gid://shopify/Order/1"]
