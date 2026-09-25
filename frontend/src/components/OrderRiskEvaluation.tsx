@@ -205,7 +205,7 @@ function BadgeMultiSelect<T extends string>({
       <div className="relative">
         <Listbox.Button
           id={id}
-          className="relative w-full cursor-pointer rounded-md border border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 py-2 pl-3 pr-10 text-left text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
+          className="relative h-10 w-full cursor-pointer rounded-md border border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 pl-5 pr-10 text-left text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
         >
           <span className="block truncate">{summary || placeholder}</span>
           <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
@@ -260,7 +260,7 @@ export const RiskLevelFilter: React.FC<{ value: RiskLevel[]; onChange: (levels: 
     value={value}
     onChange={onChange}
     badge={(level) => <RiskLevelBadge level={level} />}
-    placeholder="All risk levels"
+    placeholder="All Levels"
   />
 );
 
@@ -281,7 +281,7 @@ export const CardholderMatchFilter: React.FC<{
     value={value}
     onChange={onChange}
     badge={(match) => <CardholderMatchBadge match={match} />}
-    placeholder="Any cardholder name"
+    placeholder="Any Match"
   />
 );
 

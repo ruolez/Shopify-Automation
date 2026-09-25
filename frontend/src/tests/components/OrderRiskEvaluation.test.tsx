@@ -126,7 +126,7 @@ describe("CardholderMatchFilter", () => {
 
   it("shows the placeholder when nothing is selected", () => {
     render(<CardholderMatchFilter value={[]} onChange={() => {}} />);
-    expect(screen.getByRole("button")).toHaveTextContent("Any cardholder name");
+    expect(screen.getByRole("button")).toHaveTextContent("Any Match");
   });
 });
 
@@ -150,7 +150,7 @@ describe("RiskLevelBadge", () => {
 describe("RiskLevelFilter", () => {
   it("summarizes the selection on the button", () => {
     const { rerender } = render(<RiskLevelFilter value={[]} onChange={() => {}} />);
-    expect(screen.getByRole("button")).toHaveTextContent("All risk levels");
+    expect(screen.getByRole("button")).toHaveTextContent("All Levels");
     rerender(<RiskLevelFilter value={["HIGH", "MEDIUM"]} onChange={() => {}} />);
     expect(screen.getByRole("button")).toHaveTextContent("High, Medium");
   });

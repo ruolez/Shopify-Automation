@@ -13,6 +13,8 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   ChevronDownIcon as SortDownIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import api from "../utils/api";
@@ -26,6 +28,10 @@ import {
   RiskLevelFilter,
 } from "../components/OrderRiskEvaluation";
 import type { CardholderMatch, RiskLevel, RiskRecommendation } from "../components/OrderRiskEvaluation";
+
+const FILTER_LABEL = "block text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400 mb-1.5";
+const FILTER_SELECT =
+  "block h-10 w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:ring-0 focus:border-shopify-500 sm:text-sm";
 
 interface OrderLog {
   id: number;
@@ -180,6 +186,30 @@ const OrderLogs: React.FC = () => {
 
     return () => clearTimeout(timeoutId);
   }, [searchInput]);
+
+  const filtersActive = Boolean(
+    searchInput ||
+      statusFilter ||
+      storeFilter ||
+      ruleFilter ||
+      riskFilter.length ||
+      cardholderFilter.length ||
+      dateFilter,
+  );
+
+  const clearFilters = () => {
+    setSearchInput("");
+    setSearchQuery("");
+    setStatusFilter("");
+    setStoreFilter("");
+    setRuleFilter("");
+    setRiskFilter([]);
+    setCardholderFilter([]);
+    setDateFilter("");
+    setCustomDateFrom("");
+    setCustomDateTo("");
+    setPage(1);
+  };
 
   // Reset global selection when filters change
   useEffect(() => {
@@ -606,8 +636,8 @@ const OrderLogs: React.FC = () => {
               onClick={() => {
                 refetch();
                 refetchAllOrderIds();
-              }} 
-              className="btn-secondary"
+              }}
+              className="btn-secondary inline-flex items-center"
             >
               <ArrowPathIcon className="h-4 w-4 mr-2" />
               Refresh
@@ -615,18 +645,69 @@ const OrderLogs: React.FC = () => {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-4 xl:grid-cols-7 gap-4 mb-6 overflow-visible">
-            <div>
-              <label
-                htmlFor="date-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Date Range
-              </label>
-              <div className="space-y-1 overflow-visible">
+          <div className="mb-6 space-y-4 overflow-visible">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative flex-1">
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+                <label htmlFor="search-filter" className="sr-only">
+                  Search order number
+                </label>
+                <input
+                  id="search-filter"
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Search by order number..."
+                  className="input h-10 [&&]:!pl-10"
+                />
+              </div>
+              {dateFilter === "custom" && (
+                <div className="flex items-center gap-2">
+                  <input
+                    id="date-from"
+                    type="date"
+                    aria-label="From date"
+                    value={customDateFrom}
+                    onChange={(e) => {
+                      setCustomDateFrom(e.target.value);
+                      setPage(1);
+                    }}
+                    className="input h-10 min-w-0 flex-1 sm:w-40 sm:flex-none"
+                  />
+                  <span className="text-sm text-gray-500 dark:text-dark-400">to</span>
+                  <input
+                    id="date-to"
+                    type="date"
+                    aria-label="To date"
+                    value={customDateTo}
+                    onChange={(e) => {
+                      setCustomDateTo(e.target.value);
+                      setPage(1);
+                    }}
+                    className="input h-10 min-w-0 flex-1 sm:w-40 sm:flex-none"
+                  />
+                </div>
+              )}
+              {filtersActive && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="btn-secondary inline-flex h-10 items-center justify-center whitespace-nowrap"
+                >
+                  <XMarkIcon className="h-4 w-4 mr-1" />
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-3">
+              <div>
+                <label htmlFor="date-filter" className={FILTER_LABEL}>
+                  Date range
+                </label>
                 <select
                   id="date-filter"
-                  className="w-full rounded-md border-gray-300 dark:!border-gray-600 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:!ring-0 focus:!border-gray-300 dark:focus:!border-gray-600 sm:text-sm"
+                  className={FILTER_SELECT}
                   value={dateFilter}
                   onChange={(e) => {
                     setDateFilter(e.target.value);
@@ -645,161 +726,99 @@ const OrderLogs: React.FC = () => {
                   <option value="custom">Custom Range</option>
                 </select>
 
-                {dateFilter === "custom" && (
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    <div className="relative">
-                      <input
-                        id="date-from"
-                        type="date"
-                        value={customDateFrom}
-                        onChange={(e) => {
-                          setCustomDateFrom(e.target.value);
-                          setPage(1);
-                        }}
-                        className="input text-xs w-full"
-                        placeholder="From"
-                      />
-                    </div>
-                    <div className="relative">
-                      <input
-                        id="date-to"
-                        type="date"
-                        value={customDateTo}
-                        onChange={(e) => {
-                          setCustomDateTo(e.target.value);
-                          setPage(1);
-                        }}
-                        className="input text-xs w-full"
-                        placeholder="To"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
-            </div>
 
-            <div>
-              <label
-                htmlFor="search-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Search Order Number
-              </label>
-              <input
-                id="search-filter"
-                type="text"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Enter order number..."
-                className="input"
-              />
-            </div>
+              <div>
+                <label htmlFor="status-filter" className={FILTER_LABEL}>
+                  Status
+                </label>
+                <select
+                  id="status-filter"
+                  className={FILTER_SELECT}
+                  value={statusFilter}
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">All Statuses</option>
+                  <option value="match">Match</option>
+                  <option value="skipped">Skipped</option>
+                  <option value="error">Error</option>
+                </select>
+              </div>
 
-            <div>
-              <label
-                htmlFor="status-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Status
-              </label>
-              <select
-                id="status-filter"
-                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">All Statuses</option>
-                <option value="match">Match</option>
-                <option value="skipped">Skipped</option>
-                <option value="error">Error</option>
-              </select>
-            </div>
+              <div>
+                <label htmlFor="store-filter" className={FILTER_LABEL}>
+                  Store
+                </label>
+                <select
+                  id="store-filter"
+                  className={FILTER_SELECT}
+                  value={storeFilter}
+                  onChange={(e) => {
+                    setStoreFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">All Stores</option>
+                  {stores?.map((store: any) => (
+                    <option key={store.id} value={store.id}>
+                      {store.shop_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label
-                htmlFor="store-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Store
-              </label>
-              <select
-                id="store-filter"
-                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
-                value={storeFilter}
-                onChange={(e) => {
-                  setStoreFilter(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">All Stores</option>
-                {stores?.map((store: any) => (
-                  <option key={store.id} value={store.id}>
-                    {store.shop_name}
-                  </option>
-                ))}
-              </select>
-            </div>
+              <div>
+                <label htmlFor="rule-filter" className={FILTER_LABEL}>
+                  Rule
+                </label>
+                <select
+                  id="rule-filter"
+                  className={FILTER_SELECT}
+                  value={ruleFilter}
+                  onChange={(e) => {
+                    setRuleFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">All Rules</option>
+                  {rules?.map((rule: any) => (
+                    <option key={rule.id} value={rule.id}>
+                      {rule.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label
-                htmlFor="rule-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Rule
-              </label>
-              <select
-                id="rule-filter"
-                className="w-full rounded-md border-gray-300 dark:border-dark-300 bg-white dark:bg-dark-100 text-gray-900 dark:text-dark-800 shadow-sm focus:outline-none focus:border-shopify-500 sm:text-sm"
-                value={ruleFilter}
-                onChange={(e) => {
-                  setRuleFilter(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">All Rules</option>
-                {rules?.map((rule: any) => (
-                  <option key={rule.id} value={rule.id}>
-                    {rule.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+              <div>
+                <label htmlFor="risk-filter" className={FILTER_LABEL}>
+                  Risk level
+                </label>
+                <RiskLevelFilter
+                  id="risk-filter"
+                  value={riskFilter}
+                  onChange={(levels) => {
+                    setRiskFilter(levels);
+                    setPage(1);
+                  }}
+                />
+              </div>
 
-            <div>
-              <label
-                htmlFor="risk-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Risk Level
-              </label>
-              <RiskLevelFilter
-                id="risk-filter"
-                value={riskFilter}
-                onChange={(levels) => {
-                  setRiskFilter(levels);
-                  setPage(1);
-                }}
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="cardholder-filter"
-                className="block text-sm font-semibold text-gray-900 dark:text-dark-800 mb-2"
-              >
-                Cardholder Name
-              </label>
-              <CardholderMatchFilter
-                id="cardholder-filter"
-                value={cardholderFilter}
-                onChange={(matches) => {
-                  setCardholderFilter(matches);
-                  setPage(1);
-                }}
-              />
+              <div>
+                <label htmlFor="cardholder-filter" className={FILTER_LABEL}>
+                  Cardholder name
+                </label>
+                <CardholderMatchFilter
+                  id="cardholder-filter"
+                  value={cardholderFilter}
+                  onChange={(matches) => {
+                    setCardholderFilter(matches);
+                    setPage(1);
+                  }}
+                />
+              </div>
             </div>
           </div>
 
