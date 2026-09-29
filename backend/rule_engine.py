@@ -25,6 +25,16 @@ _UNKNOWN_PROFIT = {
 }
 
 
+def _metafield_scalar(raw: Any) -> Any:
+    """A metafield value as a number when it parses as one, otherwise the text; None when unset"""
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+
+
 def _shop_money_amount(money_set: Any) -> Optional[float]:
     amount = ((money_set or {}).get("shopMoney") or {}).get("amount")
     if amount in (None, ""):
@@ -215,6 +225,9 @@ class RuleEngine:
                 logger.error(f"Invalid condition: missing field or operator")
                 return False
             
+            if field == "product_metafield":
+                return self._evaluate_metafield_condition(condition, order, excluded_skus)
+
             # Get the actual value from the order
             actual_value = self._get_order_field_value(field, order, excluded_skus, store_context)
             
@@ -260,6 +273,45 @@ class RuleEngine:
             logger.error(f"Error evaluating condition: {str(e)}")
             return False
     
+    def _evaluate_metafield_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None) -> bool:
+        """A product metafield condition; values are attached to each line item's product
+        as metafieldValues before rules run. sum and max compare one order-level value,
+        any and all compare every included line item (None when it has no value)."""
+        options = condition.get("metafield") or {}
+        key = options.get("key")
+        aggregate = options.get("aggregate") or "sum"
+        compare = self.operators.get(condition.get("operator"))
+        if not key or compare is None:
+            logger.error(f"Invalid product metafield condition: {condition}")
+            return False
+        expected = condition.get("value")
+
+        items = []
+        for edge in (order.get("lineItems") or {}).get("edges") or []:
+            node = edge.get("node") or {}
+            sku = ((node.get("variant") or {}).get("sku") or "").lower()
+            if sku and any(pattern.lower() in sku for pattern in excluded_skus or []):
+                continue
+            raw = ((node.get("product") or {}).get("metafieldValues") or {}).get(key)
+            items.append((_metafield_scalar(raw), node.get("quantity") or 0))
+
+        def matches(actual):
+            if isinstance(actual, float) and condition.get("operator") in ("in_list", "not_in_list"):
+                return compare(actual, [_metafield_scalar(v) for v in (expected if isinstance(expected, list) else [expected])])
+            return compare(actual, expected)
+
+        numbers = [(value, quantity) for value, quantity in items if isinstance(value, float)]
+        if aggregate == "sum":
+            return matches(sum(value * quantity for value, quantity in numbers) if numbers else None)
+        if aggregate == "max":
+            return matches(max(value for value, _ in numbers) if numbers else None)
+        if aggregate == "any":
+            return any(matches(value) for value, _ in items)
+        if aggregate == "all":
+            return bool(items) and all(matches(value) for value, _ in items)
+        logger.error(f"Unknown metafield aggregate: {aggregate}")
+        return False
+
     def _get_order_field_value(self, field: str, order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> Any:
         """Extract field value from order data"""
         try:
@@ -975,6 +1027,7 @@ class RuleEngine:
             # Standard order fields
             {"field": "order_total", "label": "Order Total", "type": "number"},
             {"field": "order_weight", "label": "Total Weight (grams)", "type": "number"},
+            {"field": "product_metafield", "label": "Product Metafield", "type": "metafield"},
             {"field": "shipping_province", "label": "Shipping Province/State", "type": "string"},
             {"field": "shipping_country", "label": "Shipping Country", "type": "string"},
             {"field": "shipping_city", "label": "Shipping City", "type": "string"},
@@ -1015,21 +1068,21 @@ class RuleEngine:
         """Get list of available operators"""
         return [
             # Standard operators
-            {"operator": "equals", "label": "Equals", "types": ["string", "number", "boolean"]},
-            {"operator": "not_equals", "label": "Not Equals", "types": ["string", "number", "boolean"]},
-            {"operator": "greater_than", "label": "Greater Than", "types": ["number"]},
-            {"operator": "less_than", "label": "Less Than", "types": ["number"]},
-            {"operator": "greater_than_or_equal", "label": "Greater Than or Equal", "types": ["number"]},
-            {"operator": "less_than_or_equal", "label": "Less Than or Equal", "types": ["number"]},
-            {"operator": "contains", "label": "Contains", "types": ["string", "array"]},
-            {"operator": "not_contains", "label": "Does Not Contain", "types": ["string", "array"]},
-            {"operator": "starts_with", "label": "Starts With", "types": ["string"]},
-            {"operator": "ends_with", "label": "Ends With", "types": ["string"]},
-            {"operator": "in_list", "label": "In List", "types": ["string", "number"]},
-            {"operator": "not_in_list", "label": "Not In List", "types": ["string", "number"]},
-            {"operator": "regex_match", "label": "Regex Match", "types": ["string"]},
-            {"operator": "is_empty", "label": "Is Empty", "types": ["string", "array"]},
-            {"operator": "is_not_empty", "label": "Is Not Empty", "types": ["string", "array"]},
+            {"operator": "equals", "label": "Equals", "types": ["string", "number", "boolean", "metafield"]},
+            {"operator": "not_equals", "label": "Not Equals", "types": ["string", "number", "boolean", "metafield"]},
+            {"operator": "greater_than", "label": "Greater Than", "types": ["number", "metafield"]},
+            {"operator": "less_than", "label": "Less Than", "types": ["number", "metafield"]},
+            {"operator": "greater_than_or_equal", "label": "Greater Than or Equal", "types": ["number", "metafield"]},
+            {"operator": "less_than_or_equal", "label": "Less Than or Equal", "types": ["number", "metafield"]},
+            {"operator": "contains", "label": "Contains", "types": ["string", "array", "metafield"]},
+            {"operator": "not_contains", "label": "Does Not Contain", "types": ["string", "array", "metafield"]},
+            {"operator": "starts_with", "label": "Starts With", "types": ["string", "metafield"]},
+            {"operator": "ends_with", "label": "Ends With", "types": ["string", "metafield"]},
+            {"operator": "in_list", "label": "In List", "types": ["string", "number", "metafield"]},
+            {"operator": "not_in_list", "label": "Not In List", "types": ["string", "number", "metafield"]},
+            {"operator": "regex_match", "label": "Regex Match", "types": ["string", "metafield"]},
+            {"operator": "is_empty", "label": "Is Empty", "types": ["string", "array", "metafield"]},
+            {"operator": "is_not_empty", "label": "Is Not Empty", "types": ["string", "array", "metafield"]},
             
             # Fraud-specific operators
             {"operator": "risk_level_equals", "label": "Risk Level Equals", "types": ["fraud_risk"]},

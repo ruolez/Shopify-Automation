@@ -1580,6 +1580,44 @@ class ShopifyClient:
                     orders[node["id"]] = node
         return orders
 
+    PRODUCT_METAFIELD_BATCH_SIZE = 100
+
+    async def get_product_metafields(self, product_ids: List[str], keys: List[str]) -> Dict[str, Dict[str, Optional[str]]]:
+        """The value of each "namespace.key" product metafield for many products, keyed by
+        product GID then key; unset metafields and products Shopify no longer returns are None"""
+        keys = list(keys)
+        if not product_ids or not keys:
+            return {}
+        declarations = "".join(f", $ns{i}: String!, $k{i}: String!" for i in range(len(keys)))
+        selections = "\n".join(
+            f"m{i}: metafield(namespace: $ns{i}, key: $k{i}) {{ value }}" for i in range(len(keys))
+        )
+        query = f"""
+        query productMetafields($ids: [ID!]!{declarations}) {{
+            nodes(ids: $ids) {{
+                ... on Product {{
+                    id
+                    {selections}
+                }}
+            }}
+        }}
+        """
+        key_variables = {}
+        for i, key in enumerate(keys):
+            namespace, name = key.split(".", 1)
+            key_variables[f"ns{i}"] = namespace
+            key_variables[f"k{i}"] = name
+
+        values = {product_id: dict.fromkeys(keys) for product_id in product_ids}
+        size = self.PRODUCT_METAFIELD_BATCH_SIZE
+        for start in range(0, len(product_ids), size):
+            variables = {"ids": list(product_ids[start:start + size]), **key_variables}
+            result = await self._make_graphql_request(query, variables)
+            for node in (result.get("data") or {}).get("nodes") or []:
+                if node and node.get("id") in values:
+                    values[node["id"]] = {key: (node.get(f"m{i}") or {}).get("value") for i, key in enumerate(keys)}
+        return values
+
     async def get_order_by_id(self, order_id: str, include_fraud_data: bool = False) -> Dict | None:
         """Get a specific order by ID for retry processing"""
         if include_fraud_data:

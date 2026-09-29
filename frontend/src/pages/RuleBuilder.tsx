@@ -14,7 +14,33 @@ import {
 import toast from "react-hot-toast";
 import api from "../utils/api";
 import { RuleForm, RuleSchema, Rule, RuleConditionGroup } from "../types";
+import { METAFIELD_AGGREGATES } from "../utils/ruleDisplay";
 import LoadingSpinner from "../components/LoadingSpinner";
+
+const METAFIELD_KEY_PATTERN = /^[A-Za-z0-9_$:-]{2,255}\.[A-Za-z0-9_-]{2,64}$/;
+
+const conditionSchema = z
+  .object({
+    field: z.string().min(1, "Field is required"),
+    operator: z.string().min(1, "Operator is required"),
+    value: z.any(),
+    metafield: z
+      .object({
+        key: z
+          .string()
+          .regex(
+            METAFIELD_KEY_PATTERN,
+            "Use namespace.key, e.g. custom.weight",
+          ),
+        aggregate: z.enum(["sum", "max", "any", "all"]),
+      })
+      .nullish(),
+  })
+  .refine(
+    (condition) =>
+      condition.field !== "product_metafield" || Boolean(condition.metafield),
+    { message: "Metafield key is required", path: ["metafield", "key"] },
+  );
 
 const ruleSchema = z.object({
   name: z.string().min(3, "Rule name must be at least 3 characters"),
@@ -22,22 +48,14 @@ const ruleSchema = z.object({
   conditions: z.union([
     z
       .array(
-        z.object({
-          field: z.string().min(1, "Field is required"),
-          operator: z.string().min(1, "Operator is required"),
-          value: z.any(),
-        }),
+        conditionSchema,
       )
       .min(1, "At least one condition is required"),
     z.object({
       operator: z.enum(["AND", "OR"]),
       conditions: z
         .array(
-          z.object({
-            field: z.string().min(1, "Field is required"),
-            operator: z.string().min(1, "Operator is required"),
-            value: z.any(),
-          }),
+          conditionSchema,
         )
         .min(1, "At least one condition is required"),
     }),
@@ -238,7 +256,10 @@ const RuleBuilder: React.FC = () => {
       ? data.conditions
       : data.conditions.conditions;
 
-    const processedConditionList = processedConditions.map((condition) => {
+    const processedConditionList = processedConditions.map((raw) => {
+      const { metafield, ...rest } = raw;
+      const condition =
+        raw.field === "product_metafield" ? { ...rest, metafield } : rest;
       if (
         condition.operator === "in_list" ||
         condition.operator === "not_in_list"
@@ -270,8 +291,25 @@ const RuleBuilder: React.FC = () => {
     }
   };
 
-  const getOperatorsForField = (fieldType: string, fieldName?: string) => {
+  const getOperatorsForField = (
+    fieldType: string,
+    fieldName?: string,
+    aggregate?: string,
+  ) => {
     if (!schema) return [];
+
+    // sum and max compare one number; any and all compare each item's value
+    if (fieldName === "product_metafield") {
+      const combinesToNumber = aggregate !== "any" && aggregate !== "all";
+      return schema.operators.filter(
+        (op) =>
+          op.types.includes("metafield") &&
+          (!combinesToNumber ||
+            op.types.includes("number") ||
+            op.operator === "is_empty" ||
+            op.operator === "is_not_empty"),
+      );
+    }
 
     // Special case for fulfillment_location field - only allow equals and not_equals
     if (fieldName === "fulfillment_location") {
@@ -474,7 +512,15 @@ const RuleBuilder: React.FC = () => {
                   <div>
                     <label className="label">Field</label>
                     <select
-                      {...register(`conditions.conditions.${index}.field`)}
+                      {...register(`conditions.conditions.${index}.field`, {
+                        onChange: (event) =>
+                          setValue(
+                            `conditions.conditions.${index}.metafield`,
+                            event.target.value === "product_metafield"
+                              ? { key: "", aggregate: "sum" }
+                              : null,
+                          ),
+                      })}
                       className="input"
                     >
                       <option value="">Select field</option>
@@ -498,6 +544,9 @@ const RuleBuilder: React.FC = () => {
                           watch(`conditions.conditions.${index}.field`),
                         ),
                         watch(`conditions.conditions.${index}.field`),
+                        watch(
+                          `conditions.conditions.${index}.metafield.aggregate`,
+                        ),
                       ).map((op) => (
                         <option key={op.operator} value={op.operator}>
                           {op.label}
@@ -608,6 +657,52 @@ const RuleBuilder: React.FC = () => {
                     )}
                   </div>
                 </div>
+
+                {watch(`conditions.conditions.${index}.field`) ===
+                  "product_metafield" && (
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+                    <div>
+                      <label className="label">Metafield (namespace.key)</label>
+                      <input
+                        {...register(
+                          `conditions.conditions.${index}.metafield.key`,
+                        )}
+                        type="text"
+                        className="input"
+                        placeholder="custom.weight"
+                      />
+                      {(errors.conditions as any)?.conditions?.[index]
+                        ?.metafield?.key?.message && (
+                        <p className="mt-1 text-sm text-red-600">
+                          {
+                            (errors.conditions as any).conditions[index]
+                              .metafield.key.message
+                          }
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label">Combine items</label>
+                      <select
+                        {...register(
+                          `conditions.conditions.${index}.metafield.aggregate`,
+                        )}
+                        className="input"
+                      >
+                        {METAFIELD_AGGREGATES.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="md:col-span-2 self-end text-xs text-gray-500">
+                      Reads this product metafield from Shopify for every line
+                      item (excluded SKUs are skipped). Numbers are compared in
+                      the metafield&apos;s own unit.
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
           </div>

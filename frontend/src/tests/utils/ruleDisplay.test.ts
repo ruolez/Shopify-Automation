@@ -85,6 +85,25 @@ describe("formatConditionLabel", () => {
       }),
     ).toEqual("shipping country not in US, CA");
   });
+
+  it.each([
+    ["sum", "custom.weight (sum × qty) greater than 20"],
+    ["max", "custom.weight (highest item) greater than 20"],
+    ["any", "custom.weight (any item) greater than 20"],
+    ["all", "custom.weight (all items) greater than 20"],
+  ] as const)(
+    "names the metafield and how items combine for %s",
+    (aggregate, label) => {
+      expect(
+        formatConditionLabel({
+          field: "product_metafield",
+          operator: "greater_than",
+          value: "20",
+          metafield: { key: "custom.weight", aggregate },
+        }),
+      ).toEqual(label);
+    },
+  );
 });
 
 describe("formatActionLabel", () => {

@@ -14,10 +14,18 @@ export interface Store {
   last_sync?: string;
 }
 
+export type MetafieldAggregate = "sum" | "max" | "any" | "all";
+
+export interface MetafieldConditionOptions {
+  key: string;
+  aggregate: MetafieldAggregate;
+}
+
 export interface RuleCondition {
   field: string;
   operator: string;
   value: any;
+  metafield?: MetafieldConditionOptions | null;
 }
 
 export interface RuleConditionGroup {

@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr, validator
-from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, EmailStr, Field, validator
+from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import datetime
 
 # User schemas
@@ -55,10 +55,22 @@ class ShopifyStoreResponse(BaseModel):
         from_attributes = True
 
 # Rule schemas
+class MetafieldConditionOptions(BaseModel):
+    key: str = Field(..., pattern=r"^[A-Za-z0-9_$:-]{2,255}\.[A-Za-z0-9_-]{2,64}$")  # namespace.key
+    aggregate: Literal["sum", "max", "any", "all"] = "sum"
+
+
 class RuleCondition(BaseModel):
     field: str  # order_total, weight, shipping_state, etc.
     operator: str  # equals, greater_than, less_than, contains, etc.
     value: Any
+    metafield: Optional[MetafieldConditionOptions] = None
+
+    @validator('metafield', always=True)
+    def validate_metafield_options(cls, v, values):
+        if values.get('field') == 'product_metafield' and v is None:
+            raise ValueError('product_metafield conditions need a metafield key')
+        return v
     
     @validator('operator')
     def validate_fulfillment_location_operators(cls, v, values):

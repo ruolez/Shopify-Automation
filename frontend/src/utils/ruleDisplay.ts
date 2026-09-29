@@ -1,9 +1,21 @@
 import type {
+  MetafieldAggregate,
   Rule,
   RuleAction,
   RuleCondition,
   RuleConditionGroup,
 } from "../types";
+
+export const METAFIELD_AGGREGATES: {
+  value: MetafieldAggregate;
+  label: string;
+  short: string;
+}[] = [
+  { value: "sum", label: "Sum × quantity", short: "sum × qty" },
+  { value: "max", label: "Highest item value", short: "highest item" },
+  { value: "any", label: "Any item matches", short: "any item" },
+  { value: "all", label: "All items match", short: "all items" },
+];
 
 export type RuleGroups = { active: Rule[]; inactive: Rule[] };
 
@@ -39,9 +51,20 @@ const stringifyValue = (value: unknown): string => {
   return String(value);
 };
 
+const conditionSubject = (condition: RuleCondition): string => {
+  const metafield = condition.metafield;
+  if (condition.field !== "product_metafield" || !metafield) {
+    return humanize(condition.field ?? "");
+  }
+  const aggregate = METAFIELD_AGGREGATES.find(
+    (option) => option.value === metafield.aggregate,
+  );
+  return aggregate ? `${metafield.key} (${aggregate.short})` : metafield.key;
+};
+
 export const formatConditionLabel = (condition: RuleCondition): string =>
   [
-    humanize(condition.field ?? ""),
+    conditionSubject(condition),
     humanize(condition.operator ?? ""),
     stringifyValue(condition.value),
   ]

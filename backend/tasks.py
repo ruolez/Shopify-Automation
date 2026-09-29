@@ -910,6 +910,8 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
     client = ShopifyClient(store.shop_domain, store.access_token)
     rule_engine = RuleEngine()
     needs_full_line_items = _rules_need_full_line_items(rules)
+    metafield_keys = _rule_metafield_keys(rules)
+    metafield_cache: Dict[str, Dict[str, Any]] = {}
     
     # Get excluded SKUs for this user
     excluded_skus_query = db.query(ExcludedSKU).filter(
@@ -1020,6 +1022,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                     rules_applied = False
                     current_order = order  # Start with the initial order data
                     await _ensure_line_items_for_rules(client, current_order, needs_full_line_items)
+                    await _ensure_product_metafields_for_rules(client, current_order, metafield_keys, metafield_cache)
                     
                     for rule in rules:
                         # Evaluate rule against current order state
@@ -1049,6 +1052,7 @@ async def _process_store_orders_async(store: ShopifyStore, rules: List[Processin
                             if refreshed_order:
                                 current_order = refreshed_order
                                 await _ensure_line_items_for_rules(client, current_order, needs_full_line_items)
+                                await _ensure_product_metafields_for_rules(client, current_order, metafield_keys, metafield_cache)
                                 logger.info(f"Order {order_number} refreshed - tags: {current_order.get('tags', [])}")
                             else:
                                 logger.warning(f"Failed to refresh order {order_number}, continuing with current state")
@@ -1514,6 +1518,7 @@ async def _apply_rule_actions(
 # fetches the first 20 line items, so orders beyond that are completed on demand
 LINE_ITEM_DEPENDENT_FIELDS = set(PROFIT_FIELDS) | {
     "order_weight", "product_types", "product_vendors", "product_skus", "line_item_count", "total_quantity",
+    "product_metafield",
 }
 
 
@@ -1529,6 +1534,36 @@ async def _ensure_line_items_for_rules(client: ShopifyClient, order: Dict[str, A
         await client.ensure_complete_line_items(order)
     except Exception as e:
         logger.warning(f"Could not fetch all line items for order {order.get('name', 'unknown')}: {e}")
+
+
+def _rule_metafield_keys(rules) -> set:
+    """The "namespace.key" of every product metafield the rules' conditions read"""
+    return {
+        (c.get("metafield") or {}).get("key")
+        for rule in rules for c in _rule_conditions(rule)
+        if c.get("field") == "product_metafield" and (c.get("metafield") or {}).get("key")
+    }
+
+
+async def _ensure_product_metafields_for_rules(client: ShopifyClient, order: Dict[str, Any], keys: set,
+                                               cache: Dict[str, Dict[str, Any]]) -> None:
+    """Attach the rules' product metafield values to each line item's product as
+    metafieldValues; cache holds values already fetched during this sync, by product GID"""
+    if not keys:
+        return
+    products = [(edge.get("node") or {}).get("product")
+                for edge in (order.get("lineItems") or {}).get("edges") or []]
+    products = [p for p in products if p and p.get("id")]
+    missing = list(dict.fromkeys(p["id"] for p in products if p["id"] not in cache))
+    if missing:
+        try:
+            cache.update(await client.get_product_metafields(missing, sorted(keys)))
+        except Exception as e:
+            logger.warning(f"Could not fetch product metafields for order {order.get('name', 'unknown')}: {e}")
+            return
+    for product in products:
+        if product["id"] in cache:
+            product["metafieldValues"] = cache[product["id"]]
 
 
 def _rule_condition_fields(rule) -> set:
@@ -2434,6 +2469,7 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
             
             logger.info(f"Found {len(rules)} active rules for retry processing")
             await _ensure_line_items_for_rules(client, order_data, _rules_need_full_line_items(rules))
+            await _ensure_product_metafields_for_rules(client, order_data, _rule_metafield_keys(rules), {})
             for rule in rules:
                 logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
                 if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns, store):
