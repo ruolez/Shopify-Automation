@@ -261,3 +261,11 @@ class TestDismissRetryBatch:
         http, _ = client
         task_id = http.post("/order-logs/retry", json={"order_ids": ["gid://shopify/Order/1"]}).json()["task_id"]
         assert http.post(f"/order-logs/retry/{task_id}/dismiss").status_code == 400
+
+
+class TestRetryBatchSize:
+    def test_a_few_thousand_orders_are_accepted(self, client):
+        http, delay = client
+        ids = [f"gid://shopify/Order/{n}" for n in range(3000)]
+        assert http.post("/order-logs/retry", json={"order_ids": ids}).json()["total"] == 3000
+        assert delay.call_args.args[1] == ids

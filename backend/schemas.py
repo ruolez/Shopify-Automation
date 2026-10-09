@@ -233,8 +233,8 @@ class RetryOrdersRequest(BaseModel):
         ids = [oid for oid in v if isinstance(oid, str) and oid.strip()]
         if not ids:
             raise ValueError('At least one order id is required')
-        if len(ids) > 500:
-            raise ValueError('At most 500 orders can be retried at once')
+        if len(ids) > 20000:
+            raise ValueError('At most 20,000 orders can be reprocessed in one batch')
         return ids
 
 
