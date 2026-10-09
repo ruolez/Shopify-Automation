@@ -611,31 +611,12 @@ const OrderLogs: React.FC = () => {
     setSelectedOrders(newSelected);
   };
 
-  const handleSelectAll = () => {
-    if (selectedOrders.size === groupedLogs.length && !isAllResultsSelected) {
-      // If all current page orders are selected, deselect all
-      setSelectedOrders(new Set());
-      setShowGlobalSelection(false);
-      setIsAllResultsSelected(false);
-    } else {
-      // Select all orders on current page
-      const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
-      setSelectedOrders(allOrderIds);
-      setShowGlobalSelection(true);
-      setIsAllResultsSelected(false);
-    }
-  };
+  const totalMatching = data?.pagination?.total || 0;
+  const hasMorePages = totalMatching > groupedLogs.length;
 
   const [selectingAll, setSelectingAll] = useState(false);
-  const handleGlobalSelection = async () => {
-    if (isAllResultsSelected) {
-      // Deselect global, go back to page selection
-      const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
-      setSelectedOrders(allOrderIds);
-      setIsAllResultsSelected(false);
-      return;
-    }
-    // Select every order matching the current filters, fetching the ID list if it is not loaded yet
+  // Select every order matching the current filters (all pages), fetching the ID list if needed
+  const selectAllMatching = async () => {
     setSelectingAll(true);
     try {
       const ids = allOrderIdsData ?? (await refetchAllOrderIds()).data;
@@ -644,9 +625,37 @@ const OrderLogs: React.FC = () => {
         return;
       }
       setSelectedOrders(new Set<string>(ids.order_ids.map((row: { order_id: string }) => row.order_id)));
+      setShowGlobalSelection(true);
       setIsAllResultsSelected(true);
     } finally {
       setSelectingAll(false);
+    }
+  };
+
+  const selectThisPage = () => {
+    setSelectedOrders(new Set(groupedLogs.map((group) => group.order_id)));
+    setShowGlobalSelection(true);
+    setIsAllResultsSelected(false);
+  };
+
+  // The header checkbox selects everything the filters match, not just the visible page
+  const handleSelectAll = () => {
+    if (selectedOrders.size > 0) {
+      setSelectedOrders(new Set());
+      setShowGlobalSelection(false);
+      setIsAllResultsSelected(false);
+    } else if (hasMorePages) {
+      void selectAllMatching();
+    } else {
+      selectThisPage();
+    }
+  };
+
+  const handleGlobalSelection = () => {
+    if (isAllResultsSelected) {
+      selectThisPage();
+    } else {
+      void selectAllMatching();
     }
   };
 
@@ -1007,33 +1016,35 @@ const OrderLogs: React.FC = () => {
                       <div className="flex items-center space-x-2">
                         <input
                           type="checkbox"
+                          title={hasMorePages ? `Select all ${totalMatching} matching orders` : "Select all orders"}
                           checked={
                             (selectedOrders.size === groupedLogs.length &&
                               groupedLogs.length > 0) ||
                             isAllResultsSelected
                           }
+                          disabled={selectingAll}
                           onChange={handleSelectAll}
                           className="h-4 w-4 text-shopify-600 border-gray-300 rounded focus:outline-none"
                         />
                         
                         {/* Compact selection display */}
-                        {showGlobalSelection && data?.pagination?.total && data.pagination.total > groupedLogs.length ? (
+                        {showGlobalSelection && hasMorePages ? (
                           <div className="flex items-center space-x-1">
-                            {!isAllResultsSelected && (
-                              <button
-                                onClick={handleGlobalSelection}
-                                disabled={selectingAll}
-                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1 disabled:opacity-50"
-                              >
-                                {selectingAll ? "Selecting…" : `Select all ${data?.pagination?.total || 0}`}
-                              </button>
-                            )}
-                            {isAllResultsSelected && (
+                            {selectingAll ? (
+                              <span className="text-xs text-gray-500 dark:text-dark-400 ml-1">Selecting…</span>
+                            ) : isAllResultsSelected ? (
                               <button
                                 onClick={handleGlobalSelection}
                                 className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
                               >
-                                Page Only
+                                This page only
+                              </button>
+                            ) : (
+                              <button
+                                onClick={handleGlobalSelection}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
+                              >
+                                Select all {totalMatching}
                               </button>
                             )}
                           </div>
@@ -1271,17 +1282,17 @@ const OrderLogs: React.FC = () => {
                     )}
                   </span>
 
-                  {!isAllResultsSelected && data?.pagination?.total && data.pagination.total > groupedLogs.length ? (
+                  {!isAllResultsSelected && hasMorePages ? (
                     <button
                       type="button"
-                      onClick={handleGlobalSelection}
+                      onClick={() => void selectAllMatching()}
                       disabled={selectingAll}
                       className="inline-flex items-center px-3 py-2 border border-blue-300 dark:border-blue-700 text-sm leading-4 font-medium rounded-md text-blue-700 dark:text-blue-300 bg-white dark:bg-dark-100 hover:bg-blue-50 dark:hover:bg-blue-900/20 focus:outline-none disabled:opacity-50"
                     >
                       {selectingAll ? (
                         <LoadingSpinner size="sm" className="mr-2" />
                       ) : null}
-                      Select all {data.pagination.total} matching orders
+                      Select all {totalMatching} matching orders
                     </button>
                   ) : null}
 
