@@ -92,8 +92,12 @@ backup_now() {
         warn "Postgres container not running — skipped database dump"
     fi
 
-    # Keep the 10 most recent backups
-    ls -1dt backups/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf
+    # Keep the 10 most recent backups. A backup made by an earlier sudo run is
+    # owned by root; leave it in place with a warning rather than abort the update.
+    local old_dir
+    for old_dir in $(ls -1dt backups/*/ 2>/dev/null | tail -n +11); do
+        rm -rf "$old_dir" 2>/dev/null || warn "Could not remove old backup $old_dir (owned by another user?) — remove it with: sudo rm -rf $old_dir"
+    done
     LAST_BACKUP_DIR="$backup_dir"
 }
 
