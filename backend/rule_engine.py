@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List, Any, Union, Optional
 from datetime import datetime
 from decimal import Decimal
@@ -226,6 +227,35 @@ class RuleEngine:
             logger.error(f"Error evaluating rule {rule.id}: {str(e)}", exc_info=True)
             return False
     
+    def explain_rule(self, rule: ProcessingRule, order: Dict[str, Any], excluded_skus: List[str] = None,
+                     store_context: Any = None) -> List[Dict[str, Any]]:
+        """Each condition of the rule with the value the order actually had and whether
+        it passed, so a log entry can say why the rule did or did not match"""
+        conditions_data = rule.conditions
+        conditions = conditions_data if isinstance(conditions_data, list) else (conditions_data or {}).get("conditions", [])
+        explained = []
+        for condition in conditions if isinstance(conditions, list) else []:
+            field = condition.get("field")
+            actual = None
+            if field == "product_metafield":
+                actual = f"metafield {((condition.get('metafield') or {}).get('key'))}"
+            else:
+                try:
+                    actual = self._get_order_field_value(field, order, excluded_skus, store_context)
+                except Exception as e:
+                    actual = f"error: {e}"
+            if isinstance(actual, datetime):
+                actual = actual.isoformat()
+            elif isinstance(actual, (list, dict)):
+                actual = json.dumps(actual, default=str)
+            elif actual is not None and not isinstance(actual, (str, int, float, bool)):
+                actual = str(actual)
+            explained.append({
+                "field": field, "operator": condition.get("operator"), "value": condition.get("value"),
+                "actual": actual, "passed": self._evaluate_condition(condition, order, excluded_skus, store_context),
+            })
+        return explained
+
     def _evaluate_condition(self, condition: Dict[str, Any], order: Dict[str, Any], excluded_skus: List[str] = None, store_context: Any = None) -> bool:
         """Evaluate a single condition"""
         try:

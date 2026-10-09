@@ -2523,10 +2523,13 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
                 counts["matched"] += 1
             else:
                 counts["skipped"] += 1
-                _log_order_action(
-                    db, user_id, store.id, order_id, order_name, "retry_processing", "skipped",
-                    {"retry_type": retry_type, "rule_id": rule_id, "message": "No rules matched this order"}
-                )
+                skipped = {"retry_type": retry_type, "rule_id": rule_id, "message": "No rules matched this order"}
+                if rule_id:
+                    skipped["rule_name"] = rules[0].name
+                    skipped["message"] = f"Rule '{rules[0].name}' did not match this order"
+                    skipped["conditions"] = rule_engine.explain_rule(rules[0], order_data, excluded_sku_patterns, store)
+                    skipped["logical_operator"] = (rules[0].conditions or {}).get("operator", "AND") if isinstance(rules[0].conditions, dict) else "AND"
+                _log_order_action(db, user_id, store.id, order_id, order_name, "retry_processing", "skipped", skipped)
             counts["last_order"] = order_name
 
         except Exception as e:

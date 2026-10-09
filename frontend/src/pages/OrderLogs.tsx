@@ -1236,13 +1236,35 @@ const OrderLogs: React.FC = () => {
                               </div>
                             </td>
                           </tr>
-                          {(log.details?.profit || (log.details?.rule_name && log.details?.message)) && (
+                          {(log.details?.profit || (log.details?.rule_name && log.details?.message) || Array.isArray(log.details?.conditions)) && (
                             <tr className="bg-gray-50 dark:bg-dark-50">
                               <td colSpan={7} className="pl-24 pr-6 pb-3 pt-0">
                                 {log.details.rule_name && log.details.message && (
                                   <div className="text-xs text-gray-500 dark:text-dark-400 break-words">
                                     {log.details.message}
                                   </div>
+                                )}
+                                {Array.isArray(log.details?.conditions) && log.details.conditions.length > 0 && (
+                                  <table className="mt-2 text-xs">
+                                    <thead>
+                                      <tr className="text-left text-gray-500 dark:text-dark-400">
+                                        <th className="pr-4 py-1 font-medium">Condition{log.details.conditions.length > 1 ? `s (${log.details.logical_operator || "AND"})` : ""}</th>
+                                        <th className="pr-4 py-1 font-medium">Expected</th>
+                                        <th className="pr-4 py-1 font-medium">Order had</th>
+                                        <th className="py-1 font-medium">Result</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {log.details.conditions.map((c: any, i: number) => (
+                                        <tr key={i} className="text-gray-700 dark:text-dark-600">
+                                          <td className="pr-4 py-0.5 font-mono">{c.field}</td>
+                                          <td className="pr-4 py-0.5">{c.operator?.replace(/_/g, " ")} {typeof c.value === "object" ? JSON.stringify(c.value) : String(c.value)}</td>
+                                          <td className="pr-4 py-0.5 font-mono">{c.actual === null || c.actual === undefined ? <span className="italic text-gray-400">unknown</span> : String(c.actual)}</td>
+                                          <td className={`py-0.5 ${c.passed ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>{c.passed ? "pass" : "fail"}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
                                 )}
                                 {log.details.profit && (
                                   <ProfitBreakdown

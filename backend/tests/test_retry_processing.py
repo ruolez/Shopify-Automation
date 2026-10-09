@@ -224,3 +224,24 @@ class TestRetryEndpoints:
         db.commit()
         status = http.get("/order-logs/retry/status").json()
         assert status["running"] == [] and [(b["task_id"], b["processed"], b["matched"]) for b in status["recent"]] == [(task_id, 1, 1)]
+
+
+class TestExplainRule:
+    def test_reports_each_condition_with_the_orders_value(self):
+        rule = new_customer_rule()
+        assert RuleEngine().explain_rule(rule, shopify_order("gid://1", "#1", "3")) == [
+            {"field": "fraud_is_first_time_customer", "operator": "equals", "value": True, "actual": False, "passed": False}]
+
+    def test_unknown_values_are_none(self):
+        rule = new_customer_rule(field="customer_total_orders", operator="less_than_or_equal", value=1)
+        assert RuleEngine().explain_rule(rule, shopify_order("gid://1", "#1", None)) == [
+            {"field": "customer_total_orders", "operator": "less_than_or_equal", "value": 1, "actual": None, "passed": False}]
+
+
+class TestSkippedRetryExplanation:
+    def test_skipped_entry_says_which_condition_failed(self, db, fake_shopify):
+        run_retry(db, ["gid://shopify/Order/2"])
+        row = db.query(OrderLog).filter(OrderLog.status == "skipped").one()
+        assert row.details["message"] == "Rule 'New Customers' did not match this order"
+        assert row.details["conditions"] == [
+            {"field": "fraud_is_first_time_customer", "operator": "equals", "value": True, "actual": False, "passed": False}]
