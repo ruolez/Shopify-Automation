@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text, case
+import uuid
+from sqlalchemy import func, text, case, or_, and_
 
 from database import get_db
 from models import User, ShopifyStore, OrderLog, ProcessedOrder, TaskStatus
 from auth import get_current_user
 from schemas import TaskStatusResponse, FailedTasksResponse, RetryOrdersRequest, OrderRiskLevelsRequest
-from tasks import retry_order_processing as run_retry_order_processing
+from tasks import retry_orders_batch, create_task_status, RETRY_TASK_NAME, RETRY_CANCEL_STATUS, _retry_target_rules
 from models import ExcludedSKU
 from shipping_estimate_service import profit_with_shipping
 from order_detail import build_order_detail, profit_snapshot
@@ -23,6 +24,18 @@ from shopify_client import ShopifyClient
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/order-logs", tags=["Order Logs"])
+
+RETRY_STALE_AFTER = timedelta(hours=8)
+RETRY_RECENT_WINDOW = timedelta(hours=24)
+
+
+def matched_rule(rule_id: int):
+    """Log rows where this rule matched: from the scheduled sync (action applied_rule_<id>)
+    or from a retry/reprocess batch (action retry_processing with the rule in details)"""
+    return or_(
+        OrderLog.action == f"applied_rule_{rule_id}",
+        and_(OrderLog.action == "retry_processing", OrderLog.details["applied_rule_id"].as_integer() == rule_id),
+    )
 
 
 @router.get("")
@@ -56,7 +69,7 @@ async def get_order_logs(
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
     if rule_id:
-        query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
+        query = query.filter(matched_rule(rule_id))
 
     # Apply date filtering
     if date_from:
@@ -101,7 +114,7 @@ async def get_order_logs(
         if search:
             query = query.filter(OrderLog.order_number.contains(search))
         if rule_id:
-            query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
+            query = query.filter(matched_rule(rule_id))
         if parsed_date_from:
             query = query.filter(OrderLog.created_at >= parsed_date_from)
         if parsed_date_to:
@@ -261,7 +274,7 @@ async def get_all_order_ids(
     if search:
         query = query.filter(OrderLog.order_number.contains(search))
     if rule_id:
-        query = query.filter(OrderLog.action == f"applied_rule_{rule_id}")
+        query = query.filter(matched_rule(rule_id))
 
     # Apply date filtering
     if date_from:
@@ -390,21 +403,114 @@ async def get_order_risk_levels(
     return levels
 
 
+def retry_batch_view(task: TaskStatus) -> dict:
+    result = task.result or {}
+    return {
+        "task_id": task.task_id,
+        "status": task.status,
+        "rule_id": result.get("rule_id"),
+        "rule_name": result.get("rule_name"),
+        "total": result.get("total", 0),
+        "processed": result.get("processed", 0),
+        "matched": result.get("matched", 0),
+        "skipped": result.get("skipped", 0),
+        "failed": result.get("failed", 0),
+        "current_order": result.get("current_order"),
+        "last_order": result.get("last_order"),
+        "cancelled": bool(result.get("cancelled")),
+        "error": result.get("error") or task.error_message,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+
+
 @router.post("/retry")
 async def retry_order_processing(
     request: RetryOrdersRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Re-run the user's active rules (or one rule) on the given orders now and
-    report how many were processed; each outcome is written to the order log"""
+    """Queue a batch that re-runs the user's active rules (or one rule) on the given
+    orders. Progress is read from GET /order-logs/retry/status; each order's outcome
+    is written to the order log as it completes."""
     try:
-        result = await run_retry_order_processing(
-            request.order_ids, request.rule_id, current_user.id, db
-        )
+        rules = _retry_target_rules(request.rule_id, current_user.id, db)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    task_id = str(uuid.uuid4())
+    rule_name = rules[0].name if request.rule_id else None
+    create_task_status(task_id, RETRY_TASK_NAME, status="running", user_id=current_user.id)
+    task = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+    task.result = {
+        "rule_id": request.rule_id, "rule_name": rule_name, "total": len(request.order_ids),
+        "processed": 0, "matched": 0, "skipped": 0, "failed": 0, "current_order": None, "cancelled": False,
+    }
+    db.commit()
+    try:
+        retry_orders_batch.delay(current_user.id, request.order_ids, request.rule_id, task_id)
     except Exception as e:
-        logger.error(f"Retry processing failed for user {current_user.id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Retry failed: {e}")
-    return result
+        logger.error(f"Could not queue retry batch for user {current_user.id}: {e}", exc_info=True)
+        task.status = "failed"
+        task.error_message = f"Could not queue the batch: {e}"
+        task.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The background worker is not reachable; the batch was not started")
+    return {
+        "task_id": task_id,
+        "total": len(request.order_ids),
+        "rule_name": rule_name,
+        "message": f"Reprocessing {len(request.order_ids)} orders with "
+                   f"{'rule ' + repr(rule_name) if rule_name else 'all active rules'}",
+    }
+
+
+@router.get("/retry/status")
+async def get_retry_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """The user's running reprocess batches plus the ones finished in the last day"""
+    now = datetime.now(timezone.utc)
+    batches = db.query(TaskStatus).filter(
+        TaskStatus.user_id == current_user.id,
+        TaskStatus.task_name == RETRY_TASK_NAME,
+    ).order_by(TaskStatus.created_at.desc()).limit(50).all()
+
+    running, recent = [], []
+    for task in batches:
+        if task.status in ("running", RETRY_CANCEL_STATUS):
+            started = task.started_at or task.created_at
+            if started and now - started.replace(tzinfo=started.tzinfo or timezone.utc) > RETRY_STALE_AFTER:
+                task.status = "failed"
+                task.error_message = "Batch stopped reporting progress"
+                task.completed_at = now
+                db.commit()
+            else:
+                running.append(retry_batch_view(task))
+                continue
+        finished = task.completed_at or task.created_at
+        if len(recent) < 5 and finished and now - finished.replace(tzinfo=finished.tzinfo or timezone.utc) <= RETRY_RECENT_WINDOW:
+            recent.append(retry_batch_view(task))
+    return {"running": running, "recent": recent}
+
+
+@router.post("/retry/{task_id}/cancel")
+async def cancel_retry_batch(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Stop a running batch after the order it is on; orders already processed keep their results"""
+    task = db.query(TaskStatus).filter(
+        TaskStatus.task_id == task_id,
+        TaskStatus.user_id == current_user.id,
+        TaskStatus.task_name == RETRY_TASK_NAME,
+    ).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    if task.status == "running":
+        task.status = RETRY_CANCEL_STATUS
+        db.commit()
+    return retry_batch_view(task)

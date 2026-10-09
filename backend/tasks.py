@@ -908,7 +908,7 @@ def process_store_orders(self, user_id: int, store_id: int):
 async def _process_store_orders_async(store: ShopifyStore, rules: List[ProcessingRule], db: Session):
     """Async function to process store orders"""
     client = ShopifyClient(store.shop_domain, store.access_token)
-    rule_engine = RuleEngine()
+    rule_engine = RuleEngine(db)
     needs_full_line_items = _rules_need_full_line_items(rules)
     metafield_keys = _rule_metafield_keys(rules)
     metafield_cache: Dict[str, Dict[str, Any]] = {}
@@ -2392,14 +2392,12 @@ def archive_fulfilled_fraud_analyses(self):
     finally:
         loop.close()
 
-async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], user_id: int, db: Session):
-    """Retry processing specific orders with all rules or a specific rule"""
-    processed_count = 0
-    failed_count = 0
-    
-    # Get user's active rules
+RETRY_TASK_NAME = "retry_orders"
+RETRY_CANCEL_STATUS = "cancelling"
+
+
+def _retry_target_rules(rule_id: Optional[int], user_id: int, db: Session) -> List[ProcessingRule]:
     if rule_id:
-        logger.info(f"Retrying with specific rule ID: {rule_id}")
         rules = db.query(ProcessingRule).filter(
             ProcessingRule.id == rule_id,
             ProcessingRule.user_id == user_id,
@@ -2407,119 +2405,212 @@ async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], u
         ).all()
         if not rules:
             raise ValueError(f"Rule {rule_id} not found or inactive")
-        logger.info(f"Found specific rule: {rules[0].name}")
-    else:
-        logger.info("Retrying with all active rules")
-        rules = db.query(ProcessingRule).filter(
-            ProcessingRule.user_id == user_id,
-            ProcessingRule.is_active == True
-        ).order_by(ProcessingRule.priority.asc()).all()
-        logger.info(f"Found {len(rules)} active rules: {[r.name for r in rules]}")
-    
+        return rules
+    rules = db.query(ProcessingRule).filter(
+        ProcessingRule.user_id == user_id,
+        ProcessingRule.is_active == True
+    ).order_by(ProcessingRule.priority.asc()).all()
     if not rules:
         raise ValueError("No active rules found")
-    
-    # Get user's stores for order lookup
+    return rules
+
+
+def _known_store_ids(order_ids: List[str], user_id: int, db: Session) -> Dict[str, int]:
+    """store_id each order was last logged under, so a retry asks that store first
+    instead of probing every connected store"""
+    rows = db.query(OrderLog.order_id, OrderLog.store_id).filter(
+        OrderLog.user_id == user_id,
+        OrderLog.order_id.in_(order_ids),
+        OrderLog.store_id != 0,
+    ).order_by(OrderLog.created_at.asc()).all()
+    return {order_id: store_id for order_id, store_id in rows}
+
+
+async def retry_order_processing(order_ids: List[str], rule_id: Optional[int], user_id: int, db: Session,
+                                 progress=None, should_stop=None, start_index: int = 0) -> Dict[str, Any]:
+    """Re-run the user's active rules (or one rule) on the given orders.
+
+    progress(counts) is called after every order with the running totals;
+    should_stop() is checked before each order so a batch can be cancelled;
+    start_index resumes a batch that was interrupted after that many orders."""
+    rules = _retry_target_rules(rule_id, user_id, db)
+    logger.info(f"Retrying {len(order_ids)} orders with rules: {[r.name for r in rules]}")
+
     stores = db.query(ShopifyStore).filter(
         ShopifyStore.user_id == user_id,
         ShopifyStore.is_active == True
     ).all()
-    
     if not stores:
         raise ValueError("No active stores found")
-    
-    # Get excluded SKUs for this user
-    excluded_skus_query = db.query(ExcludedSKU).filter(
-        ExcludedSKU.user_id == user_id,
-        ExcludedSKU.is_active == True
-    ).all()
-    excluded_sku_patterns = [sku.sku_pattern for sku in excluded_skus_query]
-    
+    stores_by_id = {s.id: s for s in stores}
+    known_store_ids = _known_store_ids(order_ids, user_id, db)
+
+    excluded_sku_patterns = [
+        sku.sku_pattern for sku in db.query(ExcludedSKU).filter(
+            ExcludedSKU.user_id == user_id,
+            ExcludedSKU.is_active == True
+        ).all()
+    ]
     if excluded_sku_patterns:
         logger.info(f"Loaded {len(excluded_sku_patterns)} excluded SKU patterns for retry processing: {excluded_sku_patterns}")
-    
-    rule_engine = RuleEngine()
-    
-    for order_id in order_ids:
+
+    rule_engine = RuleEngine(db)
+    retry_type = "specific_rule" if rule_id else "all_rules"
+    counts = {
+        "total": len(order_ids), "processed": start_index, "matched": 0, "skipped": 0, "failed": 0,
+        "current_order": None, "last_order": None, "cancelled": False,
+    }
+
+    def report():
+        if progress:
+            progress(dict(counts))
+
+    for order_id in order_ids[start_index:]:
+        if should_stop and should_stop():
+            counts["cancelled"] = True
+            counts["current_order"] = None
+            report()
+            break
+        counts["current_order"] = order_id
         try:
-            # Find which store this order belongs to by trying each store
             order_data = None
             store = None
-            
-            for s in stores:
+            candidates = [stores_by_id[known_store_ids[order_id]]] if known_store_ids.get(order_id) in stores_by_id else []
+            candidates += [s for s in stores if s not in candidates]
+            for s in candidates:
                 client = ShopifyClient(s.shop_domain, s.access_token)
-                order_data = await client.get_order_by_id(order_id)
+                order_data = await client.get_order_by_id(order_id, include_fraud_data=True)
                 if order_data:
                     store = s
                     break
-            
+
             if not order_data or not store:
                 logger.error(f"Order {order_id} not found in any store")
                 _log_order_action(
                     db, user_id, 0, order_id, "Unknown", "retry_processing", "failed",
-                    {"retry_type": "specific_rule" if rule_id else "all_rules", "rule_id": rule_id},
+                    {"retry_type": retry_type, "rule_id": rule_id},
                     error_message="Order not found in any connected store"
                 )
-                failed_count += 1
+                counts["failed"] += 1
                 continue
-            
-            # Apply rules to the order
+
+            order_name = order_data.get("name", "Unknown")
+            counts["current_order"] = order_name
             rules_applied = False
             client = ShopifyClient(store.shop_domain, store.access_token)
-            
-            logger.info(f"Found {len(rules)} active rules for retry processing")
+
             await _ensure_line_items_for_rules(client, order_data, _rules_need_full_line_items(rules))
             await _ensure_product_metafields_for_rules(client, order_data, _rule_metafield_keys(rules), {})
             for rule in rules:
-                logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_data.get('name', 'Unknown')}")
+                logger.info(f"Evaluating rule '{rule.name}' (ID: {rule.id}) for order {order_name}")
                 if rule_engine.evaluate_rule(rule, order_data, excluded_sku_patterns, store):
                     rules_applied = True
                     logger.info(f"Rule '{rule.name}' matched! Applying actions...")
                     success = await _apply_rule_actions(client, rule, order_data, store, db, excluded_sku_patterns)
-                    
-                    # Log retry attempt - rule matched regardless of action success
                     _log_order_action(
-                        db, user_id, store.id, order_id, 
-                        order_data.get("name", "Unknown"), "retry_processing", 
-                        "match",
+                        db, user_id, store.id, order_id, order_name, "retry_processing", "match",
                         {
-                            "retry_type": "specific_rule" if rule_id else "all_rules",
+                            "retry_type": retry_type,
                             "rule_id": rule_id,
                             "applied_rule_id": rule.id,
                             **_rule_match_details(rule, order_data, success, store, excluded_sku_patterns, db),
                         }
                     )
                 else:
-                    logger.info(f"Rule '{rule.name}' did not match order {order_data.get('name', 'Unknown')}")
-            
-            # Log if no rules matched
-            if not rules_applied:
+                    logger.info(f"Rule '{rule.name}' did not match order {order_name}")
+
+            if rules_applied:
+                counts["matched"] += 1
+            else:
+                counts["skipped"] += 1
                 _log_order_action(
-                    db, user_id, store.id, order_id,
-                    order_data.get("name", "Unknown"), "retry_processing", "skipped",
-                    {
-                        "retry_type": "specific_rule" if rule_id else "all_rules", 
-                        "rule_id": rule_id,
-                        "message": "No rules matched this order"
-                    }
+                    db, user_id, store.id, order_id, order_name, "retry_processing", "skipped",
+                    {"retry_type": retry_type, "rule_id": rule_id, "message": "No rules matched this order"}
                 )
-            
-            processed_count += 1
-            
+            counts["last_order"] = order_name
+
         except Exception as e:
             logger.error(f"Error retrying order {order_id}: {str(e)}")
+            db.rollback()
             _log_order_action(
                 db, user_id, 0, order_id, "Unknown", "retry_processing", "error",
-                {"retry_type": "specific_rule" if rule_id else "all_rules", "rule_id": rule_id},
+                {"retry_type": retry_type, "rule_id": rule_id},
                 error_message=str(e)
             )
-            failed_count += 1
-    
+            counts["failed"] += 1
+        finally:
+            counts["processed"] += 1
+            report()
+
+    counts["current_order"] = None
+    report()
     return {
-        "processed_count": processed_count,
-        "failed_count": failed_count,
-        "total_count": len(order_ids)
+        "processed_count": counts["processed"],
+        "failed_count": counts["failed"],
+        "matched_count": counts["matched"],
+        "skipped_count": counts["skipped"],
+        "total_count": len(order_ids),
+        "cancelled": counts["cancelled"],
     }
+
+
+def _retry_task_record(task_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_session() as db:
+        task = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+        return {"status": task.status, "result": dict(task.result or {})} if task else None
+
+
+def _save_retry_progress(task_id: str, counts: Dict[str, Any], status: str = "running") -> None:
+    with get_db_session() as db:
+        task = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+        if not task:
+            return
+        if task.status == RETRY_CANCEL_STATUS and status == "running":
+            status = RETRY_CANCEL_STATUS
+        task.status = status
+        task.result = {**(task.result or {}), **counts}
+        if status in ("success", "failed"):
+            task.completed_at = datetime.now(timezone.utc)
+
+
+@celery.task(bind=True, soft_time_limit=6 * 60 * 60, time_limit=6 * 60 * 60 + 60)
+def retry_orders_batch(self, user_id: int, order_ids: List[str], rule_id: Optional[int], task_id: str):
+    """Re-run rules on a batch of orders in the background. Progress lives in the
+    task_status row the API created (task_name "retry_orders"); setting its status to
+    "cancelling" stops the batch after the current order, and a redelivered task
+    resumes after the orders it had already processed."""
+    record = _retry_task_record(task_id)
+    if record is None:
+        logger.error(f"Retry batch {task_id} has no task_status row; nothing to do")
+        return
+    if record["status"] in ("success", "failed"):
+        return
+    start_index = int(record["result"].get("processed") or 0)
+    if record["status"] == RETRY_CANCEL_STATUS:
+        _save_retry_progress(task_id, {"cancelled": True, "current_order": None}, status="success")
+        return
+
+    def progress(counts):
+        _save_retry_progress(task_id, counts)
+
+    def should_stop():
+        current = _retry_task_record(task_id)
+        return current is None or current["status"] == RETRY_CANCEL_STATUS
+
+    try:
+        with get_db_session() as db:
+            _save_retry_progress(task_id, {"started": True})
+            result = asyncio.run(retry_order_processing(
+                order_ids, rule_id, user_id, db, progress=progress, should_stop=should_stop, start_index=start_index
+            ))
+        _save_retry_progress(task_id, {"cancelled": result["cancelled"], "current_order": None}, status="success")
+        return result
+    except SoftTimeLimitExceeded:
+        logger.error(f"Retry batch {task_id} hit its time limit")
+        _save_retry_progress(task_id, {"current_order": None, "error": "Batch hit its time limit"}, status="failed")
+    except Exception as e:
+        logger.error(f"Retry batch {task_id} failed: {e}", exc_info=True)
+        _save_retry_progress(task_id, {"current_order": None, "error": str(e)}, status="failed")
 
 
 @celery.task(bind=True)

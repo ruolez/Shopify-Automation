@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDate } from "../utils/dateFormat";
@@ -66,6 +66,40 @@ interface GroupedOrderLog {
   has_success: boolean;
 }
 
+interface RetryBatch {
+  task_id: string;
+  status: "running" | "cancelling" | "success" | "failed";
+  rule_id: number | null;
+  rule_name: string | null;
+  total: number;
+  processed: number;
+  matched: number;
+  skipped: number;
+  failed: number;
+  current_order: string | null;
+  last_order: string | null;
+  cancelled: boolean;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+interface RetryStatus {
+  running: RetryBatch[];
+  recent: RetryBatch[];
+}
+
+const batchTitle = (batch: RetryBatch) =>
+  batch.rule_name ? `Rule "${batch.rule_name}"` : "All active rules";
+
+const elapsedLabel = (from: string | null, to: string | null) => {
+  if (!from) return "";
+  const seconds = Math.max(0, Math.round((new Date(to || Date.now()).getTime() - new Date(from).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+
 type SortField =
   | "order_number"
   | "store_name"
@@ -94,6 +128,7 @@ const OrderLogs: React.FC = () => {
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [isAllResultsSelected, setIsAllResultsSelected] = useState<boolean>(false);
   const [showGlobalSelection, setShowGlobalSelection] = useState<boolean>(false);
+  const [dismissedBatches, setDismissedBatches] = useState<Set<string>>(new Set());
 
   const queryClient = useQueryClient();
   const { timezone, dateFormat } = useTimezone();
@@ -417,26 +452,58 @@ const OrderLogs: React.FC = () => {
     retry: false,
   });
 
+  const { data: retryStatus } = useQuery<RetryStatus>({
+    queryKey: ["retry-status"],
+    queryFn: async () => (await api.get("/order-logs/retry/status")).data,
+    refetchInterval: (query) => (query.state.data?.running.length ? 2000 : 30000),
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+
+  // When a batch leaves the running list its results are in the log: reload the table
+  const previousRunning = useRef<string[]>([]);
+  useEffect(() => {
+    const running = (retryStatus?.running || []).map((batch) => batch.task_id);
+    const finished = previousRunning.current.filter((id) => !running.includes(id));
+    if (finished.length) {
+      queryClient.invalidateQueries({ queryKey: ["order-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["order-logs-all-ids"] });
+    }
+    if (retryStatus?.running.length) {
+      queryClient.invalidateQueries({ queryKey: ["order-logs"] });
+    }
+    previousRunning.current = running;
+  }, [retryStatus, queryClient]);
+
   const retryOrders = useMutation({
     mutationFn: async (data: { order_ids: string[]; rule_id?: number }) => {
       const response = await api.post("/order-logs/retry", data);
       return response.data;
     },
     onSuccess: (result) => {
-      toast.success(
-        `Retry completed: ${result.processed_count} processed, ${result.failed_count} failed`,
-      );
-      queryClient.invalidateQueries({ queryKey: ["order-logs"] });
-      queryClient.invalidateQueries({ queryKey: ["order-logs-all-ids"] });
+      toast.success(`${result.message}. Watch the progress above the log.`);
+      queryClient.invalidateQueries({ queryKey: ["retry-status"] });
       setSelectedOrders(new Set());
       setSelectedRule("");
       setShowGlobalSelection(false);
       setIsAllResultsSelected(false);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Failed to retry orders");
+      toast.error(error.response?.data?.detail || "Failed to start reprocessing");
     },
   });
+
+  const cancelBatch = useMutation({
+    mutationFn: async (taskId: string) => (await api.post(`/order-logs/retry/${taskId}/cancel`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["retry-status"] }),
+    onError: (error: any) => toast.error(error.response?.data?.detail || "Could not cancel the batch"),
+  });
+
+  const visibleBatches = useMemo(() => {
+    const running = retryStatus?.running || [];
+    const recent = (retryStatus?.recent || []).filter((batch) => !dismissedBatches.has(batch.task_id));
+    return [...running, ...recent];
+  }, [retryStatus, dismissedBatches]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -568,7 +635,7 @@ const OrderLogs: React.FC = () => {
     } else {
       // Select all results globally
       if (allOrderIdsData) {
-        setSelectedOrders(new Set(allOrderIdsData.order_ids));
+        setSelectedOrders(new Set<string>(allOrderIdsData.order_ids.map((row: { order_id: string }) => row.order_id)));
         setIsAllResultsSelected(true);
       }
     }
@@ -577,10 +644,9 @@ const OrderLogs: React.FC = () => {
   const handleRetryWithAllRules = () => {
     if (selectedOrders.size === 0) return;
     
-    // Warn for large batches
     if (selectedOrders.size > 100) {
       const confirmed = window.confirm(
-        `You're about to retry ${selectedOrders.size} orders. This may take a while. Continue?`
+        `Reprocess ${selectedOrders.size} orders with all active rules? It runs in the background and you can stop it any time.`
       );
       if (!confirmed) return;
     }
@@ -593,10 +659,9 @@ const OrderLogs: React.FC = () => {
   const handleRetryWithSpecificRule = () => {
     if (selectedOrders.size === 0 || !selectedRule) return;
     
-    // Warn for large batches
     if (selectedOrders.size > 100) {
       const confirmed = window.confirm(
-        `You're about to retry ${selectedOrders.size} orders. This may take a while. Continue?`
+        `Reprocess ${selectedOrders.size} orders with this rule? It runs in the background and you can stop it any time.`
       );
       if (!confirmed) return;
     }
@@ -643,6 +708,101 @@ const OrderLogs: React.FC = () => {
               Refresh
             </button>
           </div>
+
+          {/* Reprocess batches */}
+          {visibleBatches.length > 0 && (
+            <div className="mb-6 space-y-3" data-testid="retry-batches">
+              {visibleBatches.map((batch) => {
+                const active = batch.status === "running" || batch.status === "cancelling";
+                const percent = batch.total ? Math.round((batch.processed / batch.total) * 100) : 0;
+                const tone = batch.status === "failed"
+                  ? "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20"
+                  : active
+                    ? "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20"
+                    : "border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/20";
+                const heading = batch.status === "failed"
+                  ? "Reprocessing failed"
+                  : batch.status === "cancelling"
+                    ? "Stopping after the current order…"
+                    : batch.status === "running"
+                      ? "Reprocessing orders"
+                      : batch.cancelled
+                        ? "Reprocessing stopped"
+                        : "Reprocessing finished";
+                return (
+                  <div key={batch.task_id} className={`rounded-lg border p-4 ${tone}`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center text-sm font-medium text-gray-900 dark:text-dark-800">
+                          {active && <div className="mr-3 h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600" />}
+                          {heading} · {batchTitle(batch)}
+                        </div>
+                        <div className="mt-1 text-sm text-gray-700 dark:text-dark-600">
+                          {batch.processed} of {batch.total} orders
+                          {" · "}<span className="text-green-700 dark:text-green-400">{batch.matched} matched</span>
+                          {" · "}{batch.skipped} skipped
+                          {" · "}<span className={batch.failed ? "text-red-700 dark:text-red-400" : ""}>{batch.failed} failed</span>
+                          {batch.started_at && (
+                            <>{" · "}{elapsedLabel(batch.started_at, active ? null : batch.completed_at)}</>
+                          )}
+                        </div>
+                        {active && batch.current_order && (
+                          <div className="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                            Working on {batch.current_order}
+                            {batch.last_order && <> · last finished {batch.last_order}</>}
+                          </div>
+                        )}
+                        {batch.error && (
+                          <div className="mt-1 text-xs text-red-700 dark:text-red-400">{batch.error}</div>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {batch.rule_id && (
+                          <button
+                            type="button"
+                            onClick={() => { setRuleFilter(String(batch.rule_id)); setPage(1); }}
+                            className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-400"
+                          >
+                            Show matches
+                          </button>
+                        )}
+                        {batch.status === "running" && (
+                          <button
+                            type="button"
+                            onClick={() => cancelBatch.mutate(batch.task_id)}
+                            disabled={cancelBatch.isPending}
+                            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-dark-300 dark:bg-dark-100 dark:text-dark-600 dark:hover:bg-dark-200"
+                          >
+                            Stop
+                          </button>
+                        )}
+                        {!active && (
+                          <button
+                            type="button"
+                            aria-label="Dismiss"
+                            onClick={() => setDismissedBatches((prev) => new Set(prev).add(batch.task_id))}
+                            className="text-xs text-gray-500 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-600"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-200">
+                      <div
+                        className={`h-2 rounded-full transition-all ${batch.status === "failed" ? "bg-red-500" : "bg-shopify-600"}`}
+                        style={{ width: `${percent}%` }}
+                        role="progressbar"
+                        aria-valuenow={batch.processed}
+                        aria-valuemin={0}
+                        aria-valuemax={batch.total}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Filters */}
           <div className="mb-6 space-y-4 overflow-visible">

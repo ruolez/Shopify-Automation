@@ -1883,6 +1883,7 @@ class ShopifyClient:
                         firstName
                         lastName
                         email
+                        numberOfOrders
                     }
                     shippingAddress {
                         province

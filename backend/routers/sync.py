@@ -228,7 +228,7 @@ async def debug_test_rule(
 
     from rule_engine import RuleEngine
     from shipping_estimate_service import profit_with_shipping
-    engine = RuleEngine()
+    engine = RuleEngine(db)
 
     excluded_sku_patterns = [
         sku.sku_pattern

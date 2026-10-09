@@ -42,6 +42,18 @@ def _shop_money_amount(money_set: Any) -> Optional[float]:
     return float(amount)
 
 
+def customer_order_count(order: Dict[str, Any]) -> Optional[int]:
+    """The customer's lifetime order count from a Shopify order (customer.numberOfOrders,
+    a string in GraphQL); None for guest checkouts or when the query did not fetch it"""
+    raw = (order.get("customer") or {}).get("numberOfOrders")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def calculate_order_profit(order: Dict[str, Any], shipping_cost: Optional[float] = None) -> Dict[str, Any]:
     """Order profit from a raw Shopify GraphQL order dict, in shop currency.
 
@@ -490,6 +502,9 @@ class RuleEngine:
             elif field == "customer_email":
                 customer = order.get("customer", {})
                 return customer.get("email", "") if customer else ""
+
+            elif field == "customer_total_orders":
+                return customer_order_count(order)
             
             elif field == "order_tags":
                 tags = order.get("tags", [])
@@ -824,8 +839,8 @@ class RuleEngine:
         """Extract fraud analysis field values with null-safe fallbacks"""
         try:
             if not self.db_session:
-                logger.warning("No database session available for fraud field extraction")
-                return None
+                logger.info("No database session for fraud field extraction; using the order's own data")
+                return self._get_fraud_field_fallback(field, order)
             
             # Get order information
             order_info = order.get('order_info', {})
@@ -934,8 +949,17 @@ class RuleEngine:
             return self._get_fraud_field_fallback(field, order)
     
     def _get_fraud_field_fallback(self, field: str, order: Dict[str, Any]) -> Any:
-        """Provide fallback values for fraud fields when fraud analysis is not available"""
+        """Fraud field values when no fraud analysis exists for the order: derived from
+        the Shopify order itself where it carries the data, otherwise a safe default"""
         try:
+            order_count = customer_order_count(order)
+            if field == "fraud_is_first_time_customer" and order_count is not None:
+                return order_count <= 1
+            if field == "fraud_shipping_state" and (order.get("shippingAddress") or {}).get("province"):
+                return str(order["shippingAddress"]["province"]).upper()
+            if field == "fraud_current_order_total" and (order.get("totalPriceSet") or {}).get("shopMoney"):
+                return float((order["totalPriceSet"]["shopMoney"] or {}).get("amount") or 0)
+
             # Return safe default values that won't break rule evaluation
             fallback_values = {
                 "fraud_is_first_time_customer": True,  # Conservative default
