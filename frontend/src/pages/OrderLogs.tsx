@@ -626,18 +626,27 @@ const OrderLogs: React.FC = () => {
     }
   };
 
-  const handleGlobalSelection = () => {
+  const [selectingAll, setSelectingAll] = useState(false);
+  const handleGlobalSelection = async () => {
     if (isAllResultsSelected) {
       // Deselect global, go back to page selection
       const allOrderIds = new Set(groupedLogs.map((group) => group.order_id));
       setSelectedOrders(allOrderIds);
       setIsAllResultsSelected(false);
-    } else {
-      // Select all results globally
-      if (allOrderIdsData) {
-        setSelectedOrders(new Set<string>(allOrderIdsData.order_ids.map((row: { order_id: string }) => row.order_id)));
-        setIsAllResultsSelected(true);
+      return;
+    }
+    // Select every order matching the current filters, fetching the ID list if it is not loaded yet
+    setSelectingAll(true);
+    try {
+      const ids = allOrderIdsData ?? (await refetchAllOrderIds()).data;
+      if (!ids) {
+        toast.error("Could not load the full list of matching orders");
+        return;
       }
+      setSelectedOrders(new Set<string>(ids.order_ids.map((row: { order_id: string }) => row.order_id)));
+      setIsAllResultsSelected(true);
+    } finally {
+      setSelectingAll(false);
     }
   };
 
@@ -1013,9 +1022,10 @@ const OrderLogs: React.FC = () => {
                             {!isAllResultsSelected && (
                               <button
                                 onClick={handleGlobalSelection}
-                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1"
+                                disabled={selectingAll}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline ml-1 disabled:opacity-50"
                               >
-                                All {data?.pagination?.total || 0}
+                                {selectingAll ? "Selecting…" : `Select all ${data?.pagination?.total || 0}`}
                               </button>
                             )}
                             {isAllResultsSelected && (
@@ -1256,10 +1266,24 @@ const OrderLogs: React.FC = () => {
                     )}
                     {!isAllResultsSelected && showGlobalSelection && (
                       <span className="ml-1 text-gray-500 dark:text-dark-400">
-                        (current page only)
+                        (this page only)
                       </span>
                     )}
                   </span>
+
+                  {!isAllResultsSelected && data?.pagination?.total && data.pagination.total > groupedLogs.length ? (
+                    <button
+                      type="button"
+                      onClick={handleGlobalSelection}
+                      disabled={selectingAll}
+                      className="inline-flex items-center px-3 py-2 border border-blue-300 dark:border-blue-700 text-sm leading-4 font-medium rounded-md text-blue-700 dark:text-blue-300 bg-white dark:bg-dark-100 hover:bg-blue-50 dark:hover:bg-blue-900/20 focus:outline-none disabled:opacity-50"
+                    >
+                      {selectingAll ? (
+                        <LoadingSpinner size="sm" className="mr-2" />
+                      ) : null}
+                      Select all {data.pagination.total} matching orders
+                    </button>
+                  ) : null}
 
                   <button
                     onClick={handleRetryWithAllRules}
