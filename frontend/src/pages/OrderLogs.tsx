@@ -499,6 +499,13 @@ const OrderLogs: React.FC = () => {
     onError: (error: any) => toast.error(error.response?.data?.detail || "Could not cancel the batch"),
   });
 
+  const dismissBatch = useMutation({
+    mutationFn: async (taskId: string) => (await api.post(`/order-logs/retry/${taskId}/dismiss`)).data,
+    onMutate: (taskId) => setDismissedBatches((prev) => new Set(prev).add(taskId)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["retry-status"] }),
+    onError: (error: any) => toast.error(error.response?.data?.detail || "Could not dismiss the batch"),
+  });
+
   const visibleBatches = useMemo(() => {
     const running = retryStatus?.running || [];
     const recent = (retryStatus?.recent || []).filter((batch) => !dismissedBatches.has(batch.task_id));
@@ -798,7 +805,7 @@ const OrderLogs: React.FC = () => {
                           <button
                             type="button"
                             aria-label="Dismiss"
-                            onClick={() => setDismissedBatches((prev) => new Set(prev).add(batch.task_id))}
+                            onClick={() => dismissBatch.mutate(batch.task_id)}
                             className="text-xs text-gray-500 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-600"
                           >
                             Dismiss

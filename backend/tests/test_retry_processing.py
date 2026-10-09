@@ -245,3 +245,19 @@ class TestSkippedRetryExplanation:
         assert row.details["message"] == "Rule 'New Customers' did not match this order"
         assert row.details["conditions"] == [
             {"field": "fraud_is_first_time_customer", "operator": "equals", "value": True, "actual": False, "passed": False}]
+
+
+class TestDismissRetryBatch:
+    def test_dismissed_batch_leaves_the_recent_list(self, client, db):
+        http, _ = client
+        task_id = http.post("/order-logs/retry", json={"order_ids": ["gid://shopify/Order/1"]}).json()["task_id"]
+        task = db.query(TaskStatus).filter(TaskStatus.task_id == task_id).first()
+        task.status = "success"
+        db.commit()
+        assert http.post(f"/order-logs/retry/{task_id}/dismiss").json() == {"task_id": task_id, "dismissed": True}
+        assert http.get("/order-logs/retry/status").json() == {"running": [], "recent": []}
+
+    def test_running_batch_cannot_be_dismissed(self, client):
+        http, _ = client
+        task_id = http.post("/order-logs/retry", json={"order_ids": ["gid://shopify/Order/1"]}).json()["task_id"]
+        assert http.post(f"/order-logs/retry/{task_id}/dismiss").status_code == 400

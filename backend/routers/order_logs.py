@@ -490,10 +490,33 @@ async def get_retry_status(
             else:
                 running.append(retry_batch_view(task))
                 continue
+        if (task.result or {}).get("dismissed"):
+            continue
         finished = task.completed_at or task.created_at
         if len(recent) < 5 and finished and now - finished.replace(tzinfo=finished.tzinfo or timezone.utc) <= RETRY_RECENT_WINDOW:
             recent.append(retry_batch_view(task))
     return {"running": running, "recent": recent}
+
+
+@router.post("/retry/{task_id}/dismiss")
+async def dismiss_retry_batch(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Hide a finished batch from the Orders page for good"""
+    task = db.query(TaskStatus).filter(
+        TaskStatus.task_id == task_id,
+        TaskStatus.user_id == current_user.id,
+        TaskStatus.task_name == RETRY_TASK_NAME,
+    ).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    if task.status in ("running", RETRY_CANCEL_STATUS):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stop the batch before dismissing it")
+    task.result = {**(task.result or {}), "dismissed": True}
+    db.commit()
+    return {"task_id": task_id, "dismissed": True}
 
 
 @router.post("/retry/{task_id}/cancel")
